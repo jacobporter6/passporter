@@ -24,8 +24,8 @@ import { existsSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import picomatch from 'picomatch';
-import { CONTENT_INCLUDE, CONTENT_EXCLUDE, REPO_URL, REPO_BRANCH } from '../../content-sources.mjs';
-import { pathToSlug } from './paths.mjs';
+import { CONTENT_INCLUDE, CONTENT_EXCLUDE, REPO_URL, REPO_BRANCH, withBase } from '../../content-sources.mjs';
+import { baseFrontmatterLinks, pathToSlug } from './paths.mjs';
 import { dropPrivateNodes } from './oss-blocks.mjs';
 
 const isPublished = picomatch(CONTENT_INCLUDE, { ignore: CONTENT_EXCLUDE, dot: false });
@@ -88,10 +88,10 @@ export function resolveLink(url, fromFile, repoRoot, { pending = false } = {}) {
   }
   if (/\.mdx?$/i.test(target) && isPublished(target)) {
     const slug = pathToSlug(target);
-    return { href: (slug === 'index' ? '/' : `/${slug}/`) + frag, kind: 'page', target, exists };
+    return { href: withBase(slug === 'index' ? '/' : `/${slug}/`) + frag, kind: 'page', target, exists };
   }
   if (isDir && isPublished(`${target}/README.md`) && existsSync(path.join(abs, 'README.md'))) {
-    return { href: `/${pathToSlug(`${target}/README.md`)}/` + frag, kind: 'page', target, exists };
+    return { href: withBase(`/${pathToSlug(`${target}/README.md`)}/`) + frag, kind: 'page', target, exists };
   }
   const blob = isDir ? 'tree' : 'blob';
   return { href: `${REPO_URL}/${blob}/${REPO_BRANCH}/${encodeURI(target)}${frag}`, kind: 'source', target, exists };
@@ -106,12 +106,15 @@ export default function remarkPortable({ repoRoot }) {
     // they otherwise assume content sits in src/content/docs.
     if (filePath && file.data?.astro?.frontmatter && !file.data.astro.frontmatter.slug) {
       const slug = pathToSlug(path.relative(repoRoot, filePath).split(path.sep).join('/'));
-      // The validator keys pages by posix.join('', slug + '/') minus a leading
-      // slash; '//' is the only value that yields '/', the key links to the home
-      // page (`../README.md` -> `/`) are looked up under. Only the validator reads
+      // The validator keys pages by posix.join(base, slug + '/') minus a leading
+      // slash; '//' is the only value that yields the base itself, the key links
+      // to the home page (`../README.md` -> `<base>/`) are looked up under. Only the validator reads
       // this: the page's real id comes from the loader.
       file.data.astro.frontmatter.slug = slug === 'index' ? '//' : slug;
     }
+    // The link validator reads hero links from this frontmatter; the page itself
+    // renders them from the loader's data, which carries the base the same way.
+    if (file.data?.astro?.frontmatter) baseFrontmatterLinks(file.data.astro.frontmatter);
 
     // 0. private blocks, at any level
     const blockErrors = [];

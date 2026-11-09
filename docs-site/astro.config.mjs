@@ -7,13 +7,16 @@ import starlightLinksValidator from 'starlight-links-validator';
 import { fileURLToPath } from 'node:url';
 import remarkPortable from './src/lib/remark-portable.mjs';
 import rehypeTableScroll from './src/lib/rehype-table-scroll.mjs';
-import { REPO_URL, REPO_BRANCH, SITE_URL } from './content-sources.mjs';
+import { REPO_URL, REPO_BRANCH, DOCS_SITE, DOCS_BASE } from './content-sources.mjs';
 import { sidebar } from './sidebar.mjs';
 
 const repoRoot = fileURLToPath(new URL('../', import.meta.url));
 
 export default defineConfig({
-  site: SITE_URL,
+  // Served at DOCS_SITE + DOCS_BASE (GitHub Pages by default); both are set in
+  // content-sources.mjs. Internal links, assets and scripts all carry the base.
+  site: DOCS_SITE,
+  base: DOCS_BASE || '/',
   markdown: { remarkPlugins: [[remarkPortable, { repoRoot }]], rehypePlugins: [rehypeTableScroll] },
   vite: {
     // DOCS_VITE_CACHE_DIR lets scripts/check-dev.mjs start a cold dev server

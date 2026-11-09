@@ -162,6 +162,9 @@ any contributor.
 
 ## Documentation
 
+The handbook is published at **https://jacobporter6.github.io/passporter/**
+(searchable, with diagrams). The same pages read on GitHub:
+
 - [docs/deploy.md](docs/deploy.md): installing, HTTPS options, configuration
 - [docs/design.md](docs/design.md): product and architecture
 - [docs/security.md](docs/security.md): controls, tests and known gaps

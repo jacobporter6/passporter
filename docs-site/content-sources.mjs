@@ -23,12 +23,27 @@ export const CONTENT_EXCLUDE = [
 ];
 
 // GitHub location used for "Edit page" links and links to source files (code
-// is not published on the site). Set it to your fork or the project's home.
-export const REPO_URL = 'https://github.com/OWNER/passporter';
+// is not published on the site). A fork sets its own.
+export const REPO_URL = 'https://github.com/jacobporter6/passporter';
 export const REPO_BRANCH = 'main';
 
-// Where the built site is served. A placeholder until it has a home.
-export const SITE_URL = 'https://docs.passporter.example';
+// Where the built site is served: the origin (`site`) and the path under it
+// (`base`, '' or '/' for the root of a custom domain). GitHub Pages serves a
+// project site at https://<owner>.github.io/<repo>/. A fork or a custom domain
+// changes these two lines, or sets DOCS_SITE / DOCS_BASE for one build.
+export const DOCS_SITE = process.env.DOCS_SITE || 'https://jacobporter6.github.io';
+export const DOCS_BASE = normalizeBase(process.env.DOCS_BASE ?? '/passporter');
+
+/** `base` as '' (site root) or '/segment' with no trailing slash. */
+export function normalizeBase(base) {
+  const trimmed = base.trim().replace(/^\/+|\/+$/g, '');
+  return trimmed ? `/${trimmed}` : '';
+}
+
+/** A root-relative site path (`/app/triage/`) as served under DOCS_BASE. */
+export function withBase(sitePath, base = DOCS_BASE) {
+  return `${base}${sitePath.startsWith('/') ? sitePath : `/${sitePath}`}`;
+}
 
 // Extra privacy patterns for scripts/check-repo.mjs: a file of regular
 // expressions, one per line, in an unpublished place. Used when present.
