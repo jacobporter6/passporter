@@ -11,7 +11,8 @@
 //! `pane_agent_detected`, as herdr does; a prompted one goes `working`.
 //! For runbooks it plays a tab's shell: a line typed into a fresh pane
 //! (`pane.send_text`) runs with `sh -c` in the pane's folder, and its
-//! output is what `pane.read` returns.
+//! output is what `pane.read` returns; `pane.get` reports the pane with the
+//! terminal it was made with (terminal mode checks it before a read).
 //! Keys (`agent.send_keys`) are recorded, as the answer to a dialog.
 //! Anything else that would act on an agent is refused with an error reply.
 //!
@@ -215,6 +216,8 @@ struct State {
     typed: Vec<(String, String)>,
     /// What each shell pane has printed so far.
     output: Vec<(String, String)>,
+    /// Every pane a tab or workspace was made with, as `pane.get` reports it.
+    panes: Vec<Value>,
     next: u32,
 }
 
@@ -470,6 +473,12 @@ fn answer(shared: &Arc<Shared>, method: &str, params: &Value) -> Reply {
         }
         "tab.close" => Ok(json!({"type": "ok"})),
         "pane.send_text" => type_line(shared, &mut state, params),
+        "pane.get" => state
+            .panes
+            .iter()
+            .find(|p| p["pane_id"] == params["pane_id"])
+            .map(|pane| json!({"type": "pane_info", "pane": pane}))
+            .ok_or("pane_not_found"),
         "pane.read" => {
             let pane = params["pane_id"].as_str().unwrap_or_default();
             let text = state
@@ -529,16 +538,18 @@ fn new_tab(state: &mut State, ws: &str, label: &str, params: &Value) -> (Value, 
     let pane = format!("{ws}:p{n}");
     let cwd = PathBuf::from(params["cwd"].as_str().unwrap_or("/"));
     state.shells.push((pane.clone(), cwd.clone()));
+    let root = json!({
+        "pane_id": pane, "terminal_id": format!("term_{n}"), "tab_id": tab,
+        "workspace_id": ws, "agent": null, "agent_status": "unknown", "cwd": cwd,
+        "focused": false, "revision": 0,
+    });
+    state.panes.push(root.clone());
     (
         json!({
             "tab_id": tab, "workspace_id": ws, "label": label, "number": 1,
             "focused": false, "pane_count": 1, "agent_status": "unknown",
         }),
-        json!({
-            "pane_id": pane, "terminal_id": format!("term_{n}"), "tab_id": tab,
-            "workspace_id": ws, "agent": null, "agent_status": "unknown", "cwd": cwd,
-            "focused": false, "revision": 0,
-        }),
+        root,
     )
 }
 

@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use herdr::{ErrorCode, PaneId, TabId, WorkspaceId};
+use herdr::{ErrorCode, Pane, PaneId, TabId, WorkspaceId};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
@@ -54,12 +54,12 @@ impl Tabs {
     /// A fresh, unfocused tab labelled `label` with its shell in `cwd`, in
     /// the workspace (made, with this as its first tab, if herdr has none
     /// by that label). Returns the tab and its pane.
-    pub(crate) async fn open(&self, label: &str, cwd: &Path) -> herdr::Result<(TabId, PaneId)> {
+    pub(crate) async fn open(&self, label: &str, cwd: &Path) -> herdr::Result<(TabId, Pane)> {
         let control = self.control.as_ref();
         let mut known = self.known.lock().await;
         if let Some(workspace) = known.clone() {
             match control.create_tab(&workspace, label, cwd).await {
-                Ok(created) => return Ok((created.tab.tab_id, created.root_pane.pane_id)),
+                Ok(created) => return Ok((created.tab.tab_id, created.root_pane)),
                 Err(error) if error.code() == Some(&ErrorCode::WorkspaceNotFound) => *known = None,
                 Err(error) => return Err(error),
             }
@@ -70,11 +70,11 @@ impl Tabs {
                 .create_tab(&workspace.workspace_id, label, cwd)
                 .await?;
             *known = Some(workspace.workspace_id);
-            return Ok((created.tab.tab_id, created.root_pane.pane_id));
+            return Ok((created.tab.tab_id, created.root_pane));
         }
         let created = control.create_workspace(&self.workspace, cwd).await?;
         *known = Some(created.workspace.workspace_id);
-        Ok((created.tab.tab_id, created.root_pane.pane_id))
+        Ok((created.tab.tab_id, created.root_pane))
     }
 
     /// Closes a tab that was opened and could not be used. Best effort.

@@ -10,9 +10,12 @@
 //! bytes replay `200` with the stored receipt; another device's id, or
 //! other bytes under the same id, are `409`; an upload of the id still
 //! under way is `429`) → the store cap (507) → the per-device rate limit
-//! (429 with `Retry-After`; replays never count) → the bytes are sniffed
-//! (415 unless they *are* a JPEG, PNG or WebP, whatever the header said)
-//! and decoded under limits (422) and re-encoded ([`image::clean`]), so
+//! (429 with `Retry-After`; replays never count) → a decode slot, waited
+//! for ([`AttachmentSettings::max_decodes`] at once; 503 with
+//! `Retry-After` after [`AttachmentSettings::decode_wait`]) → the bytes
+//! are sniffed (415 unless they *are* a JPEG, PNG or WebP, whatever the
+//! header said) and decoded under limits (422) and re-encoded
+//! ([`image::clean`]), so
 //! EXIF, GPS and every other metadata block is gone before anything
 //! reaches the disk → stored `0600` under a `0700` directory (503 if the
 //! disk fails) → `201` with the [`AttachmentReceipt`]. The body limit
@@ -61,6 +64,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use protocol::{AttachmentId, AttachmentReceipt, IDEMPOTENCY_KEY_HEADER, ImageType};
 use sha2::{Digest, Sha256};
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
@@ -72,6 +76,9 @@ use crate::shutdown::Shutdown;
 
 /// The attachments directory's name in the state dir.
 pub const DIR: &str = "attachments";
+
+/// The `Retry-After` of an upload refused for want of a decode slot.
+const BUSY_RETRY: Duration = Duration::from_secs(5);
 
 /// Settings for photo attachments.
 #[derive(Debug, Clone)]
@@ -90,12 +97,19 @@ pub struct AttachmentSettings {
     pub retention: Duration,
     /// How often retention runs.
     pub sweep_every: Duration,
+    /// Images decoded at once, across devices: each decode may take up to
+    /// 256 MiB, so this bounds the bridge's peak memory.
+    pub max_decodes: usize,
+    /// How long an upload waits for a decode slot before it is refused
+    /// (503 with `Retry-After`).
+    pub decode_wait: Duration,
 }
 
 impl AttachmentSettings {
     /// Defaults for `dir`: 10 MiB per upload with two minutes to send it,
     /// 512 stored, 30 uploads per device per 10 minutes, kept 7 days and
-    /// swept every 10 minutes.
+    /// swept every 10 minutes; two decodes at a time, waited for up to 30
+    /// seconds.
     #[must_use]
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self {
@@ -109,6 +123,8 @@ impl AttachmentSettings {
             },
             retention: Duration::from_hours(7 * 24),
             sweep_every: Duration::from_mins(10),
+            max_decodes: 2,
+            decode_wait: Duration::from_secs(30),
         }
     }
 }
@@ -146,6 +162,9 @@ pub struct Attachments {
     store: Store,
     inner: Mutex<Inner>,
     limit: RateLimiter<Budget>,
+    /// [`AttachmentSettings::max_decodes`] permits; one is held for each
+    /// decode, until it ends.
+    decodes: Arc<Semaphore>,
 }
 
 /// What an upload came to.
@@ -170,6 +189,8 @@ enum UploadError {
     Full,
     #[error("too many uploads from this device; retry shortly")]
     RateLimited(Duration),
+    #[error("the bridge is busy with other images; retry shortly")]
+    Busy,
     #[error("the image does not decode")]
     Undecodable,
     #[error("the attachment could not be stored")]
@@ -185,7 +206,7 @@ impl UploadError {
             Self::InFlight | Self::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::Full => StatusCode::INSUFFICIENT_STORAGE,
             Self::Undecodable => StatusCode::UNPROCESSABLE_ENTITY,
-            Self::Io(_) => StatusCode::SERVICE_UNAVAILABLE,
+            Self::Busy | Self::Io(_) => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 }
@@ -193,7 +214,12 @@ impl UploadError {
 impl IntoResponse for UploadError {
     fn into_response(self) -> Response {
         let mut response = (self.status(), self.to_string()).into_response();
-        if let Self::RateLimited(wait) = self {
+        let wait = match self {
+            Self::RateLimited(wait) => Some(wait),
+            Self::Busy => Some(BUSY_RETRY),
+            _ => None,
+        };
+        if let Some(wait) = wait {
             response.headers_mut().insert(
                 header::RETRY_AFTER,
                 HeaderValue::from(retry_after_secs(wait)),
@@ -235,6 +261,7 @@ impl Attachments {
             .collect();
         Ok(Self {
             limit: RateLimiter::new(settings.rate),
+            decodes: Arc::new(Semaphore::new(settings.max_decodes)),
             settings,
             store,
             inner: Mutex::new(Inner {
@@ -287,13 +314,23 @@ impl Attachments {
             }
         };
         self.limit.check(budget).map_err(UploadError::RateLimited)?;
+        let slot = tokio::time::timeout(
+            self.settings.decode_wait,
+            Arc::clone(&self.decodes).acquire_owned(),
+        )
+        .await
+        .map_err(|_| UploadError::Busy)?
+        .map_err(|_| UploadError::Busy)?;
         let this = Arc::clone(self);
         let owner = device.to_owned();
         let stored_id = id.clone();
-        let record =
-            tokio::task::spawn_blocking(move || this.clean_and_save(&stored_id, owner, &body))
-                .await
-                .map_err(|error| UploadError::Io(io::Error::other(error)))??;
+        let record = tokio::task::spawn_blocking(move || {
+            // Held until the decode is over, even if the upload is dropped.
+            let _slot = slot;
+            this.clean_and_save(&stored_id, owner, &body)
+        })
+        .await
+        .map_err(|error| UploadError::Io(io::Error::other(error)))??;
         let receipt = record.receipt(&id);
         self.lock().stored.insert(
             id,
@@ -613,6 +650,38 @@ mod tests {
         upload(&attachments, TABLET, B, photo())
             .await
             .expect("another device has its own budget");
+    }
+
+    #[tokio::test]
+    async fn decodes_wait_for_a_slot_and_give_up() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let attachments = open(tmp.path(), |s| {
+            s.max_decodes = 1;
+            s.decode_wait = Duration::from_millis(50);
+        });
+        // Another upload holds the only slot for longer than the wait.
+        let held = Arc::clone(&attachments.decodes)
+            .acquire_owned()
+            .await
+            .expect("slot");
+        let busy = upload(&attachments, PHONE, A, photo())
+            .await
+            .expect_err("busy");
+        assert!(matches!(busy, UploadError::Busy), "{busy:?}");
+        let response = busy.into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(response.headers().contains_key(header::RETRY_AFTER));
+
+        // Freed within the wait, the queued upload goes ahead; the refused
+        // id was not spent.
+        let queued = tokio::spawn({
+            let attachments = Arc::clone(&attachments);
+            async move { upload(&attachments, PHONE, A, photo()).await }
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        drop(held);
+        assert!(matches!(queued.await.expect("task"), Ok(Uploaded::New(_))));
+        assert_eq!(attachments.decodes.available_permits(), 1, "slot released");
     }
 
     #[tokio::test]

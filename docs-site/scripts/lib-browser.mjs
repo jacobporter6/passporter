@@ -23,18 +23,28 @@ export async function launch() {
 
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.woff2': 'font/woff2', '.png': 'image/png', '.webp': 'image/webp', '.wasm': 'application/wasm', '.pf_meta': 'application/octet-stream' };
 
-/** Minimal static server over dist/ (no dependency on astro preview). */
+/** The file under `root` that URL path `pathname` names, or null if it is malformed or would leave `root`. */
+function inside(root, pathname) {
+  let decoded;
+  try { decoded = decodeURIComponent(pathname); } catch { return null; }
+  if (decoded.includes('\0') || decoded.includes('\\')) return null;
+  const file = path.resolve(root, `.${path.posix.sep}${decoded}`);
+  return file === root || file.startsWith(root + path.sep) ? file : null;
+}
+
+/** Minimal static server over dist/ (no dependency on astro preview). Never serves a file outside `dir`. */
 export async function serveDist(dir, port = 0) {
+  const root = path.resolve(dir);
   const server = createServer(async (req, res) => {
-    let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
-    let file = path.join(dir, p);
+    let file = inside(root, new URL(req.url, 'http://x').pathname);
     try {
+      if (file === null) throw new Error('outside dist/');
       if ((await stat(file)).isDirectory()) file = path.join(file, 'index.html');
       res.writeHead(200, { 'content-type': TYPES[path.extname(file)] ?? 'application/octet-stream' });
       res.end(await readFile(file));
     } catch {
       res.writeHead(404, { 'content-type': 'text/html' });
-      res.end(await readFile(path.join(dir, '404.html')).catch(() => 'not found'));
+      res.end(await readFile(path.join(root, '404.html')).catch(() => 'not found'));
     }
   });
   await new Promise((r) => server.listen(port, '127.0.0.1', r));

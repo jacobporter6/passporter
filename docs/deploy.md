@@ -727,14 +727,18 @@ deploy/whisper/build.sh                       # CUDA if nvcc is found, else CPU
 WHISPER_BACKEND=cpu deploy/whisper/build.sh   # force a CPU build
 ```
 
-It clones whisper.cpp (tag `WHISPER_REF`, default `v1.7.6`) into
-`~/.local/src/whisper.cpp`, builds `whisper-server` statically (for the GPU
+It clones whisper.cpp (tag `WHISPER_REF`, default `v1.7.6`, which must
+still name its pinned commit) into `~/.local/src/whisper.cpp`, builds `whisper-server` statically (for the GPU
 in this machine with CUDA, `CUDA_ARCH=native`), installs it to
 `~/.local/bin`, downloads the model to `~/.local/share/passporter/whisper/`
-(linked as `model.bin`; `large-v3-turbo` with CUDA, `base.en` on the CPU),
-and enables `whisper-server.service`. Overrides: `WHISPER_MODEL=small.en`,
+(linked as `model.bin`; `large-v3-turbo` with CUDA, `base.en` on the CPU)
+and checks its SHA-256 against the one Hugging Face publishes, and enables `whisper-server.service`. Overrides: `WHISPER_MODEL=small.en`,
 `CUDA_ARCH=86` (an RTX 30xx; `89` for an RTX 40xx; needed when building on a
-machine without the target GPU), `WHISPER_REF=<tag>`.
+machine without the target GPU), `WHISPER_REF=<tag>` (with
+`WHISPER_COMMIT=<sha>` to pin it; otherwise it is built unpinned, with a
+warning), `WHISPER_MODEL_SHA256=<sha256>` (known for `large-v3-turbo`,
+`base.en` and `small.en`; another model without it is installed unverified,
+with a warning).
 
 The unit passes `--language en`, which skips language detection; edit
 `deploy/whisper/whisper-server.service` to `--language auto` (or your

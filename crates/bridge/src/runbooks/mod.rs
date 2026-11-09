@@ -577,7 +577,7 @@ async fn start(
 ) -> Outcome {
     let label = config.name.as_str();
     let (tab, pane) = match runbooks.tabs.open(label, &config.cwd).await {
-        Ok(opened) => opened,
+        Ok((tab, pane)) => (tab, pane.pane_id),
         Err(error) if !error.may_have_taken_effect() => {
             tracing::warn!(%error, "herdr could not open a tab for a runbook");
             return Outcome::undecided("herdr is unavailable; nothing ran.");

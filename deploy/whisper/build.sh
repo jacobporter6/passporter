@@ -8,11 +8,13 @@
 # What it does:
 #   1. checks the toolchain (cmake, a C++ compiler, git, ffmpeg, plus nvcc
 #      for CUDA) and stops with install hints if anything is missing;
-#   2. clones (or updates) whisper.cpp at WHISPER_REF into ~/.local/src;
+#   2. clones (or updates) whisper.cpp at WHISPER_REF into ~/.local/src,
+#      and refuses to build if the tag no longer names the pinned commit;
 #   3. builds whisper-server, statically linked, for this machine's GPU
 #      (CUDA_ARCH, default "native") or for the CPU;
 #   4. installs it to ~/.local/bin and the model to
-#      ~/.local/share/passporter/whisper/;
+#      ~/.local/share/passporter/whisper/, after checking the model's
+#      SHA-256 (known for the default models; see WHISPER_MODEL_SHA256);
 #   5. installs, enables and (re)starts whisper-server.service.
 #
 # Safe to re-run: it rebuilds, reinstalls and restarts; the model is only
@@ -24,7 +26,14 @@
 #                    (small.en is a good CPU middle ground)
 #   CUDA_ARCH        default "native" (the GPU in this machine); set it to
 #                    build elsewhere, e.g. 86 for an RTX 30xx, 89 for an RTX 40xx
-#   WHISPER_REF      the whisper.cpp git tag
+#   WHISPER_REF      the whisper.cpp git tag (default v1.7.6)
+#   WHISPER_COMMIT   the commit WHISPER_REF must name (pinned for the
+#                    default tag; unset for another tag, which is then built
+#                    unpinned, with a warning)
+#   WHISPER_MODEL_SHA256
+#                    the model file's SHA-256 (known for large-v3-turbo,
+#                    base.en and small.en; another model without it is
+#                    installed unverified, with a warning)
 set -euo pipefail
 
 # Some distributions (Arch) install CUDA to /opt/cuda and only add it to
@@ -42,8 +51,24 @@ case "$WHISPER_BACKEND" in
 esac
 
 WHISPER_REPO="https://github.com/ggml-org/whisper.cpp.git"
-WHISPER_REF="${WHISPER_REF:-v1.7.6}"
+DEFAULT_REF=v1.7.6
+# The commit DEFAULT_REF names: a tag that moves is refused, not built.
+DEFAULT_COMMIT=a8d002cfd879315632a579e73f0148d06959de36
+WHISPER_REF="${WHISPER_REF:-$DEFAULT_REF}"
+if [[ "$WHISPER_REF" == "$DEFAULT_REF" ]]; then
+    WHISPER_COMMIT="${WHISPER_COMMIT:-$DEFAULT_COMMIT}"
+fi
+WHISPER_COMMIT="${WHISPER_COMMIT:-}"
 WHISPER_MODEL="${WHISPER_MODEL:-$default_model}"
+
+# SHA-256 of the models download-ggml-model.sh fetches, as Hugging Face
+# publishes them (the LFS object ids of huggingface.co/ggerganov/whisper.cpp).
+declare -A MODEL_SHA256=(
+    [large-v3-turbo]=1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69
+    [base.en]=a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002
+    [small.en]=c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d
+)
+WHISPER_MODEL_SHA256="${WHISPER_MODEL_SHA256:-${MODEL_SHA256[$WHISPER_MODEL]:-}}"
 CUDA_ARCH="${CUDA_ARCH:-native}"
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -66,6 +91,7 @@ command -v g++ >/dev/null 2>&1 || missing+=(gcc)
 # whisper-server --convert shells out to ffmpeg to decode WebM/Opus and AAC.
 command -v ffmpeg >/dev/null 2>&1 || missing+=(ffmpeg)
 command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || missing+=(curl)
+command -v sha256sum >/dev/null 2>&1 || missing+=(coreutils)
 if ((${#missing[@]})); then
     cat >&2 <<MSG
 Missing: ${missing[*]}
@@ -112,6 +138,17 @@ else
     git clone --quiet "$WHISPER_REPO" "$src"
 fi
 git -C "$src" checkout --quiet "$WHISPER_REF"
+head="$(git -C "$src" rev-parse HEAD)"
+if [[ -n "$WHISPER_COMMIT" ]]; then
+    if [[ "$head" != "$WHISPER_COMMIT" ]]; then
+        echo "whisper.cpp ${WHISPER_REF} is commit ${head}, not the pinned ${WHISPER_COMMIT}: refusing to build it." >&2
+        echo "If you trust the new commit, set WHISPER_COMMIT=${head}." >&2
+        exit 1
+    fi
+    echo "Pinned commit ${head}."
+else
+    echo "warning: WHISPER_REF=${WHISPER_REF} has no pinned commit; building ${head} unverified (set WHISPER_COMMIT to pin it)." >&2
+fi
 
 # --- 3. Build -------------------------------------------------------------------
 
@@ -140,13 +177,31 @@ install -d -m 0755 "$bin_dir"
 install -m 0755 "${src}/build/bin/whisper-server" "${bin_dir}/whisper-server.new"
 mv -f "${bin_dir}/whisper-server.new" "${bin_dir}/whisper-server"
 
+# Checks a model file against WHISPER_MODEL_SHA256; without one, warns.
+verify_model() {
+    local file="$1"
+    if [[ -z "$WHISPER_MODEL_SHA256" ]]; then
+        echo "warning: no known SHA-256 for the ${WHISPER_MODEL} model; installing it unverified (set WHISPER_MODEL_SHA256 to check it)." >&2
+        return 0
+    fi
+    local actual
+    actual="$(sha256sum "$file" | cut -d ' ' -f 1)"
+    if [[ "$actual" != "$WHISPER_MODEL_SHA256" ]]; then
+        echo "${file}: SHA-256 ${actual}, expected ${WHISPER_MODEL_SHA256}: refusing to use it." >&2
+        return 1
+    fi
+    echo "Model checksum OK."
+}
+
 model="${model_dir}/ggml-${WHISPER_MODEL}.bin"
 install -d -m 0700 "$model_dir"
 if [[ -s "$model" ]]; then
     echo "Keeping the existing model ${model}."
+    verify_model "$model" || { echo "Delete it and re-run to download it again." >&2; exit 1; }
 else
     say "Downloading the ${WHISPER_MODEL} model"
     (cd "${src}/models" && sh ./download-ggml-model.sh "$WHISPER_MODEL")
+    verify_model "${src}/models/ggml-${WHISPER_MODEL}.bin"
     install -m 0644 "${src}/models/ggml-${WHISPER_MODEL}.bin" "$model"
 fi
 # The unit always loads model.bin, so switching models is a re-run away.

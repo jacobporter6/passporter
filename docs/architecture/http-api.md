@@ -56,8 +56,8 @@ version.
 | GET | `/v1/runbooks` | session | Every runbook with its exact command, and its latest run. |
 | POST | `/v1/runbooks/:name/run` | session | Runbooks: named, preconfigured operations the phone may run, by tap or by voice. |
 | GET | `/v1/stream` | session (first message) | Upgrades a request to the event stream. |
-| POST | `/v1/terminals/:pane/keys` | session | Allowlisted keys into a terminal a run opened. |
-| GET | `/v1/terminals/:pane/screen` | session | The last lines of a terminal a run opened. |
+| POST | `/v1/terminals/:pane/keys` | session | Allowlisted keys into a terminal this device's run opened. |
+| GET | `/v1/terminals/:pane/screen` | session | The last lines of a terminal this device's run opened, while its pane still runs that terminal. |
 | GET | `/v1/version` | **public** | The bridge's build. |
 
 31 routes. Each description is the first sentence that the handler's doc comment, or its

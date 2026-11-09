@@ -263,14 +263,16 @@ pub(crate) fn transport(config: &Config) -> Result<Transport, Error> {
     if config.tls.is_some() {
         return Ok(Transport::Tls);
     }
-    let ip: IpAddr = config.listen.ip();
+    // An IPv4-mapped address binds as its IPv4 address on a dual-stack
+    // socket (`[::ffff:0.0.0.0]` is the IPv4 wildcard), so judge that.
+    let ip: IpAddr = config.listen.ip().to_canonical();
     if ip.is_loopback() {
         return Ok(Transport::Loopback);
     }
     if !config.insecure_http_over_wireguard {
         return Err(Error::PlaintextOffLoopback(config.listen));
     }
-    if ip.is_unspecified() || !config.insecure_http_allow.contains(&ip) {
+    if !config::is_specific(ip) || !config.insecure_http_allow.contains(&ip) {
         return Err(Error::PlaintextNotAllowed(config.listen));
     }
     Ok(Transport::PlainOverWireguard)
@@ -507,15 +509,38 @@ mod tests {
             Err(Error::PlaintextOffLoopback(_))
         ));
 
-        let wildcard = Config::parse(
-            "listen = \"0.0.0.0:8443\"\ninsecure_http_over_wireguard = true\n\
-             insecure_http_allow = [\"0.0.0.0\"]",
+        // The config refuses a wildcard in insecure_http_allow; the
+        // transport refuses one regardless. The IPv4-mapped any-address
+        // binds every IPv4 interface on a dual-stack socket, so it is the
+        // wildcard too.
+        for wildcard in ["0.0.0.0", "::", "::ffff:0.0.0.0"] {
+            let ip: IpAddr = wildcard.parse().expect("ip");
+            let config = Config {
+                listen: SocketAddr::new(ip, 8443),
+                insecure_http_over_wireguard: true,
+                insecure_http_allow: vec![ip, ip.to_canonical()],
+                ..Config::parse("").expect("parses")
+            };
+            assert!(
+                matches!(
+                    Settings::from_config(&config),
+                    Err(Error::PlaintextNotAllowed(_))
+                ),
+                "{wildcard}"
+            );
+        }
+
+        // A mapped spelling of an allowed IP is that IP.
+        let mapped = Config::parse(
+            "listen = \"[::ffff:192.0.2.10]:8443\"\ninsecure_http_over_wireguard = true\n\
+             insecure_http_allow = [\"192.0.2.10\"]",
         )
         .expect("parses");
-        assert!(matches!(
-            Settings::from_config(&wildcard),
-            Err(Error::PlaintextNotAllowed(_))
-        ));
+        assert!(
+            Settings::from_config(&mapped)
+                .expect("allowed")
+                .insecure_http
+        );
 
         let loopback = Config::parse("listen = \"127.0.0.1:0\"").expect("parses");
         assert!(
