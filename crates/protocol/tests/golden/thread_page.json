@@ -1,0 +1,44 @@
+[
+  {
+    "epoch": "b7f3-1-0",
+    "items": [
+      {
+        "cursor": 4,
+        "turn": 1,
+        "rev": 104,
+        "type": "tool",
+        "name": "Bash",
+        "input": "cargo build",
+        "status": "running"
+      },
+      {
+        "cursor": 5,
+        "turn": 1,
+        "rev": 105,
+        "at": 1762500000000,
+        "type": "assistant",
+        "text": "Building."
+      }
+    ],
+    "resumeCursor": 3,
+    "hasMore": true,
+    "headlines": [
+      {
+        "turn": 0,
+        "text": "Resumed the session; nothing to do yet."
+      },
+      {
+        "turn": 1,
+        "text": "Merging the swarm's PRs one by one.",
+        "provisional": true
+      }
+    ],
+    "inferred": true
+  },
+  {
+    "epoch": "b7f3-1-1",
+    "items": [],
+    "resumeCursor": 20412,
+    "truncatedBefore": 10000
+  }
+]

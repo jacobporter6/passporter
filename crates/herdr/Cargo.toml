@@ -1,0 +1,30 @@
+[package]
+name = "herdr"
+description = "Typed client for the herdr socket API, plus an in-memory FakeHerdr for tests."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# In-memory FakeHerdr with scripted state transitions, and ReplaySocket (recorded replies over a real socket), for downstream tests.
+fake = ["tokio/rt"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "time", "sync"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time", "sync", "test-util"] }
+
+[lints]
+workspace = true
+
+[[test]]
+name = "contract"
+required-features = ["fake"]

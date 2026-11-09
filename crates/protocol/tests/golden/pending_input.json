@@ -1,0 +1,46 @@
+[
+  {
+    "id": "toolu_01HkP",
+    "kind": "permission",
+    "prompt": "Run `pnpm test`?",
+    "detail": "pnpm test --filter bridge",
+    "options": [
+      {
+        "id": "allow_once",
+        "label": "Allow once",
+        "risk": "low",
+        "acceptsFeedback": false
+      },
+      {
+        "id": "always_allow",
+        "label": "Always allow",
+        "risk": "elevated",
+        "acceptsFeedback": false
+      },
+      {
+        "id": "deny",
+        "label": "Deny",
+        "risk": "low",
+        "acceptsFeedback": true
+      }
+    ],
+    "suggestions": [],
+    "source": "hook"
+  },
+  {
+    "id": "screen-42",
+    "kind": "question",
+    "prompt": "Shall I open the PR?",
+    "options": [],
+    "suggestions": [
+      "Yes, open it",
+      "Run the tests first"
+    ],
+    "source": "screen",
+    "confidence": 62,
+    "screenTail": [
+      "All tests pass.",
+      "Shall I open the PR?"
+    ]
+  }
+]

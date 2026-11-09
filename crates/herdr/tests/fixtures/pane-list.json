@@ -1,0 +1,333 @@
+{
+  "id": "cli:pane:list",
+  "result": {
+    "panes": [
+      {
+        "agent_status": "unknown",
+        "cwd": "/home/dev/git/garden/docs-site",
+        "focused": false,
+        "foreground_cwd": "/home/dev/git/garden/docs-site",
+        "pane_id": "w5:p2",
+        "revision": 2,
+        "scroll": {
+          "max_offset_from_bottom": 27970,
+          "offset_from_bottom": 0,
+          "viewport_rows": 57
+        },
+        "tab_id": "w5:t2",
+        "terminal_id": "term_65faaf997833b9",
+        "terminal_title": "dev@workstation:~/git/garden/docs-site",
+        "terminal_title_stripped": "dev@workstation:~/git/garden/docs-site",
+        "workspace_id": "w5"
+      },
+      {
+        "agent": "claude",
+        "agent_session": {
+          "agent": "claude",
+          "kind": "id",
+          "source": "herdr:claude",
+          "value": "0c0f0000-0000-4000-8000-000000000001"
+        },
+        "agent_status": "idle",
+        "cwd": "/home/dev/git/garden",
+        "focused": false,
+        "foreground_cwd": "/home/dev/git/garden",
+        "pane_id": "w5:p7",
+        "revision": 4,
+        "scroll": {
+          "max_offset_from_bottom": 0,
+          "offset_from_bottom": 0,
+          "viewport_rows": 57
+        },
+        "tab_id": "w5:t4",
+        "terminal_id": "term_65fb670f1fbba14",
+        "terminal_title": "✳ Sprinkler valve wiring",
+        "terminal_title_stripped": "Sprinkler valve wiring",
+        "workspace_id": "w5"
+      },
+      {
+        "agent_status": "unknown",
+        "cwd": "/home/dev/git/garden",
+        "focused": false,
+        "foreground_cwd": "/home/dev/git/garden",
+        "pane_id": "w5:p9",
+        "revision": 1,
+        "scroll": {
+          "max_offset_from_bottom": 0,
+          "offset_from_bottom": 0,
+          "viewport_rows": 57
+        },
+        "tab_id": "w5:t6",
+        "terminal_id": "term_65fbfe9741c1a6f",
+        "terminal_title": "dev@workstation:~/git/garden",
+        "terminal_title_stripped": "dev@workstation:~/git/garden",
+        "workspace_id": "w5"
+      },
+      {
+        "agent_status": "unknown",
+        "cwd": "/home/dev/git/garden",
+        "focused": false,
+        "foreground_cwd": "/home/dev/git/garden",
+        "pane_id": "w5:pA",
+        "revision": 1,
+        "scroll": {
+          "max_offset_from_bottom": 0,
+          "offset_from_bottom": 0,
+          "viewport_rows": 57
+        },
+        "tab_id": "w5:t7",
+        "terminal_id": "term_65fc31f6558a386",
+        "terminal_title": "dev@workstation:~/git/garden",
+        "terminal_title_stripped": "dev@workstation:~/git/garden",
+        "workspace_id": "w5"
+      },
+      {
+        "agent": "claude",
+        "agent_session": {
+          "agent": "claude",
+          "kind": "id",
+          "source": "herdr:claude",
+          "value": "0c0f0000-0000-4000-8000-000000000002"
+        },
+        "agent_status": "idle",
+        "cwd": "/home/dev/git/garden",
+        "focused": false,
+        "foreground_cwd": "/home/dev/git/garden",
+        "pane_id": "w6:p2",
+        "revision": 4,
+        "scroll": {
+          "max_offset_from_bottom": 0,
+          "offset_from_bottom": 0,
+          "viewport_rows": 29
+        },
+        "tab_id": "w6:t1",
+        "terminal_id": "term_65fb0f021918ef",
+        "terminal_title": "✳ Docs site build",
+        "terminal_title_stripped": "Docs site build",
+        "workspace_id": "w6"
+      },
+      {
+        "agent": "claude",
+        "agent_session": {
+          "agent": "claude",
+          "kind": "id",
+          "source": "herdr:claude",
+          "value": "0c0f0000-0000-4000-8000-000000000003"
+        },
+        "agent_status": "idle",
+        "cwd": "/home/dev/git/garden",
+        "focused": false,
+        "foreground_cwd": "/home/dev/git/garden",
+        "pane_id": "w6:p8",
+        "revision": 6,
+        "scroll": {
+          "max_offset_from_bottom": 0,
+          "offset_from_bottom": 0,
+          "viewport_rows": 27
+        },
+        "tab_id": "w6:t1",
+        "terminal_id": "term_65fca90301b4da4",
+        "terminal_title": "✳ Soil sensor integration",
+        "terminal_title_stripped": "Soil sensor integration",
+        "workspace_id": "w6"
+      },
+      {
+        "agent": "claude",
+        "agent_status": "working",
+        "cwd": "/home/dev/git/garden/.worktrees/greenhouse",
+        "focused": true,
+        "foreground_cwd": "/home/dev/git/garden/.worktrees/greenhouse",
+        "pane_id": "w6:p4",
+        "revision": 5,
+        "scroll": {
+          "max_offset_from_bottom": 0,
+          "offset_from_bottom": 0,
+          "viewport_rows": 57
+        },
+        "tab_id": "w6:t2",
+        "terminal_id": "term_65fc1e3585ef77d",
+        "terminal_title": "◐ Greenhouse controller brief",
+        "terminal_title_stripped": "Greenhouse controller brief",
+        "workspace_id": "w6"
+      },
+      {
+        "agent_status": "unknown",
+        "cwd": "/home/dev/git/passporter",
+        "focused": false,
+        "foreground_cwd": "/home/dev/git/passporter",
+        "pane_id": "w6:p9",
+        "revision": 4,
+        "scroll": {
+          "max_offset_from_bottom": 4,
+          "offset_from_bottom": 0,
+          "viewport_rows": 57
+        },
+        "tab_id": "w6:t3",
+        "terminal_id": "term_65fcbcfea3860a6",
+        "terminal_title": "dev@workstation:~/git/passporter",
+        "terminal_title_stripped": "dev@workstation:~/git/passporter",
+        "workspace_id": "w6"
+      },
+      {
+        "agent_status": "unknown",
+        "cwd": "/home/dev/git/passporter",
+        "focused": false,
+        "foreground_cwd": "/home/dev/git/passporter",
+        "pane_id": "w6:pA",
+        "revision": 3,
+        "scroll": {
+          "max_offset_from_bottom": 0,
+          "offset_from_bottom": 0,
+          "viewport_rows": 57
+        },
+        "tab_id": "w6:t4",
+        "terminal_id": "term_65fcbd0a9fb3fa7",
+        "terminal_title": "dev@workstation:~/git/passporter",
+        "terminal_title_stripped": "dev@workstation:~/git/passporter",
+        "workspace_id": "w6"
+      },
+      {
+        "agent": "claude",
+        "agent_session": {
+          "agent": "claude",
+          "kind": "id",
+          "source": "herdr:claude",
+          "value": "0c0f0000-0000-4000-8000-000000000004"
+        },
+        "agent_status": "working",
+        "cwd": "/home/dev/git/passporter",
+        "focused": false,
+        "foreground_cwd": "/home/dev/git/passporter",
+        "pane_id": "w7:p1",
+        "revision": 4,
+        "scroll": {
+          "max_offset_from_bottom": 0,
+          "offset_from_bottom": 0,
+          "viewport_rows": 57
+        },
+        "tab_id": "w7:t1",
+        "terminal_id": "term_65fb3aadc4ab011",
+        "terminal_title": "◑ Release coordination",
+        "terminal_title_stripped": "Release coordination",
+        "workspace_id": "w7"
+      },
+      {
+        "agent_status": "unknown",
+        "cwd": "/home/dev/git/passporter",
+        "focused": false,
+        "foreground_cwd": "/home/dev/git/passporter",
+        "pane_id": "w7:p5",
+        "revision": 1,
+        "scroll": {
+          "max_offset_from_bottom": 13,
+          "offset_from_bottom": 0,
+          "viewport_rows": 57
+        },
+        "tab_id": "w7:t4",
+        "terminal_id": "term_65fb706af209416",
+        "terminal_title": "dev@workstation:~/git/passporter",
+        "terminal_title_stripped": "dev@workstation:~/git/passporter",
+        "workspace_id": "w7"
+      },
+      {
+        "agent": "claude",
+        "agent_session": {
+          "agent": "claude",
+          "kind": "id",
+          "source": "herdr:claude",
+          "value": "0c0f0000-0000-4000-8000-000000000005"
+        },
+        "agent_status": "working",
+        "cwd": "/home/dev/git/passporter",
+        "focused": false,
+        "foreground_cwd": "/home/dev/git/passporter",
+        "pane_id": "w7:pC",
+        "revision": 3,
+        "scroll": {
+          "max_offset_from_bottom": 0,
+          "offset_from_bottom": 0,
+          "viewport_rows": 57
+        },
+        "tab_id": "w7:tA",
+        "terminal_id": "term_65fcbd4cb948aa8",
+        "terminal_title": "◑ Frontend project overview",
+        "terminal_title_stripped": "Frontend project overview",
+        "workspace_id": "w7"
+      },
+      {
+        "agent_status": "unknown",
+        "cwd": "/home/dev/git/passporter",
+        "focused": false,
+        "foreground_cwd": "/home/dev/git/passporter",
+        "pane_id": "w7:pD",
+        "revision": 1,
+        "scroll": {
+          "max_offset_from_bottom": 0,
+          "offset_from_bottom": 0,
+          "viewport_rows": 57
+        },
+        "tab_id": "w7:tB",
+        "terminal_id": "term_65fcc3378e3feab",
+        "terminal_title": "dev@workstation:~/git/passporter",
+        "terminal_title_stripped": "dev@workstation:~/git/passporter",
+        "workspace_id": "w7"
+      },
+      {
+        "agent_status": "unknown",
+        "cwd": "/home/dev/git/passporter",
+        "focused": false,
+        "foreground_cwd": "/home/dev/git/passporter",
+        "pane_id": "w7:pE",
+        "revision": 1,
+        "scroll": {
+          "max_offset_from_bottom": 0,
+          "offset_from_bottom": 0,
+          "viewport_rows": 57
+        },
+        "tab_id": "w7:tC",
+        "terminal_id": "term_65fd07de28f30b0",
+        "terminal_title": "dev@workstation:~/git/passporter",
+        "terminal_title_stripped": "dev@workstation:~/git/passporter",
+        "workspace_id": "w7"
+      },
+      {
+        "agent_status": "unknown",
+        "cwd": "/home/dev/git/passporter",
+        "focused": false,
+        "foreground_cwd": "/home/dev/git/passporter",
+        "pane_id": "wD:p1",
+        "revision": 1,
+        "scroll": {
+          "max_offset_from_bottom": 0,
+          "offset_from_bottom": 0,
+          "viewport_rows": 57
+        },
+        "tab_id": "wD:t1",
+        "terminal_id": "term_65fcc35464762ac",
+        "terminal_title": "dev@workstation:~/git/passporter",
+        "terminal_title_stripped": "dev@workstation:~/git/passporter",
+        "workspace_id": "wD"
+      },
+      {
+        "agent": "claude",
+        "agent_status": "working",
+        "cwd": "/home/dev/agent-swarm/c450a4ba681e3251/T33A/impl",
+        "focused": false,
+        "foreground_cwd": "/home/dev/agent-swarm/c450a4ba681e3251/T33A/impl",
+        "pane_id": "wD:p7",
+        "revision": 3,
+        "scroll": {
+          "max_offset_from_bottom": 0,
+          "offset_from_bottom": 0,
+          "viewport_rows": 57
+        },
+        "tab_id": "wD:t7",
+        "terminal_id": "term_65fd165521753b3",
+        "terminal_title": "◐ T41B: Load-robust integration tests",
+        "terminal_title_stripped": "T41B: Load-robust integration tests",
+        "workspace_id": "wD"
+      }
+    ],
+    "type": "pane_list"
+  }
+}

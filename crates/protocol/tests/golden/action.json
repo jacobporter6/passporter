@@ -1,0 +1,77 @@
+[
+  {
+    "idempotencyKey": "9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "agentId": "w6:p1~9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "expectedSeq": 136,
+    "createdAt": 1762500000000,
+    "kind": "prompt",
+    "payload": {
+      "text": "Run the tests\nthen push"
+    },
+    "origin": "app"
+  },
+  {
+    "idempotencyKey": "9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "agentId": "w6:p1~9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "expectedSeq": 136,
+    "createdAt": 1762500000000,
+    "kind": "prompt",
+    "payload": {
+      "text": "What is this error?",
+      "attachments": [
+        "6f1e1a52-7c1b-4b8e-9a43-0c2d5e8f9a10"
+      ]
+    },
+    "origin": "app"
+  },
+  {
+    "idempotencyKey": "9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "agentId": "w6:p1~9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "expectedSeq": 136,
+    "createdAt": 1762500000000,
+    "kind": "choose",
+    "payload": {
+      "pendingId": "toolu_01HkP",
+      "optionId": "allow_once"
+    },
+    "origin": "notification"
+  },
+  {
+    "idempotencyKey": "9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "agentId": "w6:p1~9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "expectedSeq": 136,
+    "createdAt": 1762500000000,
+    "kind": "choose",
+    "payload": {
+      "pendingId": "toolu_01HkP",
+      "optionId": "deny",
+      "feedbackText": "Use nextest instead"
+    },
+    "origin": "car"
+  },
+  {
+    "idempotencyKey": "9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "agentId": "w6:p1~9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "expectedSeq": 136,
+    "createdAt": 1762500000000,
+    "kind": "keys",
+    "payload": {
+      "pendingId": "screen-42",
+      "keys": [
+        "2",
+        "enter",
+        "ctrl+c"
+      ]
+    },
+    "origin": "app"
+  },
+  {
+    "idempotencyKey": "9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "agentId": "w6:p1~9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "expectedSeq": 136,
+    "createdAt": 1762500000000,
+    "kind": "interrupt",
+    "payload": {},
+    "origin": "app"
+  }
+]

@@ -1,0 +1,17 @@
+⏺ I'll run the bridge tests to check the change.
+
+⏺ Bash(cargo nextest run -p bridge)
+  ⎿  Running…
+
+────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   cargo nextest run -p bridge
+   Run the bridge tests
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for cargo nextest run commands in
+      /home/dev/git/passporter
+   3. No, and tell Claude what to do differently (esc)
+

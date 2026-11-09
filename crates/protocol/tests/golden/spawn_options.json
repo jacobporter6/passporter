@@ -1,0 +1,11 @@
+[
+  {
+    "projects": [
+      "passporter"
+    ],
+    "kinds": [
+      "claude",
+      "codex"
+    ]
+  }
+]

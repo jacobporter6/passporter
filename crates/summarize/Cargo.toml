@@ -1,0 +1,30 @@
+[package]
+name = "summarize"
+description = "TL;DR and reply-suggestion service: a tool-less, hardened headless Claude behind a Summarizer trait."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# FakeSummarizer, for downstream tests.
+fake = []
+
+[dependencies]
+protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# A fresh, empty, self-deleting working directory per model call (design §6.4).
+tempfile.workspace = true
+thiserror.workspace = true
+# `macros` for `try_join!`.
+tokio = { workspace = true, features = ["macros", "process", "io-util", "time", "sync"] }
+
+[dev-dependencies]
+# The eval harness (tests/eval) samples turns from the scrubbed corpus.
+transcripts.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process", "io-util", "time", "sync"] }
+
+[lints]
+workspace = true

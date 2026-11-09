@@ -1,0 +1,50 @@
+[
+  {
+    "id": "w6:p1~9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "title": "login-lead",
+    "repo": "gadget",
+    "worktree": "login",
+    "status": "blocked",
+    "seq": 136,
+    "statusSince": 1762500000000,
+    "unread": false,
+    "kind": "claude",
+    "headline": "Run `pnpm test`?",
+    "ask": "Run `pnpm test`?"
+  },
+  {
+    "id": "w7:p2",
+    "title": "docs",
+    "repo": "passporter",
+    "status": "done",
+    "seq": 4,
+    "statusSince": 1762499000000,
+    "unread": true,
+    "kind": "codex"
+  },
+  {
+    "id": "w7:p3~9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "title": "circus-master",
+    "repo": "passporter",
+    "status": "working",
+    "seq": 57,
+    "statusSince": 1762500000000,
+    "unread": false,
+    "kind": "claude",
+    "statusLine": {
+      "text": "Merging T26B; waiting on the release build",
+      "at": 1762500120000
+    }
+  },
+  {
+    "id": "w8:p2~9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "title": "impl-t26f",
+    "repo": "passporter",
+    "status": "done",
+    "seq": 9,
+    "statusSince": 1762500000000,
+    "unread": true,
+    "kind": "claude",
+    "quietDone": true
+  }
+]

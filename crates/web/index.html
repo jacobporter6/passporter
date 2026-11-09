@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <!-- Mirrors the header the bridge sends (see README "Content Security Policy"). -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'"
+    />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0b0d10" />
+    <meta name="description" content="Steer your coding agents from your phone." />
+    <title>Passporter</title>
+
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icons/icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+
+    <link data-trunk rel="css" href="style/tokens.css" />
+    <link data-trunk rel="css" href="style/app.css" />
+
+    <link data-trunk rel="copy-file" href="public/boot.js" />
+    <link data-trunk rel="copy-file" href="public/module-boot.js" />
+    <link data-trunk rel="copy-file" href="public/sw.js" />
+    <link data-trunk rel="copy-file" href="public/manifest.webmanifest" />
+    <link data-trunk rel="copy-dir" href="public/icons" />
+
+    <!-- The notice WASM (src/bin/notice.rs): notice.js + notice_bg.wasm.
+         sw.js loads it for the push wake; the page loads it on demand for
+         the Settings push switch (src/push/module.rs). -->
+    <link
+      data-trunk
+      rel="rust"
+      data-bin="notice"
+      data-cargo-profile="web-release"
+      data-wasm-opt="z"
+      data-type="worker"
+    />
+
+    <!-- The dictation WASM (src/bin/voice.rs): voice.js + voice_bg.wasm, an
+         ES module that module-boot.js loads on demand when an agent's
+         composer mounts (src/voice/module.rs). -->
+    <link
+      data-trunk
+      rel="rust"
+      data-bin="voice"
+      data-cargo-profile="web-release"
+      data-wasm-opt="z"
+      data-type="worker"
+      data-bindgen-target="web"
+    />
+
+    <!-- The pairing WASM (src/bin/pair.rs): pair.js + pair_bg.wasm, an ES
+         module that module-boot.js loads on demand when the Connect screen
+         opens (src/pair/module.rs). -->
+    <link
+      data-trunk
+      rel="rust"
+      data-bin="pair"
+      data-cargo-profile="web-release"
+      data-wasm-opt="z"
+      data-type="worker"
+      data-bindgen-target="web"
+    />
+
+    <!-- The extras WASM (src/bin/extras.rs): extras.js + extras_bg.wasm, an
+         ES module that module-boot.js loads the first time a rarely used
+         surface opens: the New agent and Runbooks sheets, Settings, the
+         link confirm (src/extras/page.rs). -->
+    <link
+      data-trunk
+      rel="rust"
+      data-bin="extras"
+      data-cargo-profile="web-release"
+      data-wasm-opt="z"
+      data-type="worker"
+      data-bindgen-target="web"
+    />
+
+    <!-- The terminal WASM (src/bin/terminal.rs): terminal.js +
+         terminal_bg.wasm, an ES module that module-boot.js loads on the
+         first tap on a command chip: the command confirm and the watched
+         terminal (src/commands/page.rs). -->
+    <link
+      data-trunk
+      rel="rust"
+      data-bin="terminal"
+      data-cargo-profile="web-release"
+      data-wasm-opt="z"
+      data-type="worker"
+      data-bindgen-target="web"
+    />
+
+    <!-- No inline bootstrap: Trunk.toml swaps trunk's loader for boot.js. -->
+    <link
+      data-trunk
+      rel="rust"
+      data-bin="web"
+      data-cargo-profile="web-release"
+      data-wasm-opt="z"
+      data-type="main"
+    />
+  </head>
+  <body>
+    <!-- Painted by CSS before the WASM arrives; replaced when the app mounts. -->
+    <div class="boot" aria-hidden="true"><div class="boot-mark"></div></div>
+  </body>
+</html>

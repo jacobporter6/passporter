@@ -1,0 +1,6 @@
+[alias]
+xtask = "run --quiet --package xtask --"
+
+# A shared compile cache is optional. To use sccache, install it and set
+# `RUSTC_WRAPPER=sccache` in your environment (or `build.rustc-wrapper` in
+# ~/.cargo/config.toml).

@@ -1,0 +1,10 @@
+⏺ Here are the two ways forward:
+  1. Refactor the parser first
+  2. Add the endpoint first
+
+  Which do you prefer?
+
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on

@@ -1,0 +1,76 @@
+[
+  {
+    "status": "sent",
+    "replayed": false
+  },
+  {
+    "status": "sent",
+    "replayed": true
+  },
+  {
+    "status": "stale",
+    "current": {
+      "id": "w6:p1~9ca09978-ef89-46fd-9a85-118b84bee7b4",
+      "title": "login-lead",
+      "repo": "gadget",
+      "worktree": "login",
+      "status": "blocked",
+      "seq": 136,
+      "statusSince": 1762500000000,
+      "unread": false,
+      "kind": "claude",
+      "headline": "Run `pnpm test`?",
+      "ask": "Run `pnpm test`?"
+    },
+    "pending": {
+      "id": "toolu_01HkP",
+      "kind": "permission",
+      "prompt": "Run `pnpm test`?",
+      "detail": "pnpm test --filter bridge",
+      "options": [
+        {
+          "id": "allow_once",
+          "label": "Allow once",
+          "risk": "low",
+          "acceptsFeedback": false
+        },
+        {
+          "id": "always_allow",
+          "label": "Always allow",
+          "risk": "elevated",
+          "acceptsFeedback": false
+        },
+        {
+          "id": "deny",
+          "label": "Deny",
+          "risk": "low",
+          "acceptsFeedback": true
+        }
+      ],
+      "suggestions": [],
+      "source": "hook"
+    }
+  },
+  {
+    "status": "stale"
+  },
+  {
+    "status": "refused",
+    "reason": "car_policy",
+    "message": "That option needs your phone. Please confirm it there."
+  },
+  {
+    "status": "refused",
+    "reason": "idempotency_conflict",
+    "message": "This idempotency key was already used for a different action."
+  },
+  {
+    "status": "refused",
+    "reason": "invalid_action",
+    "message": "unknown field(s): shell"
+  },
+  {
+    "status": "failed",
+    "message": "herdr: timed out"
+  }
+]

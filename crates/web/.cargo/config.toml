@@ -1,0 +1,8 @@
+# Applies to cargo runs started in crates/web, which is where `just web-build`
+# runs trunk. Merged with the workspace's .cargo/config.toml.
+
+[target.wasm32-unknown-unknown]
+# Leptos type-erases every component's view (each returns `AnyView`), so the
+# view tree isn't monomorphised into one huge nested type per screen. Same
+# DOM and behaviour; about 40 KB less gzipped WASM.
+rustflags = ["--cfg", "erase_components"]

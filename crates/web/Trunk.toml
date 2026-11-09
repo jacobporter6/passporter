@@ -1,0 +1,36 @@
+# trunk config for the Passporter PWA. See README.md for the CSP rationale.
+trunk-version = "^0.22.1"
+
+[build]
+target = "index.html"
+dist = "dist"
+public_url = "/"
+filehash = true
+minify = "on_release"
+
+# Strict CSP: trunk's default loader is an inline <script type="module">,
+# which `script-src 'self'` forbids. Replace it with an external boot.js,
+# and let the preload links tell boot.js where the hashed JS and WASM live.
+inject_scripts = true
+pattern_script = '<script type="module" src="{base}boot.js"></script>'
+pattern_preload = '<link rel="modulepreload" href="{base}{js}" data-app="js"><link rel="preload" href="{base}{wasm}" as="fetch" type="application/wasm" crossorigin data-app="wasm">'
+
+[tools]
+# Must match the wasm-bindgen crate version in Cargo.lock.
+wasm_bindgen = "0.2.130"
+
+[serve]
+addresses = ["127.0.0.1"]
+port = 8080
+# trunk's autoreload client is an inline script, which the CSP blocks.
+# Serve exactly what production serves instead; reload by hand.
+no_autoreload = true
+
+[serve.headers]
+Content-Security-Policy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+
+# Stamp the service worker with this build's id and precache list.
+[[hooks]]
+stage = "post_build"
+command = "sh"
+command_arguments = ["scripts/stamp-sw.sh"]

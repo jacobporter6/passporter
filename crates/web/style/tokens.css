@@ -1,0 +1,127 @@
+/*
+ * Passporter design tokens (design §7). Every colour, size and duration the
+ * app uses comes from here; app.css only composes them.
+ *
+ * Colour rule: the UI is neutral greys plus one hue per agent state, so a
+ * glance says where everything is. Blocked (an agent waiting on you) is the
+ * only LOUD one: the only state that is ever a filled surface. Working and
+ * done stay quiet: dots, rails, tinted text and soft washes, never fills.
+ */
+:root {
+  color-scheme: dark;
+
+  /* Neutrals, darkest to lightest. */
+  --c-bg: #0b0d10;
+  --c-surface-1: #12151a;
+  --c-surface-2: #191d23;
+  --c-surface-3: #222730;
+  --c-hairline: rgb(255 255 255 / 0.07);
+  --c-hairline-strong: rgb(255 255 255 / 0.13);
+  --c-text: #eef0f3;
+  --c-text-2: #aab2bc;
+  /* >= 4.5:1 on every surface, up to --c-surface-3 (4.8:1 there). */
+  --c-text-3: #8a939e;
+
+  /* State hues. Blocked is the loud one (fills allowed); the rest are
+     quiet (never fills). On --c-surface-1, working and done text is
+     >= 7:1 (8.9 and 10.3); blocked is 6.4:1 (AA). */
+  --c-blocked: #ff6a3d;
+  --c-blocked-soft: rgb(255 106 61 / 0.14);
+  --c-blocked-edge: rgb(255 106 61 / 0.35);
+  --c-on-blocked: #1a0902;
+  --c-working: #7cb8ff;
+  --c-working-soft: rgb(124 184 255 / 0.12);
+  --c-done: #6fd6a0;
+  --c-done-soft: rgb(111 214 160 / 0.11);
+
+  /* Primary controls are light-on-dark, not accented. */
+  --c-primary: var(--c-text);
+  --c-on-primary: var(--c-bg);
+
+  /* Field errors: desaturated, so they never read as "blocked". */
+  --c-danger: #e9a3a3;
+  --c-danger-soft: rgb(233 163 163 / 0.12);
+
+  /* Diff and tool marks: quiet, desaturated hints, never accent-strong. */
+  --c-add: #9fd3ae;
+  --c-del: #e9a3a3;
+  --c-code-bg: #08090b;
+
+  /* Spacing: 4px grid. */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+
+  /* Type: system faces (no web fonts, no CDN), ~1.2 modular scale. */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-md: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.375rem;
+  --text-2xl: 1.75rem;
+  --text-3xl: 2.125rem;
+  --leading-tight: 1.15;
+  --leading: 1.45;
+  --weight-regular: 400;
+  --weight-medium: 560;
+  --weight-bold: 680;
+  --tracking-tight: -0.02em;
+  --tracking-caps: 0.08em;
+
+  /* Radii. */
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1.125rem;
+  --radius-xl: 1.5rem;
+  --radius-pill: 999px;
+
+  /* Motion: short, decelerating; transform/opacity only (60 fps). */
+  --dur-1: 90ms;
+  --dur-2: 160ms;
+  --dur-3: 240ms;
+  --dur-4: 380ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --ease-in: cubic-bezier(0.3, 0, 0.8, 0.15);
+
+  /* Sizes. */
+  --tap: 48px; /* minimum target, design §7 */
+  --fab: 64px;
+  --dock-h: 68px;
+  --content-max: 40rem;
+  --icon: 24px;
+
+  /* Elevation. */
+  --shadow-1: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 8px 24px rgb(0 0 0 / 0.35);
+  --shadow-fab: 0 10px 28px rgb(0 0 0 / 0.55);
+
+  /* Device safe areas (notch, gesture bar). */
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-1: 0ms;
+    --dur-2: 0ms;
+    --dur-3: 0ms;
+    --dur-4: 0ms;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --c-text-2: #d3d8de;
+    --c-text-3: #aab2bc;
+    --c-hairline: rgb(255 255 255 / 0.22);
+    --c-hairline-strong: rgb(255 255 255 / 0.32);
+  }
+}

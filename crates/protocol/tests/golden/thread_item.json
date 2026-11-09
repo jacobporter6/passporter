@@ -1,0 +1,63 @@
+[
+  {
+    "cursor": 1,
+    "turn": 0,
+    "rev": 101,
+    "at": 1762500000000,
+    "type": "user",
+    "text": "Add a login page"
+  },
+  {
+    "cursor": 2,
+    "turn": 0,
+    "rev": 102,
+    "at": 1762500001000,
+    "type": "assistant",
+    "text": "I'll start with the model."
+  },
+  {
+    "cursor": 3,
+    "turn": 0,
+    "rev": 103,
+    "type": "tool",
+    "name": "Bash",
+    "input": "cargo test",
+    "output": "test result: ok. 12 passed",
+    "status": "ok"
+  },
+  {
+    "cursor": 4,
+    "turn": 1,
+    "rev": 104,
+    "type": "tool",
+    "name": "Bash",
+    "input": "cargo build",
+    "status": "running"
+  },
+  {
+    "cursor": 5,
+    "turn": 1,
+    "rev": 105,
+    "type": "diff",
+    "path": "src/schedule.rs",
+    "added": 120,
+    "removed": 8,
+    "patch": "@@ -1 +1 @@\n-old\n+new\n"
+  },
+  {
+    "cursor": 6,
+    "turn": 1,
+    "rev": 106,
+    "type": "aside",
+    "label": "Message from another session (gadget-helper)",
+    "text": "The release notes are ready."
+  },
+  {
+    "cursor": 7,
+    "turn": 1,
+    "rev": 107,
+    "type": "aside",
+    "label": "You ran `git status --short`",
+    "text": " M src/schedule.rs"
+  }
+]

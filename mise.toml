@@ -1,0 +1,6 @@
+# Tooling pinned per repo. Rust itself is pinned in rust-toolchain.toml (rustup).
+[tools]
+just = "1.59.0"
+cargo-deny = "0.20.2"
+"github:trunk-rs/trunk" = "v0.22.1"
+"github:nextest-rs/nextest" = { version = "cargo-nextest-0.9.151", bin = "cargo-nextest" }

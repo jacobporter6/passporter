@@ -1,0 +1,15 @@
+[
+  {
+    "idempotencyKey": "9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "project": "passporter",
+    "kind": "claude",
+    "prompt": "Fix the flaky stream test",
+    "createdAt": 1762500000000
+  },
+  {
+    "idempotencyKey": "9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "project": "web-2",
+    "kind": "codex",
+    "createdAt": 1762500000000
+  }
+]

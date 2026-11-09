@@ -1,0 +1,31 @@
+# Example ~/.config/passporter/config.toml (mode 0600, in a 0700 dir).
+# deploy/bridge/setup.sh writes a minimal one. Every key is optional; the
+# full reference is the module doc in crates/bridge/src/config.rs.
+
+# Loopback (the default). Phones reach the bridge through an HTTPS reverse
+# proxy on this machine: `tailscale serve` or Caddy (docs/deploy.md).
+listen = "127.0.0.1:8443"
+
+# The proxy's address: the only peer whose X-Forwarded-For is believed.
+trusted_proxy = "127.0.0.1"
+
+# The PWA build (trunk output).
+static_dir = "/home/YOU/src/passporter/crates/web/dist"
+
+# Optional; these are the defaults.
+# herdr_socket = "/home/YOU/.config/herdr/herdr.sock"
+# state_dir = "/home/YOU/.local/state/passporter"
+# audit_log = "/home/YOU/.local/state/passporter/audit.jsonl"
+# claude_projects_dir = "/home/YOU/.claude/projects"
+# codex_sessions_dir = "/home/YOU/.codex/sessions"   # Codex rollouts only
+
+# Web Push pings (optional): make a key with `passporter-bridge push-keygen`.
+# [push]
+# subject = "mailto:you@example.com"
+
+# Dictation (optional): a local whisper-server (deploy/whisper).
+# [audio]
+# whisper = "127.0.0.1:8178"
+
+# Insecure MVP mode is deliberately not shown here. Read "Insecure MVP mode"
+# in docs/deploy.md before using it.

@@ -1,0 +1,58 @@
+---
+import Default from '@astrojs/starlight/components/PageTitle.astro';
+import { REPO_URL, REPO_BRANCH } from '../../content-sources.mjs';
+const { entry } = Astro.locals.starlightRoute;
+const { pending, pending_scope, sources = [], status } = entry.data as {
+  pending?: string; pending_scope?: string; sources?: string[]; status?: string;
+};
+const isRepo = entry.id.startsWith('repo/') || entry.id === 'repo';
+const filePath = (entry as any).filePath as string | undefined;
+const rel = filePath?.replace(/^(\.\.\/)+/, '');
+
+// Source chips: the first few inline, the rest behind "+N more" so the lead
+// diagram stays above the fold.
+const INLINE = 4;
+const chips = [
+  ...(isRepo && rel ? [{ label: rel, href: `${REPO_URL}/blob/${REPO_BRANCH}/${rel}` }] : []),
+  ...sources.map((s) => ({ label: s, href: `${REPO_URL}/${s.endsWith('/') ? 'tree' : 'blob'}/${REPO_BRANCH}/${s}` })),
+];
+const shown = chips.slice(0, INLINE);
+const rest = chips.slice(INLINE);
+
+// `pending: "PR #90 (push rows)"` or `pending_scope:` means only part of the page
+// is ahead of main; say so, so readers trust the rest.
+const m = pending ? /^(.*?)\s*\(([^()]+)\)\s*$/.exec(pending) : null;
+const prs = m ? m[1] : pending;
+const scope = pending_scope ?? (m ? m[2] : undefined);
+---
+<Default />
+{chips.length > 0 && (
+  <div class="page-sources">
+    <span class="page-sources__label">{isRepo ? 'Lives beside the code' : 'Source of truth'}</span>
+    {shown.map((c) => <a class="chip" href={c.href} title={c.label}>{c.label}</a>)}
+    {rest.length > 0 && (
+      <details class="page-sources__more">
+        <summary class="chip"><span class="more">+{rest.length} more</span><span class="fewer">fewer</span></summary>
+        <div class="page-sources__rest">{rest.map((c) => <a class="chip" href={c.href} title={c.label}>{c.label}</a>)}</div>
+      </details>
+    )}
+  </div>
+)}
+{pending && scope && (
+  <aside class="starlight-aside starlight-aside--note page-banner page-banner--partial">
+    <p class="starlight-aside__title">Partly ahead of main</p>
+    <div class="starlight-aside__content"><p>The parts about <strong>{scope}</strong> document code arriving in <strong>{prs}</strong>. Everything else on this page matches <code>main</code>.</p></div>
+  </aside>
+)}
+{pending && !scope && (
+  <aside class="starlight-aside starlight-aside--caution page-banner">
+    <p class="starlight-aside__title">Not on main yet</p>
+    <div class="starlight-aside__content"><p>This page documents code arriving in <strong>{pending}</strong>. Links to files it adds are marked <em>(pending)</em> and work once it merges.</p></div>
+  </aside>
+)}
+{status === 'generated' && (
+  <aside class="starlight-aside starlight-aside--note page-banner">
+    <p class="starlight-aside__title">Generated</p>
+    <div class="starlight-aside__content"><p>Built from the code by <code>docs-site/scripts/gen</code>. Edit the code (its doc comments) or the generator, not this page.</p></div>
+  </aside>
+)}

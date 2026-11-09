@@ -1,0 +1,357 @@
+/*
+ * Theme: Tokyo Night (dark) / Tokyo Night Day (light).
+ * Palette and shape tokens live here only; components.css and client.ts
+ * read --pp-* variables, so a new theme is one file.
+ *
+ * Layout of this file: 1 tokens (dark, then light) · 2 type scale ·
+ * 3 site chrome (header, sidebar, table of contents, footer) · 4 prose.
+ * Starlight's own styles sit in cascade layers, so these unlayered rules win
+ * without !important.
+ */
+:root {
+  --sl-font: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --sl-font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+  --sl-content-width: 50rem;
+  --sl-sidebar-width: 17rem;
+
+  /* Shape and motion */
+  --pp-radius-sm: .375rem;
+  --pp-radius: .55rem;
+  --pp-radius-lg: .8rem;
+  --pp-ease: cubic-bezier(.2, .7, .2, 1);
+
+  /* dark (default). Comment and gray-3 are lifted from Tokyo Night's #565f89
+     so small muted text keeps WCAG AA (4.5:1) on every surface it sits on. */
+  --pp-bg: #1a1b26;
+  --pp-bg-deep: #16161e;
+  --pp-surface: #1f2335;
+  --pp-surface-2: #24283b;
+  --pp-border: #2f334d;
+  --pp-fg: #c0caf5;
+  --pp-fg-muted: #a9b1d6;
+  --pp-comment: #848cb5;
+  --pp-blue: #7aa2f7;
+  --pp-cyan: #7dcfff;
+  --pp-teal: #73daca;
+  --pp-green: #9ece6a;
+  --pp-yellow: #e0af68;
+  --pp-orange: #ff9e64;
+  --pp-red: #f7768e;
+  --pp-purple: #bb9af7;
+  --pp-magenta: #ff007c;
+  --pp-glow: rgb(122 162 247 / 0.16);
+  --pp-glow-2: rgb(187 154 247 / 0.12);
+  --pp-grid: rgb(122 162 247 / 0.07);
+  --pp-dot: rgb(169 177 214 / 0.07);
+  --pp-shadow: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 12px 32px -18px rgb(0 0 0 / 0.7);
+  --pp-gradient: linear-gradient(100deg, var(--pp-blue), var(--pp-purple));
+  /* One frame for every figure. */
+  --pp-figure-bg:
+    radial-gradient(120% 70% at 50% -12%, var(--pp-glow), transparent 62%),
+    radial-gradient(var(--pp-dot) 1px, transparent 1.4px) 0 0 / 20px 20px,
+    var(--pp-bg-deep);
+
+  --sl-color-accent-low: #262f50;
+  --sl-color-accent: #7aa2f7;
+  --sl-color-accent-high: #c0d1ff;
+  --sl-color-white: #e3e8ff;
+  --sl-color-gray-1: #c0caf5;
+  --sl-color-gray-2: #a9b1d6;
+  --sl-color-gray-3: #8b93bb;
+  --sl-color-gray-4: #565f89;
+  --sl-color-gray-5: #2f334d;
+  --sl-color-gray-6: #1f2335;
+  --sl-color-black: #1a1b26;
+  --sl-color-bg-nav: rgb(22 22 30 / 0.94);
+  --sl-color-bg-sidebar: #16161e;
+  --sl-color-hairline: #24283b;
+  --sl-color-hairline-light: #2f334d;
+  --sl-color-hairline-shade: #24283b;
+  --sl-color-text-accent: #7dcfff;
+
+  --sl-color-orange-low: #3b2a1f; --sl-color-orange: #ff9e64; --sl-color-orange-high: #ffd3b6;
+  --sl-color-green-low: #243022;  --sl-color-green: #9ece6a;  --sl-color-green-high: #d4f0b4;
+  --sl-color-blue-low: #1f2a48;   --sl-color-blue: #7aa2f7;   --sl-color-blue-high: #c0d1ff;
+  --sl-color-purple-low: #2d2442; --sl-color-purple: #bb9af7; --sl-color-purple-high: #e2d4ff;
+  --sl-color-red-low: #3b1f29;    --sl-color-red: #f7768e;    --sl-color-red-high: #ffc4cf;
+}
+
+:root[data-theme='light'] {
+  /* Body text is a neutral ink, not Tokyo Night Day's blue, so prose does not
+     read as a page of links; blue stays for links and the accent only.
+     Text-bearing hues are darkened from Tokyo Night Day to reach 4.5:1. */
+  --pp-bg: #e1e2e7;
+  --pp-bg-deep: #ececf0;
+  --pp-surface: #e9e9ed;
+  --pp-surface-2: #f2f2f5;
+  --pp-border: #c9ccdc;
+  --pp-fg: #343b58;
+  --pp-fg-muted: #565a6e;
+  --pp-comment: #5f6690;
+  --pp-blue: #2e7de9;
+  --pp-cyan: #006a8e;
+  --pp-teal: #0b715d;
+  --pp-green: #4f6b30;
+  --pp-yellow: #7d5f33;
+  --pp-orange: #9a5000;
+  --pp-red: #d01b52;
+  --pp-purple: #8540e0;
+  --pp-magenta: #d20065;
+  --pp-glow: rgb(46 125 233 / 0.10);
+  --pp-glow-2: rgb(152 84 241 / 0.08);
+  --pp-grid: rgb(46 125 233 / 0.07);
+  --pp-dot: rgb(52 59 88 / 0.07);
+  --pp-shadow: 0 1px 2px rgb(30 40 80 / 0.05), 0 10px 28px -18px rgb(30 40 80 / 0.35);
+
+  --sl-color-accent-low: #d6e3fa;
+  --sl-color-accent: #2e7de9;
+  --sl-color-accent-high: #1a4fa0;
+  --sl-color-white: #1f2335;
+  --sl-color-gray-1: #1f2335;
+  --sl-color-gray-2: #343b58;
+  --sl-color-gray-3: #565a6e;
+  --sl-color-gray-4: #848cb5;
+  --sl-color-gray-5: #c9ccdc;
+  --sl-color-gray-6: #e9e9ed;
+  --sl-color-gray-7: #f2f2f5;
+  --sl-color-black: #f6f6f9;
+  --sl-color-bg-nav: rgb(246 246 249 / 0.94);
+  --sl-color-bg-sidebar: #efeff3;
+  --sl-color-hairline: #dcdde3;
+  --sl-color-hairline-light: #c9ccdc;
+  --sl-color-hairline-shade: #dcdde3;
+  --sl-color-text-accent: #1f62c4;
+  --sl-color-orange-low: #f6e3d0; --sl-color-orange: #b15c00; --sl-color-orange-high: #6b3800;
+  --sl-color-green-low: #e0ebd3;  --sl-color-green: #587539;  --sl-color-green-high: #2f4220;
+  --sl-color-blue-low: #dde8fb;   --sl-color-blue: #2e7de9;   --sl-color-blue-high: #163f80;
+  --sl-color-purple-low: #eadcfd; --sl-color-purple: #9854f1; --sl-color-purple-high: #4c1d95;
+  --sl-color-red-low: #fbdde5;    --sl-color-red: #f52a65;    --sl-color-red-high: #8a0f33;
+}
+
+/* ── 2 · Type scale ───────────────────────────────────────────────────────
+   One modular scale (≈1.2) instead of Starlight's poster-sized desktop
+   headings, so a runbook's h2s read as sections rather than banners. */
+:root {
+  --sl-text-h1: 2rem;
+  --sl-text-h2: 1.4rem;
+  --sl-text-h3: 1.15rem;
+  --sl-text-h4: 1.02rem;
+  --sl-text-h5: 1rem;
+  --sl-line-height: 1.7;
+  --sl-line-height-headings: 1.25;
+  --sl-nav-height: 3.5rem;
+}
+@media (min-width: 50rem) {
+  :root { --sl-text-h1: 2.4rem; --sl-text-h2: 1.55rem; --sl-text-h3: 1.2rem; --sl-nav-height: 3.75rem; }
+}
+
+html { scrollbar-color: var(--sl-color-gray-5) transparent; }
+body { background: var(--sl-color-black); font-feature-settings: 'cv11', 'ss01', 'ss03'; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; }
+::selection { background: color-mix(in srgb, var(--pp-blue) 32%, transparent); }
+:focus-visible { outline-color: var(--pp-blue); }
+
+/* ── 3 · Site chrome ──────────────────────────────────────────────────── */
+
+/* Header: frosted glass over the page, hairline below. */
+.page > .header { backdrop-filter: blur(20px) saturate(1.5); -webkit-backdrop-filter: blur(20px) saturate(1.5); border-bottom-color: var(--sl-color-hairline); }
+.site-title { color: var(--sl-color-white); font-size: 1.05rem; font-weight: 650; letter-spacing: -0.015em; gap: .65rem; }
+.site-title img { height: 1.7rem; filter: drop-shadow(0 0 10px var(--pp-glow)); }
+site-search > button[data-open-modal] {
+  border-radius: var(--pp-radius); border: 1px solid var(--sl-color-hairline-light);
+  background: color-mix(in srgb, var(--pp-surface) 70%, transparent); color: var(--sl-color-gray-3);
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+site-search > button[data-open-modal]:hover { border-color: color-mix(in srgb, var(--pp-blue) 55%, var(--pp-border)); color: var(--sl-color-gray-2); box-shadow: 0 0 0 3px var(--pp-glow); }
+site-search kbd kbd, site-search > button kbd { font-family: var(--sl-font-mono); font-size: .68rem; }
+site-search > button > kbd { border-radius: var(--pp-radius-sm); background: var(--pp-bg-deep); border: 1px solid var(--sl-color-hairline-light); color: var(--sl-color-gray-3); }
+.social-icons a { color: var(--sl-color-gray-3); transition: color .15s; }
+.social-icons a:hover { color: var(--sl-color-white); }
+.social-icons::after { border-inline-end-color: var(--sl-color-hairline-light); }
+starlight-theme-select select { color: var(--sl-color-gray-2); }
+
+/* Sidebar: quiet uppercase section labels, compact links and a tinted
+   active pill with an accent bar (instead of a solid cyan block). */
+.sidebar-content { padding-top: 1.25rem; }
+.sidebar-content ul.top-level > li + li { margin-top: .1rem; }
+.sidebar-content ul.top-level > li > details[open] { margin-block: .35rem .9rem; }
+.sidebar-content summary { padding: .32em .6em; border-radius: var(--pp-radius-sm); transition: background-color .12s; }
+.sidebar-content summary:hover { background: color-mix(in srgb, var(--pp-surface-2) 70%, transparent); }
+.sidebar-content summary:hover .large { color: var(--sl-color-white); }
+.sidebar-content .large { font-size: .875rem; font-weight: 600; letter-spacing: -0.005em; color: var(--sl-color-gray-1); }
+.sidebar-content ul ul .large { font-size: .84rem; color: var(--sl-color-gray-2); }
+.sidebar-content details[open] > summary .large { color: var(--sl-color-white); }
+.sidebar-content summary svg { color: var(--sl-color-gray-4); width: 1rem; height: 1rem; }
+.sidebar-content ul ul li { border-inline-start-color: var(--sl-color-hairline); }
+.sidebar-content a {
+  font-size: .84rem; color: var(--sl-color-gray-2); padding: .3em .6em; border-radius: var(--pp-radius-sm);
+  transition: color .12s, background-color .12s;
+}
+.sidebar-content a:hover, .sidebar-content a:focus-visible { color: var(--sl-color-white); background: color-mix(in srgb, var(--pp-surface-2) 70%, transparent); }
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover,
+.sidebar-content a[aria-current='page']:focus {
+  position: relative; font-weight: 600; color: var(--sl-color-accent-high);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--pp-blue) 18%, transparent), color-mix(in srgb, var(--pp-blue) 6%, transparent));
+}
+.sidebar-content a[aria-current='page']::before {
+  content: ''; position: absolute; left: calc(-1 * var(--sl-sidebar-item-padding-inline) - 1px); top: .2em; bottom: .2em; width: 2px; border-radius: 2px;
+  background: var(--pp-blue); box-shadow: 0 0 8px var(--pp-blue);
+}
+.sidebar-content .top-level > li > a[aria-current='page']::before { left: 0; }
+:root[data-theme='light'] .sidebar-content a[aria-current='page'] { color: var(--sl-color-accent-high); }
+.sidebar-content ul ul li:has(> a[aria-current='page']) { border-inline-start-color: transparent; }
+
+/* Right-hand "On this page": a small label and a hairline rail with the
+   current heading lit. */
+.right-sidebar { border-inline-start-color: var(--sl-color-hairline); }
+starlight-toc h2 { font-size: .72rem; font-weight: 650; text-transform: uppercase; letter-spacing: .085em; color: var(--sl-color-gray-3); margin-bottom: .6rem; }
+starlight-toc nav > ul { border-inline-start: 1px solid var(--sl-color-hairline-light); }
+starlight-toc a { font-size: .8rem; line-height: 1.35; color: var(--sl-color-gray-3); margin-inline-start: -1px; border-inline-start: 1px solid transparent; border-radius: 0; transition: color .12s, border-color .12s; }
+starlight-toc a:hover { color: var(--sl-color-white); }
+starlight-toc a[aria-current='true'] { color: var(--sl-color-text-accent); border-inline-start-color: var(--sl-color-text-accent); }
+mobile-starlight-toc summary { background: color-mix(in srgb, var(--pp-bg-deep) 96%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+
+/* Page title block */
+.content-panel:first-child { padding-bottom: 1.75rem; }
+.content-panel + .content-panel { border-top-color: var(--sl-color-hairline); }
+h1#_top { font-weight: 700; letter-spacing: -0.03em; line-height: 1.12; background: var(--pp-gradient); -webkit-background-clip: text; background-clip: text; color: transparent; padding-bottom: .06em; }
+
+/* Footer: last-updated meta and pagination cards. */
+footer .meta { color: var(--sl-color-gray-3); font-size: .8rem; }
+footer .meta a { color: var(--sl-color-gray-2); }
+.pagination-links a { border-color: var(--sl-color-hairline-light); border-radius: var(--pp-radius-lg); background: var(--pp-surface); box-shadow: none; transition: border-color .15s, box-shadow .15s, transform .15s var(--pp-ease); }
+.pagination-links a:hover { border-color: color-mix(in srgb, var(--pp-blue) 60%, var(--pp-border)); box-shadow: 0 10px 30px -18px var(--pp-blue); transform: translateY(-1px); }
+.pagination-links .link-title { font-size: 1.05rem; font-weight: 600; letter-spacing: -0.01em; }
+.pagination-links span { font-size: .78rem; color: var(--sl-color-gray-3); }
+
+/* ── 4 · Prose ────────────────────────────────────────────────────────── */
+.sl-markdown-content :is(h1, h2, h3, h4, h5) { color: var(--sl-color-white); font-weight: 650; }
+.sl-markdown-content :is(h2, h3) { letter-spacing: -0.02em; }
+.sl-markdown-content h2 { margin-top: 2.75rem; padding-bottom: .45rem; border-bottom: 1px solid var(--sl-color-hairline); }
+.sl-markdown-content h3 { margin-top: 2rem; }
+.sl-markdown-content h4 { margin-top: 1.5rem; color: var(--sl-color-gray-1); }
+.sl-markdown-content :is(h2, h3, h4) code { font-size: .82em; }
+.sl-markdown-content .sl-heading-wrapper { --sl-anchor-icon-size: .8em; }
+.sl-markdown-content .sl-anchor-link { color: var(--sl-color-gray-4); }
+.sl-markdown-content strong { color: var(--sl-color-white); font-weight: 650; }
+.sl-markdown-content a:not(.chip, .sl-link-button, .cards > a) {
+  color: var(--sl-color-text-accent); text-decoration-line: underline; text-underline-offset: .22em; text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, currentColor 38%, transparent); transition: text-decoration-color .15s;
+}
+.sl-markdown-content a:not(.chip, .sl-link-button, .cards > a):hover { text-decoration-color: currentColor; }
+.sl-markdown-content :is(ul, ol) > li::marker { color: var(--sl-color-gray-4); }
+/* Numbered steps: the number is part of the procedure, so give it weight. */
+.sl-markdown-content ol > li::marker { color: var(--pp-blue); font-weight: 650; font-variant-numeric: tabular-nums; }
+.sl-markdown-content hr { border-color: var(--sl-color-hairline); }
+.sl-markdown-content blockquote { border-inline-start: 2px solid var(--pp-purple); color: var(--sl-color-gray-2); padding-inline-start: 1rem; }
+.sl-markdown-content kbd { font: 500 .78em var(--sl-font-mono); padding: .1em .45em; border-radius: var(--pp-radius-sm); border: 1px solid var(--pp-border); border-bottom-width: 2px; background: var(--pp-surface-2); color: var(--sl-color-white); }
+.sl-markdown-content code:not(pre code) {
+  background: color-mix(in srgb, var(--pp-surface-2) 85%, transparent); border: 1px solid color-mix(in srgb, var(--pp-border) 80%, transparent);
+  border-radius: var(--pp-radius-sm); padding: .08rem .36rem; font-size: .84em; color: var(--pp-cyan); overflow-wrap: anywhere;
+}
+.sl-markdown-content a code:not(pre code) { color: inherit; }
+
+/* Code blocks (Expressive Code): sit on the same deep surface as figures. */
+.expressive-code {
+  --ec-brdCol: var(--pp-border);
+  --ec-brdRad: .65rem;
+  --ec-frm-frameBoxShdCssVal: none;
+  --ec-frm-edBg: var(--pp-bg-deep);
+  --ec-codeBg: var(--pp-bg-deep);
+  --ec-frm-trmBg: var(--pp-bg-deep);
+  --ec-frm-edTabBarBg: var(--pp-surface);
+  --ec-frm-edActTabBg: var(--pp-bg-deep);
+  --ec-frm-edTabBarBrdBtmCol: var(--pp-border);
+  --ec-frm-trmTtbBg: var(--pp-surface);
+  --ec-frm-trmTtbBrdBtmCol: var(--pp-border);
+  --ec-frm-inlBtnBg: var(--pp-fg-muted);
+  --ec-codeFontSize: .84rem;
+}
+:root[data-theme='light'] .expressive-code { --ec-codeBg: #fbfbfd; --ec-frm-edBg: #fbfbfd; --ec-frm-trmBg: #fbfbfd; --ec-frm-edActTabBg: #fbfbfd; }
+.expressive-code .frame pre { transition: border-color .15s; }
+.expressive-code .frame:hover pre { border-color: color-mix(in srgb, var(--pp-blue) 35%, var(--pp-border)); }
+.expressive-code .copy button { border-radius: var(--pp-radius-sm); }
+
+/* Asides: hairline card, accent rail and a soft tint. */
+.starlight-aside {
+  border: 1px solid color-mix(in srgb, var(--sl-color-asides-border) 28%, transparent);
+  border-inline-start: 3px solid var(--sl-color-asides-border);
+  border-radius: var(--pp-radius);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--sl-color-asides-border) 13%, transparent), color-mix(in srgb, var(--sl-color-asides-border) 5%, transparent));
+  padding: .85rem 1.1rem;
+  color: var(--sl-color-gray-1);
+}
+.starlight-aside__title { font-size: .76rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.starlight-aside__icon { font-size: 1.15em; }
+.starlight-aside__title + .starlight-aside__content { margin-top: .35rem; }
+.starlight-aside__content { font-size: .95rem; }
+:root[data-theme='light'] .starlight-aside { color: var(--sl-color-gray-2); }
+
+/* Hero (splash pages: the home page and 404). A faint blueprint grid and two
+   slow aurora glows behind the headline. The drift only runs when the reader
+   allows motion; the grid is static. */
+main:has(.hero) { overflow-x: clip; }
+.hero { position: relative; isolation: isolate; }
+.hero::before, .hero::after { content: ''; position: absolute; z-index: -1; pointer-events: none; left: 50%; width: 100vw; translate: -50% 0; }
+.hero::before {
+  top: -8rem; bottom: -3rem;
+  background:
+    linear-gradient(to right, var(--pp-grid) 1px, transparent 1px) 0 0 / 56px 56px,
+    linear-gradient(to bottom, var(--pp-grid) 1px, transparent 1px) 0 0 / 56px 56px;
+  -webkit-mask-image: radial-gradient(ellipse 55% 65% at 50% 38%, #000 25%, transparent 78%);
+  mask-image: radial-gradient(ellipse 55% 65% at 50% 38%, #000 25%, transparent 78%);
+}
+.hero::after {
+  top: -10rem; height: 34rem;
+  background:
+    radial-gradient(28rem 16rem at 32% 42%, var(--pp-glow), transparent 70%),
+    radial-gradient(24rem 14rem at 64% 30%, var(--pp-glow-2), transparent 70%);
+  filter: blur(8px);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .hero::after { animation: pp-aurora 22s var(--pp-ease) infinite alternate; }
+}
+@keyframes pp-aurora {
+  0% { transform: translate3d(-3%, 0, 0) scale(1); opacity: .85; }
+  50% { transform: translate3d(2%, 2%, 0) scale(1.08); opacity: 1; }
+  100% { transform: translate3d(4%, -1%, 0) scale(.96); opacity: .8; }
+}
+.hero h1 { font-weight: 750; letter-spacing: -0.045em; line-height: 1.02; padding-bottom: .08em; }
+.hero .tagline { color: var(--sl-color-gray-2); line-height: 1.6; max-width: 40rem; }
+/* Eyebrow above the headline (decorative; the h1 stays the first heading). */
+.hero .copy::before {
+  content: 'Phone · voice · herdr'; order: -1;
+  font: 600 .7rem var(--sl-font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--pp-teal);
+  padding: .3rem .7rem .3rem 1.4rem; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--pp-teal) 35%, transparent);
+  background: radial-gradient(circle at .75rem 50%, var(--pp-teal) 0 .2rem, transparent .22rem), color-mix(in srgb, var(--pp-teal) 8%, transparent);
+}
+.hero:not(:has(.actions)) .copy::before { content: 'Error 404 · not found'; color: var(--pp-red); border-color: color-mix(in srgb, var(--pp-red) 35%, transparent); background: radial-gradient(circle at .75rem 50%, var(--pp-red) 0 .2rem, transparent .22rem), color-mix(in srgb, var(--pp-red) 8%, transparent); }
+.hero:not(:has(.actions)) h1 { font-size: clamp(4rem, 14vw, 9rem); }
+/* Buttons: squarer, with a gradient primary that glows on hover. */
+.hero .actions { gap: .75rem 1.5rem; align-items: center; }
+.sl-link-button { border-radius: var(--pp-radius); font-weight: 550; transition: transform .15s var(--pp-ease), box-shadow .2s, border-color .15s, background-color .15s, color .15s; }
+.sl-link-button.primary { background: var(--pp-gradient); border-color: transparent; color: #12131a; box-shadow: 0 8px 28px -12px var(--pp-blue), inset 0 1px 0 rgb(255 255 255 / .25); }
+.sl-link-button.primary:hover { color: #12131a; transform: translateY(-1px); box-shadow: 0 14px 36px -12px var(--pp-purple), inset 0 1px 0 rgb(255 255 255 / .3); }
+:root[data-theme='light'] .sl-link-button.primary, :root[data-theme='light'] .sl-link-button.primary:hover { color: #fff; background: linear-gradient(100deg, #1f62c4, #7a3fd6); }
+.sl-link-button.secondary { border-color: var(--sl-color-hairline-light); background: color-mix(in srgb, var(--pp-surface) 75%, transparent); color: var(--sl-color-white); }
+.sl-link-button.secondary:hover { border-color: color-mix(in srgb, var(--pp-blue) 55%, var(--pp-border)); box-shadow: 0 0 0 3px var(--pp-glow); }
+.sl-link-button.minimal { color: var(--sl-color-gray-2); }
+.sl-link-button.minimal:hover { color: var(--sl-color-white); }
+.sl-link-button.minimal svg { color: var(--sl-color-gray-3); }
+@media (min-width: 50rem) {
+  .sl-link-button { padding: .8rem 1.2rem; font-size: .95rem; }
+  .hero { padding-block: clamp(2.5rem, calc(1rem + 8vmin), 7rem) clamp(2.5rem, calc(.5rem + 6vmin), 5rem); }
+}
+@media (max-width: 50rem) {
+  .hero .copy::before { align-self: center; }
+  .hero .actions { gap: .6rem 1.25rem; }
+  .hero .actions .sl-link-button.primary { flex-basis: 100%; justify-content: center; padding-block: .8rem; }
+}
+/* Phones: the sidebar is a full-screen menu, so give it touch-sized text. */
+@media (max-width: 50rem) {
+  .sidebar-content a { font-size: .95rem; padding-block: .4em; }
+  .sidebar-content .large, .sidebar-content ul ul .large { font-size: 1rem; }
+}
+/* Search dialog (Pagefind) */
+site-search dialog { border: 1px solid var(--sl-color-hairline-light); border-radius: var(--pp-radius-lg); background: var(--pp-bg); box-shadow: 0 30px 80px -20px rgb(0 0 0 / .55); }
+site-search dialog::backdrop { background: rgb(10 10 16 / .6); backdrop-filter: blur(4px); }

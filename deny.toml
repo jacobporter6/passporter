@@ -1,0 +1,44 @@
+# cargo-deny: supply-chain gate (design §8). Run via `just audit`.
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+  # `paste` is unmaintained but finished: compile-time proc-macro, no runtime code.
+  # Pulled in by leptos via either_of / tachys. Maintainer-approved.
+  { id = "RUSTSEC-2024-0436", reason = "transitive via leptos; compile-time only, no known vulnerability" },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+unused-allowed-license = "allow"
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "CC0-1.0",
+  "MPL-2.0",
+  # Boost Software License: permissive, OSI-approved. xxhash-rust via leptos server_fn.
+  # Maintainer-approved.
+  "BSL-1.0",
+]
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

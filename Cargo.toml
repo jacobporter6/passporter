@@ -1,0 +1,69 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "e2e"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.99"
+license = "MIT OR Apache-2.0"
+publish = false
+repository = "https://github.com/jacobporter6/passporter"
+
+[workspace.dependencies]
+aho-corasick = "1.1.5"
+herdr = { path = "crates/herdr" }
+jiff = { version = "0.2.39", default-features = false, features = ["std", "serde", "tz-system", "tzdb-zoneinfo"] }
+libc = "0.2.191"
+protocol = { path = "crates/protocol" }
+regex = "1.13.1"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+ruzstd = "0.9.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde-saphyr = { version = "2.1.1", default-features = false, features = ["deserialize"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+summarize = { path = "crates/summarize" }
+tar = { version = "0.4.46", default-features = false }
+tempfile = "3.27.0"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", default-features = false }
+toml = { version = "1.2.1", default-features = false, features = ["parse", "serde", "std"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.20", default-features = false, features = ["fmt", "std", "ansi"] }
+transcripts = { path = "crates/transcripts" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+dbg_macro = "warn"
+todo = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+missing_errors_doc = "allow"
+module_name_repetitions = "allow"
+
+[profile.dev]
+# Smaller target dirs and faster links; full debuginfo is rarely worth 3x disk per worktree.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+# The PWA's WASM (trunk selects it in crates/web/index.html). Size over speed:
+# the budget is < 400 KB compressed; wasm-opt -Oz runs after.
+[profile.web-release]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+panic = "abort"

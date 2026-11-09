@@ -1,0 +1,49 @@
+# passporter-bridge as a systemd *user* unit. Installed by deploy/bridge/setup.sh
+# into ~/.config/systemd/user/. Run as the user who runs
+# herdr (it talks to herdr's socket in ~/.config/herdr and reads
+# ~/.claude/projects).
+#
+#   systemctl --user status passporter-bridge
+#   journalctl --user -u passporter-bridge -f
+#   systemctl --user reload passporter-bridge   # re-read the TLS leaf (SIGHUP)
+#
+# For the bridge to run while logged out: loginctl enable-linger "$USER".
+
+[Unit]
+Description=Passporter bridge (phone control surface for herdr agents)
+Documentation=https://github.com/jacobporter6/passporter/blob/main/docs/deploy.md
+# User managers cannot order against the system's network-online.target
+# reliably; Restart= below covers a bind before the address is up.
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+ExecStart=%h/.local/bin/passporter-bridge --config-dir %h/.config/passporter
+# SIGHUP re-reads the [tls] leaf and key (a renewed leaf needs no restart;
+# the bridge also notices changed files within two minutes). Without [tls]
+# the bridge logs the signal and carries on.
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+Environment=PASSPORTER_LOG=info
+
+# Hardening. Everything is read-only except the state dir (audit log) and
+# the runtime dir below. Connecting to herdr's unix socket works on a
+# read-only mount.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=-%h/.local/state/passporter
+# $XDG_RUNTIME_DIR/passporter (mode 700, writable despite ProtectSystem)
+# holds the Claude Code hook socket (docs/hooks.md).
+RuntimeDirectory=passporter
+RuntimeDirectoryMode=0700
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+UMask=0077
+
+[Install]
+WantedBy=default.target

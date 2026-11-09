@@ -1,0 +1,22 @@
+[
+  {
+    "status": "spawned",
+    "agentId": "w6:p1~9ca09978-ef89-46fd-9a85-118b84bee7b4",
+    "replayed": false
+  },
+  {
+    "status": "spawned",
+    "agentId": "w9:p2",
+    "replayed": true,
+    "promptError": "The agent asked something first."
+  },
+  {
+    "status": "refused",
+    "reason": "unknown_project",
+    "message": "No project by that name."
+  },
+  {
+    "status": "failed",
+    "message": "herdr: timed out"
+  }
+]

@@ -1,0 +1,18 @@
+[
+  {
+    "outcome": "Thermostat schedule works; 2 tests still fail.",
+    "changed": [
+      "src/schedule.rs (+120 -8)",
+      "tests/schedule.rs (+64)"
+    ],
+    "decide": "Keep the 5-minute debounce?",
+    "risks": [
+      "DST transition untested"
+    ]
+  },
+  {
+    "outcome": "Done.",
+    "changed": [],
+    "risks": []
+  }
+]

@@ -1,0 +1,113 @@
+[package]
+name = "web"
+description = "Passporter's mobile-first PWA: a Leptos (CSR) app compiled to WASM with trunk."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+js-sys = "0.3.107"
+leptos = { version = "0.8.23", features = ["csr"] }
+protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+wasm-bindgen = "0.2.130"
+wasm-bindgen-futures = "0.4.80"
+
+[dependencies.web-sys]
+version = "0.3.107"
+features = [
+  "AbortSignal",
+  "console",
+  "AnalyserNode",
+  "AudioContext",
+  "AudioNode",
+  "BaseAudioContext",
+  "Blob",
+  "BlobEvent",
+  "CanvasRenderingContext2d",
+  "CloseEvent",
+  "Crypto",
+  "CryptoKey",
+  "CryptoKeyPair",
+  "CssStyleDeclaration",
+  "Document",
+  "DomException",
+  "DomStringList",
+  "EcKeyGenParams",
+  "EcdsaParams",
+  "Event",
+  "EventTarget",
+  "Element",
+  "File",
+  "FileList",
+  "Headers",
+  "History",
+  "HtmlCanvasElement",
+  "HtmlElement",
+  "HtmlInputElement",
+  "HtmlTextAreaElement",
+  "HtmlVideoElement",
+  "IdbDatabase",
+  "IdbFactory",
+  "IdbObjectStore",
+  "IdbOpenDbRequest",
+  "IdbRequest",
+  "IdbTransaction",
+  "IdbTransactionMode",
+  "ImageBitmap",
+  "ImageEncodeOptions",
+  "Location",
+  "MediaDevices",
+  "MediaRecorder",
+  "MediaRecorderOptions",
+  "MediaStream",
+  "MediaStreamAudioSourceNode",
+  "MediaStreamConstraints",
+  "MediaStreamTrack",
+  "MessageEvent",
+  "MouseEvent",
+  "Navigator",
+  "Node",
+  "NodeList",
+  "Notification",
+  "NotificationPermission",
+  "OffscreenCanvas",
+  "OffscreenCanvasRenderingContext2d",
+  "PointerEvent",
+  "PushManager",
+  "PushSubscription",
+  "PushSubscriptionOptionsInit",
+  "RecordingState",
+  "Request",
+  "RequestCache",
+  "RequestCredentials",
+  "RequestInit",
+  "RequestRedirect",
+  "Response",
+  "ScrollBehavior",
+  "ScrollToOptions",
+  "ServiceWorker",
+  "ServiceWorkerContainer",
+  "ServiceWorkerRegistration",
+  "ServiceWorkerState",
+  "SpeechSynthesis",
+  "SpeechSynthesisUtterance",
+  "Storage",
+  "StorageManager",
+  "SubtleCrypto",
+  "Text",
+  "Touch",
+  "TouchEvent",
+  "TouchList",
+  "Url",
+  "VisibilityState",
+  "WebSocket",
+  "Window",
+]
+
+[lints]
+workspace = true

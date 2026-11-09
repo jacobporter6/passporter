@@ -1,0 +1,157 @@
+/* Shared component styling: tables, diagrams, source chips, banners, cards,
+   and checklists. Colours come from theme.css tokens. */
+
+/* ── Tables ───────────────────────────────────────────────────────────────
+   rehype-table-scroll wraps each one in .table-scroll, which scrolls
+   sideways when a table is wider than the column (with edge shadows as the
+   cue) instead of running under the "On this page" panel. */
+.sl-markdown-content .table-scroll {
+  overflow-x: auto; border: 1px solid var(--pp-border); border-radius: var(--pp-radius-lg);
+  background:
+    linear-gradient(to right, var(--sl-color-black) 30%, transparent) left center / 2.5rem 100% no-repeat local,
+    linear-gradient(to left, var(--sl-color-black) 30%, transparent) right center / 2.5rem 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, rgb(0 0 0 / 0.3), transparent) left center / 0.8rem 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, rgb(0 0 0 / 0.3), transparent) right center / 0.8rem 100% no-repeat scroll;
+  box-shadow: var(--pp-shadow);
+}
+.sl-markdown-content .table-scroll:focus-visible { outline: 2px solid var(--pp-blue); outline-offset: 2px; }
+.sl-markdown-content table { display: table; width: 100%; margin: 0; border-collapse: separate; border-spacing: 0; border: 0; font-size: .875rem; line-height: 1.55; }
+.sl-markdown-content :is(th, td) { border: none; border-bottom: 1px solid var(--sl-color-hairline); padding: .6rem .85rem; vertical-align: top; }
+.sl-markdown-content th {
+  background: color-mix(in srgb, var(--pp-surface) 92%, transparent); color: var(--sl-color-gray-2); text-align: left; vertical-align: bottom;
+  font-size: .72rem; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; white-space: nowrap;
+  border-bottom-color: var(--pp-border);
+}
+.sl-markdown-content tr:last-child td { border-bottom: none; }
+.sl-markdown-content tbody tr { transition: background-color .12s; }
+.sl-markdown-content tbody tr:hover td { background: color-mix(in srgb, var(--pp-blue) 6%, transparent); }
+.sl-markdown-content td:first-child { color: var(--sl-color-gray-1); }
+/* Inline code in a cell wraps only at natural break points (never mid-word or
+   mid-address; the .table-scroll wrapper absorbs a long token) and keeps its
+   chip shape on every line. The `td` makes this outrank the theme.css rule
+   `code:not(pre code)` that sets `overflow-wrap: anywhere`. */
+.sl-markdown-content td code:not(pre code) { -webkit-box-decoration-break: clone; box-decoration-break: clone; overflow-wrap: normal; }
+/* Header cells are upper-cased; a path, flag or file name inside one keeps its case. */
+.sl-markdown-content th code:not(pre code) { text-transform: none; letter-spacing: 0; }
+/* Header-less key/value tables (write `| | |` as the header row):
+   the key column becomes a quiet label. */
+.sl-markdown-content thead:not(:has(th:not(:empty))) { display: none; }
+.sl-markdown-content table:not(:has(th:not(:empty))) td:first-child {
+  width: min(11rem, 36%); color: var(--sl-color-gray-3); font-size: .8rem; font-weight: 600; letter-spacing: .01em;
+  background: color-mix(in srgb, var(--pp-surface) 55%, transparent);
+}
+
+/* A splash hero without an image: Starlight still reserves a 4fr image column,
+   which wraps the home page's actions onto a second row. Use the full width. */
+@media (min-width: 50rem) { .hero:not(:has(> img, > .hero-html)) { grid-template-columns: 100%; } }
+
+/* ── Diagrams ─────────────────────────────────────────────────────────────
+   The figure clips; the <pre> inside scrolls. A wide diagram keeps a readable
+   minimum size (client.ts) and scrolls instead of shrinking to a postage stamp;
+   Expand sits in the corner, or below a diagram that scrolls. */
+.diagram { margin: 1.75rem 0; padding: 1.5rem 1.25rem; border: 1px solid var(--pp-border); border-radius: var(--pp-radius-lg); background: var(--pp-figure-bg); box-shadow: var(--pp-shadow); position: relative; overflow: hidden; }
+.diagram::before { content: ''; position: absolute; inset: 0 0 auto; height: 1px; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--pp-blue) 45%, transparent), transparent); pointer-events: none; }
+.diagram pre.mermaid { background: transparent; border: 0; margin: 0; padding: 0; display: block; overflow-x: auto; color: transparent; min-height: 4rem; text-align: center; }
+.diagram pre.mermaid[data-processed] { color: inherit; }
+.diagram pre.mermaid svg { display: block; margin-inline: auto; max-width: 100%; height: auto; }
+/* Mermaid geometry polish: rounded nodes and groups, quiet group frames,
+   and edge labels on the surface colour instead of black boxes. */
+.diagram pre.mermaid svg :is(.node rect.label-container, .node rect.basic) { rx: 7px; ry: 7px; }
+.diagram pre.mermaid svg rect.actor { rx: 8px; ry: 8px; }
+.diagram pre.mermaid svg .cluster > rect { rx: 10px; ry: 10px; stroke: color-mix(in srgb, var(--pp-comment) 45%, transparent) !important; stroke-dasharray: 0; filter: none !important; }
+.diagram pre.mermaid svg .cluster-label :is(p, span) { color: var(--pp-fg-muted) !important; font-size: 13px; font-weight: 600; letter-spacing: .01em; }
+/* Only colour here: Mermaid measured each label at its own font size, and any
+   padding on the inline span pushes the text out of its foreignObject. */
+.diagram pre.mermaid svg .edgeLabel p { background: var(--pp-surface) !important; color: var(--pp-fg-muted) !important; }
+.diagram pre.mermaid svg .edgeLabel rect { fill: transparent !important; opacity: 0 !important; }
+.diagram pre.mermaid svg :is(.flowchart-link, .edge-pattern-solid, .edge-pattern-dashed, .edge-pattern-dotted) { stroke-width: 1.4px; }
+.diagram__expand { position: absolute; top: .6rem; right: .6rem; z-index: 1; opacity: 0; transition: opacity .15s, color .15s, border-color .15s; background: color-mix(in srgb, var(--pp-surface-2) 85%, transparent); backdrop-filter: blur(6px); color: var(--pp-fg-muted); border: 1px solid var(--pp-border); border-radius: var(--pp-radius-sm); font: 500 .72rem var(--sl-font); padding: .22rem .55rem; cursor: pointer; }
+.diagram__expand:hover { color: var(--pp-fg); border-color: var(--pp-blue); }
+.diagram:hover .diagram__expand, .diagram__expand:focus-visible, .diagram[data-scrolls] .diagram__expand { opacity: 1; }
+/* Touch screens have no hover: always show Expand there. */
+@media (hover: none) { .diagram__expand { opacity: 1; } }
+/* A diagram that scrolls fills its figure edge to edge, so Expand and the
+   "scroll" cue move into a footer strip below it instead of covering boxes. */
+.diagram[data-scrolls] { padding-bottom: 2.6rem; }
+.diagram[data-scrolls] .diagram__expand { top: auto; bottom: .55rem; }
+.diagram[data-scrolls]::after { content: 'scroll ⇆'; position: absolute; bottom: .85rem; right: 6.2rem; font: 500 .68rem var(--sl-font-mono); color: var(--pp-comment); pointer-events: none; }
+.diagram-error { color: var(--pp-red); font: .8rem var(--sl-font-mono); white-space: pre-wrap; text-align: left; }
+/* Mermaid ER diagrams: quiet rows instead of black/blue striping. */
+.diagram .er.attributeBoxOdd, .diagram .er.attributeBoxEven, .diagram :is(.row-rect-odd, .row-rect-even) path { stroke: var(--pp-border) !important; }
+dialog.diagram-dialog { width: 96vw; height: 92vh; max-width: none; border: 1px solid var(--pp-border); border-radius: 1rem; background: var(--pp-figure-bg); padding: 0; color: var(--pp-fg); box-shadow: 0 30px 80px -20px rgb(0 0 0 / .6); }
+dialog.diagram-dialog::backdrop { background: rgb(10 10 16 / .72); backdrop-filter: blur(6px); }
+dialog.diagram-dialog .stage { width: 100%; height: 100%; overflow: hidden; cursor: grab; display: grid; place-items: center; }
+dialog.diagram-dialog .stage:active { cursor: grabbing; }
+dialog.diagram-dialog .stage svg { max-width: none !important; transform-origin: 0 0; }
+dialog.diagram-dialog .hint { position: absolute; bottom: .75rem; left: 50%; translate: -50% 0; font: .72rem var(--sl-font-mono); color: var(--pp-comment); background: color-mix(in srgb, var(--pp-surface) 85%, transparent); border: 1px solid var(--pp-border); border-radius: 999px; padding: .2rem .7rem; }
+dialog.diagram-dialog .close { position: absolute; top: .75rem; right: .75rem; }
+
+/* ── Source chips and page banners (overrides/PageTitle.astro) ─────────── */
+.page-sources { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin-top: .9rem; }
+.page-sources__label { font: 600 .66rem var(--sl-font); text-transform: uppercase; letter-spacing: .1em; color: var(--sl-color-gray-3); margin-right: .3rem; }
+.chip { font: .72rem/1.5 var(--sl-font-mono); padding: .14rem .55rem; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--pp-teal) 22%, var(--pp-border)); background: color-mix(in srgb, var(--pp-teal) 6%, var(--pp-surface)); color: var(--pp-teal); text-decoration: none; transition: border-color .15s, background-color .15s, box-shadow .15s; }
+.chip:hover { border-color: var(--pp-teal); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pp-teal) 12%, transparent); }
+.page-sources .chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.page-sources__more { display: contents; }
+.page-sources__more > summary { cursor: pointer; list-style: none; color: var(--pp-fg-muted); font-family: var(--sl-font); border-color: var(--pp-border); background: var(--pp-surface); }
+.page-sources__more > summary:hover { border-color: var(--pp-fg-muted); box-shadow: none; }
+.page-sources__more > summary::-webkit-details-marker { display: none; }
+.page-sources__more .fewer, .page-sources__more[open] .more { display: none; }
+.page-sources__more[open] .fewer { display: inline; }
+.page-sources__rest { display: flex; flex-wrap: wrap; gap: .4rem; flex-basis: 100%; }
+.page-banner { margin-top: 1.1rem; }
+.page-banner--partial { padding-block: .65rem; }
+.page-banner--partial .starlight-aside__content { font-size: .9rem; }
+a.source-link::after { content: ''; display: inline-block; width: .7em; height: .7em; margin-left: .2em; background: currentColor; opacity: .55; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M4 2h6v6M10 2 3 9' stroke='black' stroke-width='1.6' fill='none'/%3E%3C/svg%3E") center/contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M4 2h6v6M10 2 3 9' stroke='black' stroke-width='1.6' fill='none'/%3E%3C/svg%3E") center/contain no-repeat; }
+a.source-link[data-missing='true'] { text-decoration-style: dashed; opacity: .8; }
+a.source-link[data-missing='true']::after { content: ' (pending)'; -webkit-mask: none; mask: none; background: none; width: auto; height: auto; font-size: .75em; color: var(--sl-color-gray-3); }
+
+/* ── Card grid ────────────────────────────────────────────────────────────
+   Section landing pages use an HTML <div class="cards"> of links. Flex rather
+   than grid so a short last row stretches to fill the width instead of
+   leaving orphan cards. Each card gets an accent from the palette (cycling),
+   a lit top edge and an arrow on hover. */
+.sl-markdown-content .cards { display: flex; flex-wrap: wrap; gap: .85rem; margin: 1.5rem 0; }
+.sl-markdown-content .cards > a, .sl-markdown-content .cards > div {
+  --c: var(--pp-blue);
+  flex: 1 1 15rem; display: block; position: relative; overflow: hidden; margin: 0;
+  padding: 1.05rem 1.15rem 1.1rem; border: 1px solid var(--pp-border); border-radius: var(--pp-radius-lg);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--c) 5%, var(--pp-surface)), var(--pp-surface) 60%);
+  text-decoration: none; color: var(--sl-color-gray-3);
+  transition: border-color .18s, transform .18s var(--pp-ease), box-shadow .18s;
+}
+.sl-markdown-content .cards > :nth-child(6n+2) { --c: var(--pp-purple); }
+.sl-markdown-content .cards > :nth-child(6n+3) { --c: var(--pp-teal); }
+.sl-markdown-content .cards > :nth-child(6n+4) { --c: var(--pp-cyan); }
+.sl-markdown-content .cards > :nth-child(6n+5) { --c: var(--pp-orange); }
+.sl-markdown-content .cards > :nth-child(6n+6) { --c: var(--pp-green); }
+.sl-markdown-content .cards > :is(a, div)::before { content: ''; position: absolute; inset: 0 1rem auto; height: 1px; background: linear-gradient(90deg, transparent, var(--c), transparent); opacity: .5; transition: opacity .18s; }
+.sl-markdown-content .cards > a::after { content: '→'; position: absolute; top: .95rem; right: 1rem; font: 500 .95rem var(--sl-font); color: var(--c); opacity: 0; transform: translateX(-4px); transition: opacity .18s, transform .18s var(--pp-ease); }
+.sl-markdown-content .cards > a:hover { border-color: color-mix(in srgb, var(--c) 60%, var(--pp-border)); transform: translateY(-2px); box-shadow: 0 14px 34px -20px var(--c), var(--pp-shadow); }
+.sl-markdown-content .cards > a:hover::before { opacity: 1; }
+.sl-markdown-content .cards > a:hover::after { opacity: 1; transform: none; }
+.sl-markdown-content .cards > a:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; }
+.sl-markdown-content .cards strong { display: block; color: var(--sl-color-white); font-size: .98rem; font-weight: 650; letter-spacing: -0.01em; margin-bottom: .3rem; padding-right: 1.2rem; }
+.sl-markdown-content .cards strong::before { content: ''; display: inline-block; vertical-align: .14em; margin-right: .55rem; width: .45rem; height: .45rem; border-radius: 2px; background: var(--c); box-shadow: 0 0 10px var(--c); }
+.sl-markdown-content .cards p { margin: 0; font-size: .86rem; line-height: 1.55; color: var(--sl-color-gray-3); }
+:root[data-theme='light'] .sl-markdown-content .cards > :is(a, div) { background: linear-gradient(180deg, color-mix(in srgb, var(--c) 5%, var(--pp-surface-2)), var(--pp-surface-2) 60%); }
+:root[data-theme='light'] .sl-markdown-content .cards strong::before { box-shadow: none; }
+
+/* ── Checklists ──────────────────────────────────────────────────────────
+   One tickable box per item, no bullet. client.ts enables the boxes and
+   remembers ticks for this browser tab. */
+.sl-markdown-content ul.contains-task-list { list-style: none; padding-inline-start: 0; border: 1px solid var(--pp-border); border-radius: var(--pp-radius-lg); background: var(--pp-surface); padding: .35rem .2rem; }
+.sl-markdown-content .task-list-item { list-style: none; position: relative; padding: .35rem .8rem .35rem 2.35rem; border-radius: var(--pp-radius); margin: 0; transition: background-color .12s, color .12s; }
+.sl-markdown-content .task-list-item + .task-list-item { margin-top: 0; }
+.sl-markdown-content .task-list-item:hover { background: color-mix(in srgb, var(--pp-blue) 6%, transparent); }
+.sl-markdown-content .task-list-item input[type='checkbox'] {
+  appearance: none; -webkit-appearance: none; flex: none; margin: 0; width: 1rem; height: 1rem; border-radius: .3rem; cursor: pointer;
+  border: 1.5px solid var(--pp-comment); background: var(--pp-bg-deep); position: absolute; left: .8rem; top: calc(.35rem + .85em - .5rem); display: grid; place-content: center;
+  transition: background-color .15s, border-color .15s, box-shadow .15s;
+}
+.sl-markdown-content .task-list-item input[type='checkbox']::before { content: ''; width: .55rem; height: .55rem; background: var(--sl-color-black); scale: 0; transition: scale .15s var(--pp-ease); clip-path: polygon(14% 44%, 0 65%, 50% 100%, 100% 16%, 80% 0%, 43% 62%); }
+.sl-markdown-content .task-list-item input[type='checkbox']:checked { background: var(--pp-green); border-color: var(--pp-green); box-shadow: 0 0 10px color-mix(in srgb, var(--pp-green) 40%, transparent); }
+.sl-markdown-content .task-list-item input[type='checkbox']:checked::before { scale: 1; }
+.sl-markdown-content .task-list-item input[type='checkbox']:focus-visible { outline: 2px solid var(--pp-blue); outline-offset: 2px; }
+.sl-markdown-content .task-list-item:has(input:checked) { color: var(--sl-color-gray-3); }
+.sl-markdown-content .task-list-item:has(input:checked) { text-decoration: line-through; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); }

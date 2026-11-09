@@ -1,0 +1,50 @@
+# whisper.cpp's whisper-server as a systemd *user* unit: the speech-to-text
+# backend of passporter-bridge's dictation (design §6.3). Installed by
+# deploy/whisper/build.sh into ~/.config/systemd/user/.
+#
+# It listens on loopback only: the bridge is its one client, and audio never
+# leaves the machine. Keep --port in step with the bridge's [audio] whisper
+# address (default 127.0.0.1:8178).
+#
+#   systemctl --user status whisper-server
+#   journalctl --user -u whisper-server -f
+#
+# To run while logged out: loginctl enable-linger "$USER".
+
+[Unit]
+Description=whisper.cpp server (speech-to-text for passporter-bridge)
+Documentation=https://github.com/jacobporter6/passporter/blob/main/docs/deploy.md
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+WorkingDirectory=/tmp
+# --convert decodes WebM/Opus and AAC from the phone through ffmpeg; the
+# converted WAV is written to the working directory, /tmp (private, see
+# PrivateTmp). whisper.cpp v1.7.6 has no --tmp-dir. --language en skips language
+# detection; use "auto" to dictate in other languages.
+ExecStart=%h/.local/bin/whisper-server \
+    --host 127.0.0.1 \
+    --port 8178 \
+    --model %h/.local/share/passporter/whisper/model.bin \
+    --language en \
+    --convert \
+    --threads 4
+Restart=on-failure
+RestartSec=5
+
+# Hardening. Read-only everywhere but a private /tmp; the GPU device nodes
+# stay reachable (no DevicePolicy), and CUDA needs W^X off (no
+# MemoryDenyWriteExecute).
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes
+UMask=0077
+
+[Install]
+WantedBy=default.target
