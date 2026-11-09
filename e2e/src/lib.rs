@@ -186,10 +186,14 @@ pub struct World {
     pub projects_dir: PathBuf,
     /// The Codex sessions dir to give the bridge.
     pub codex_dir: PathBuf,
-    /// The folder of [`SPAWN_PROJECT`].
-    pub spawn_project: PathBuf,
+    /// The projects the phone may start new agents in: name and folder.
+    /// The rig's runbook runs in the first.
+    pub spawn_projects: Vec<(String, PathBuf)>,
     /// The fake `claude` executable to give the bridge.
     pub claude: PathBuf,
+    /// What the fake `whisper-server` hears in every clip, in its wire
+    /// shape (see [`WHISPER_TEXT`]).
+    pub heard: String,
 }
 
 impl World {
@@ -207,8 +211,9 @@ impl World {
             ],
             projects_dir: root.join("claude-projects"),
             codex_dir: root.join("codex-sessions"),
-            spawn_project: repos.join(SPAWN_PROJECT),
+            spawn_projects: vec![(SPAWN_PROJECT.to_owned(), repos.join(SPAWN_PROJECT))],
             claude: root.join("fake-claude"),
+            heard: WHISPER_TEXT.to_owned(),
         };
         let mut blocked = FakeAgent::claude(
             BLOCKED_PANE,
@@ -246,7 +251,9 @@ impl World {
         )?;
         world.claude_transcript(&done, &realistic_transcript(&done))?;
         world.agents = vec![blocked, working, done];
-        std::fs::create_dir_all(&world.spawn_project)?;
+        for (_, folder) in &world.spawn_projects {
+            std::fs::create_dir_all(folder)?;
+        }
         std::fs::create_dir_all(&world.codex_dir)?;
         std::fs::write(
             &world.claude,
@@ -354,20 +361,31 @@ impl World {
             .collect()
     }
 
-    /// Writes `jsonl` as `agent`'s transcript:
+    /// Where Claude Code keeps `agent`'s transcript:
     /// `<projects>/<cwd slug>/<session>.jsonl`.
-    fn claude_transcript(&self, agent: &FakeAgent, jsonl: &str) -> std::io::Result<()> {
-        std::fs::create_dir_all(&agent.cwd)?;
+    #[must_use]
+    pub fn transcript_file(&self, agent: &FakeAgent) -> PathBuf {
         let slug: String = agent
             .cwd
             .to_string_lossy()
             .chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
             .collect();
-        let dir = self.projects_dir.join(slug);
-        std::fs::create_dir_all(&dir)?;
         let session = agent.session.as_deref().unwrap_or("unknown-session");
-        std::fs::write(dir.join(format!("{session}.jsonl")), jsonl)
+        self.projects_dir
+            .join(slug)
+            .join(format!("{session}.jsonl"))
+    }
+
+    /// Writes `jsonl` as `agent`'s transcript ([`Self::transcript_file`]),
+    /// creating its folder too.
+    fn claude_transcript(&self, agent: &FakeAgent, jsonl: &str) -> std::io::Result<()> {
+        std::fs::create_dir_all(&agent.cwd)?;
+        let file = self.transcript_file(agent);
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(file, jsonl)
     }
 }
 

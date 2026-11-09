@@ -103,3 +103,15 @@ so `just verify` and `just gate` compile them but never run them.
 A failed step names what it waited for and prints the page's text and the
 bridge's log. The tests take under a minute once built (each starts its own
 bridge and browser).
+
+## Demo video (`just demo`)
+
+`e2e/examples/demo.rs` records the README's demo on the same rig
+(`Rig::start_with`, with its own world of six agents in three neutral
+repos): a scripted walk through the app, captured over CDP and set on a
+1080p stage with captions by `ffmpeg`, into
+`target/demo/passporter-demo.mp4`. Narration is optional:
+`uv run e2e/examples/narrate.py` speaks `target/demo/narration/lines.tsv`
+(written by each run) with Kokoro, and the next `just demo` lays the clips
+under their scenes. It is an example, so `just verify` compiles and lints it
+but nothing runs it.
