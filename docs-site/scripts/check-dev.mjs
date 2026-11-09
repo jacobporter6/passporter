@@ -10,6 +10,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { launch } from './lib-browser.mjs';
+import { DOCS_BASE } from '../content-sources.mjs';
 
 const PORT = Number(process.env.PORT ?? 4471);
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -27,7 +28,8 @@ let log = astro('dev', '--background', '--host', '127.0.0.1', '--port', String(P
 const m = /http:\/\/127\.0\.0\.1:(\d+)/.exec(log);
 if (!m || /already running/i.test(log)) { console.error(log); process.exit(2); }
 
-const base = `http://127.0.0.1:${m[1]}`;
+// The dev server serves the site under its base path, as the published site is.
+const base = `http://127.0.0.1:${m[1]}${DOCS_BASE}`;
 const failures = [];
 try {
   let up = false;

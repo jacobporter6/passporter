@@ -4,7 +4,7 @@ import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import picomatch from 'picomatch';
-import { CONTENT_ROOT, CONTENT_INCLUDE, CONTENT_EXCLUDE } from '../../content-sources.mjs';
+import { CONTENT_ROOT, CONTENT_INCLUDE, CONTENT_EXCLUDE, DOCS_BASE, withBase } from '../../content-sources.mjs';
 
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const isPublished = picomatch(CONTENT_INCLUDE, { ignore: CONTENT_EXCLUDE, dot: false });
@@ -22,6 +22,27 @@ export function pathToSlug(repoPath) {
   p = p.replace(/(^|\/)(README|index)$/i, '');
   const slug = prefix + p.split('/').filter(Boolean).map(slugSegment).join('/');
   return slug.replace(/\/$/, '') || 'repo';
+}
+
+/**
+ * A frontmatter site link (`/start/quick-start/`) as served under `base`.
+ * External, relative and already-based links are returned unchanged.
+ */
+export function baseLink(link, base = DOCS_BASE) {
+  if (typeof link !== 'string' || !link.startsWith('/') || link.startsWith('//')) return link;
+  if (base && (link === base || link.startsWith(`${base}/`) || link.startsWith(`${base}#`))) return link;
+  return withBase(link, base);
+}
+
+/**
+ * Prefix the base onto the site links a page's frontmatter carries (the splash
+ * page's hero actions), which Starlight renders as written. Mutates `data`.
+ */
+export function baseFrontmatterLinks(data, base = DOCS_BASE) {
+  const actions = data?.hero?.actions;
+  if (!Array.isArray(actions)) return data;
+  for (const action of actions) if (action && typeof action === 'object') action.link = baseLink(action.link, base);
+  return data;
 }
 
 /** Every published Markdown file in the repository (repo-relative paths, sorted). */

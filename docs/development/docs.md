@@ -9,6 +9,7 @@ sources:
   - docs-site/src/lib/remark-portable.mjs
   - docs-site/src/lib/portable-loader.ts
   - docs-site/scripts/
+  - .github/workflows/docs.yml
 ---
 
 # Writing the docs
@@ -38,7 +39,7 @@ flowchart TB
 ```sh
 cd docs-site
 npm ci              # once
-npm run dev         # live preview on http://127.0.0.1:4321
+npm run dev         # live preview on http://127.0.0.1:4321/passporter/
 npm run check       # tests, generated page up to date, build, link check, diagram render check
 npm run shot -- /app/triage/ --light   # screenshot into docs-site/.shots/
 ```
@@ -110,9 +111,38 @@ To improve a description, improve the handler's doc comment.
 ## Edit links
 
 "Edit page" and source links point at `REPO_URL` in
-`docs-site/content-sources.mjs`, a placeholder (`github.com/OWNER/passporter`)
-until you set it to your repository. It is the only place the site names
-one.
+`docs-site/content-sources.mjs`. It is the only place the site names the
+repository: a fork sets its own.
+
+## Publishing
+
+The site is published to GitHub Pages at
+<https://jacobporter6.github.io/passporter/> by
+[`.github/workflows/docs.yml`](../../.github/workflows/docs.yml) on every
+push to `main` that touches `docs/` or `docs-site/` (and by hand, with *Run
+workflow*). It runs `npm ci` and `npm run check`, so a broken link, a
+privacy hit or a diagram that fails to render stops the deploy, then uploads
+`docs-site/dist/`.
+
+Where the site is served is set in one place, `DOCS_SITE` and `DOCS_BASE` in
+`docs-site/content-sources.mjs` (`https://jacobporter6.github.io` and
+`/passporter`). Every internal link, asset and script carries the base path,
+the dev server and `npm run preview` serve under it too, and the render
+check and screenshots load the site under it. The `DOCS_SITE` and
+`DOCS_BASE` environment variables override both for one build
+(`DOCS_BASE= npm run build` builds for the root of a domain); the workflow
+sets them from the repository's Pages settings, so a fork or a custom domain
+publishes correctly as it is.
+
+> [!IMPORTANT]
+> Two one-time steps in the repository settings, at release: set
+> **Settings → Pages → Source** to **GitHub Actions**, and make sure Actions
+> are enabled for the repository. Until then the workflow does not run, or
+> fails at its Pages setup step.
+
+The privacy scan runs strict in the workflow. The extra patterns file is
+unpublished and absent from a fresh clone; without it the scan uses its
+built-in generic patterns.
 
 ## How the site works
 

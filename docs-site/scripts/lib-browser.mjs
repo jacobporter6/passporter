@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
+import { DOCS_BASE } from '../content-sources.mjs';
 
 const CANDIDATES = [process.env.CHROMIUM, '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome', '/opt/google/chrome/chrome'].filter(Boolean);
 
@@ -32,21 +33,46 @@ function inside(root, pathname) {
   return file === root || file.startsWith(root + path.sep) ? file : null;
 }
 
-/** Minimal static server over dist/ (no dependency on astro preview). Never serves a file outside `dir`. */
-export async function serveDist(dir, port = 0) {
+/**
+ * `pathname` with the site's base path removed (`/passporter/app/` -> `/app/`),
+ * or null if it is not under the base. An empty base serves from the root.
+ */
+export function stripBase(pathname, base) {
+  if (!base) return pathname;
+  if (pathname === base) return '/';
+  return pathname.startsWith(`${base}/`) ? pathname.slice(base.length) : null;
+}
+
+/**
+ * Minimal static server over dist/ (no dependency on astro preview), serving it
+ * under `base` as the published site is (DOCS_BASE by default). Never serves a
+ * file outside `dir`. The returned `url` includes the base, so `url + '/app/'`
+ * is a page.
+ */
+export async function serveDist(dir, { port = 0, base = DOCS_BASE } = {}) {
   const root = path.resolve(dir);
+  const notFound = async (res) => {
+    res.writeHead(404, { 'content-type': 'text/html' });
+    res.end(await readFile(path.join(root, '404.html')).catch(() => 'not found'));
+  };
   const server = createServer(async (req, res) => {
-    let file = inside(root, new URL(req.url, 'http://x').pathname);
+    const pathname = new URL(req.url, 'http://x').pathname;
+    if (base && pathname === base) {
+      res.writeHead(301, { location: `${base}/` });
+      res.end();
+      return;
+    }
+    const sitePath = stripBase(pathname, base);
+    let file = sitePath === null ? null : inside(root, sitePath);
     try {
-      if (file === null) throw new Error('outside dist/');
+      if (file === null) throw new Error('outside dist/ or the base path');
       if ((await stat(file)).isDirectory()) file = path.join(file, 'index.html');
       res.writeHead(200, { 'content-type': TYPES[path.extname(file)] ?? 'application/octet-stream' });
       res.end(await readFile(file));
     } catch {
-      res.writeHead(404, { 'content-type': 'text/html' });
-      res.end(await readFile(path.join(root, '404.html')).catch(() => 'not found'));
+      await notFound(res);
     }
   });
   await new Promise((r) => server.listen(port, '127.0.0.1', r));
-  return { server, url: `http://127.0.0.1:${server.address().port}` };
+  return { server, url: `http://127.0.0.1:${server.address().port}${base}` };
 }

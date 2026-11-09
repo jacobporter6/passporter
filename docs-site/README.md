@@ -7,7 +7,7 @@ directory works, is [Writing the docs](../docs/development/docs.md).
 
 ```bash
 npm ci
-npm run dev        # http://127.0.0.1:4321, live reload on docs/ changes
+npm run dev        # http://127.0.0.1:4321/passporter/, live reload on docs/ changes
 npm run gen        # regenerate docs/architecture/http-api.md from the bridge's router
 npm run check      # tests + generated page up to date + privacy scan + build + link check + diagram render check
 npm run build && npm run preview   # the static site as served
@@ -18,15 +18,17 @@ Node 22 or newer. The render check and screenshots use a system Chromium
 (`CHROMIUM=/path/to/chrome` overrides; `npx playwright-core install chromium`
 installs one). The site is not part of `just gate`.
 
-`npm run build` writes a static `dist/` that any web server can host. The
-site URL in `content-sources.mjs` (`SITE_URL`) is a placeholder until it has
-a home.
+`npm run build` writes a static `dist/` that any web server can host under
+the base path. It is published to <https://jacobporter6.github.io/passporter/>
+by `.github/workflows/docs.yml`; `DOCS_SITE` and `DOCS_BASE` in
+`content-sources.mjs` (or the same environment variables) set where it is
+served. See [Publishing](../docs/development/docs.md#publishing).
 
 | Path | What |
 | --- | --- |
-| `content-sources.mjs` | Which Markdown files are published (`docs/` and the READMEs beside the code, minus `CONTENT_EXCLUDE`); `REPO_URL`, the one place edit and source links come from (a placeholder: set it to your repository); the site URL; the extra privacy patterns file |
+| `content-sources.mjs` | Which Markdown files are published (`docs/` and the READMEs beside the code, minus `CONTENT_EXCLUDE`); `REPO_URL`, the one place edit and source links come from; `DOCS_SITE` and `DOCS_BASE`, where the site is served; the extra privacy patterns file |
 | `sidebar.mjs` | The sidebar groups; fails the build if a published page has no place |
-| `src/lib/paths.mjs` | Repository path → site URL, and the published page list |
+| `src/lib/paths.mjs` | Repository path → site URL, base-path frontmatter links, and the published page list |
 | `src/lib/portable-loader.ts` | README.md → index page, H1 → title, READMEs beside the code → `/repo/…` |
 | `src/lib/remark-portable.mjs` | Link rewriting, GitHub alerts → asides, `mermaid` fences |
 | `src/lib/rehype-table-scroll.mjs` | Wide tables scroll inside the column |

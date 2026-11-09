@@ -13,6 +13,8 @@
  *
  * It also sets each page's "Edit page" link and "Last updated" date. Starlight
  * derives both from a path under src/content/docs, which these pages do not have.
+ * Site links in frontmatter (hero actions) are written root-relative, as on a
+ * site at `/`; the loader puts the site's base path in front of them.
  */
 import { glob } from 'astro/loaders';
 import { readFileSync } from 'node:fs';
@@ -20,7 +22,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { Loader } from 'astro/loaders';
 import { CONTENT_INCLUDE, CONTENT_EXCLUDE, REPO_URL, REPO_BRANCH } from '../../content-sources.mjs';
-import { pathToSlug } from './paths.mjs';
+import { baseFrontmatterLinks, pathToSlug } from './paths.mjs';
 
 export const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
@@ -66,7 +68,7 @@ export function portableLoader(): Loader {
       inner.load({
         ...ctx,
         parseData: async (props) => {
-          const data = { ...props.data } as Record<string, unknown>;
+          const data = baseFrontmatterLinks(structuredClone(props.data ?? {})) as Record<string, unknown>;
           if (props.filePath) {
             const rel = props.filePath.startsWith(REPO_ROOT)
               ? props.filePath.slice(REPO_ROOT.length)
