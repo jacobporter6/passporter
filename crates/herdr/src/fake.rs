@@ -75,6 +75,7 @@ pub enum Method {
     WorkspaceCreate,
     TabCreate,
     PaneSplit,
+    PaneGet,
     PaneRead,
     PaneSendText,
     PaneSendKeys,
@@ -100,6 +101,7 @@ impl Method {
             Self::WorkspaceCreate => "workspace.create",
             Self::TabCreate => "tab.create",
             Self::PaneSplit => "pane.split",
+            Self::PaneGet => "pane.get",
             Self::PaneRead => "pane.read",
             Self::PaneSendText => "pane.send_text",
             Self::PaneSendKeys => "pane.send_keys",
@@ -352,6 +354,19 @@ impl FakeHerdr {
         let mut state = self.state();
         let p = state.pane_mut(pane);
         text.clone_into(&mut p.screen);
+        p.revision += 1;
+    }
+
+    /// Gives `pane` a new terminal under the same id, as if the pane had
+    /// closed and herdr (restarted) handed its id to an unrelated one.
+    ///
+    /// # Panics
+    /// If `pane` doesn't exist (a test bug).
+    pub fn renew_terminal(&self, pane: &PaneId) {
+        let mut state = self.state();
+        let n = state.fresh();
+        let p = state.pane_mut(pane);
+        p.terminal_id = TerminalId::new(format!("term_{n}"));
         p.revision += 1;
     }
 
@@ -968,6 +983,21 @@ impl Herdr for FakeHerdr {
         }]);
         self.after(M)?;
         Ok(created)
+    }
+
+    async fn pane(&self, pane: &PaneId) -> Result<Pane> {
+        const M: Method = Method::PaneGet;
+        self.before(M).await?;
+        let found = {
+            let state = self.state();
+            if !state.panes.contains_key(pane) {
+                let msg = format!("pane {pane} not found");
+                return Err(server_err(M, ErrorCode::PaneNotFound, msg));
+            }
+            state.pane(pane)
+        };
+        self.after(M)?;
+        Ok(found)
     }
 
     async fn read_pane(

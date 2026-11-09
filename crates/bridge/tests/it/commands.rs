@@ -12,6 +12,7 @@ use protocol::{
 };
 use serde_json::{Value, json};
 
+use crate::harness::OTHER_TOKEN;
 use crate::tldr::{Fixture, append, assistant, user};
 
 const KEY1: &str = "00000000-0000-4000-8000-000000000001";
@@ -280,6 +281,52 @@ async fn a_new_terminal_opens_in_the_agents_folder_and_types_the_command() {
             )
             .await;
     assert_eq!(other.status, 404, "{}", other.body);
+    c.f.bridge.stop().await.expect("clean stop");
+}
+
+#[tokio::test]
+async fn a_terminal_answers_only_the_device_that_opened_it_while_it_runs_its_terminal() {
+    let c = fixture(MESSAGE).await;
+    let list = c.list().await;
+    let (status, result) = c
+        .run(&body(KEY1, &list.candidates[1], "new_terminal", "app"))
+        .await;
+    assert_eq!(status, 200, "{result:?}");
+    let CommandResult::Started { terminal, .. } = result else {
+        panic!("started: {result:?}");
+    };
+    let pane = PaneId::new(terminal.pane.as_str());
+    let screen = format!("/v1/terminals/{pane}/screen");
+    let keys_path = format!("/v1/terminals/{pane}/keys");
+    let keys = |key: &str| {
+        json!({"idempotencyKey": key, "origin": "app", "createdAt": 1, "keys": ["enter"]})
+            .to_string()
+    };
+    let json = [("content-type", "application/json")];
+    let bridge = &c.f.bridge;
+
+    // Another paired device knows nothing of it.
+    let other = bridge.send_as(OTHER_TOKEN, "GET", &screen, &[], "").await;
+    assert_eq!(other.status, 404, "{}", other.body);
+    let other = bridge
+        .send_as(OTHER_TOKEN, "POST", &keys_path, &json, &keys(KEY2))
+        .await;
+    assert_eq!(other.status, 404, "{}", other.body);
+    assert_eq!(bridge.get_authed(&screen).await.status, 200);
+
+    // herdr hands the pane's id to another terminal: it is no longer the
+    // one the run opened, so it is neither read nor sent keys.
+    bridge.fake().renew_terminal(&pane);
+    assert_eq!(bridge.get_authed(&screen).await.status, 404);
+    let reused = bridge.post_authed(&keys_path, &keys(KEY3)).await;
+    assert_eq!(reused.status, 404, "{}", reused.body);
+    assert!(
+        !c.sent()
+            .iter()
+            .any(|call| matches!(call, Call::Keys { .. })),
+        "{:?}",
+        c.sent()
+    );
     c.f.bridge.stop().await.expect("clean stop");
 }
 

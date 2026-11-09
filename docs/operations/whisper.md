@@ -33,10 +33,12 @@ WHISPER_BACKEND=cpu deploy/whisper/build.sh   # force a CPU build
 The script checks its prerequisites first and stops with the command to
 install any that are missing: `cmake`, `gcc`, `git`, `curl`, `ffmpeg` (which
 decodes the phone's WebM/Opus or AAC) and, for a GPU build, the CUDA
-toolkit. It clones a pinned whisper.cpp release, builds `whisper-server`
-statically, installs it to `~/.local/bin`, downloads the model to
-`~/.local/share/passporter/whisper/`, and enables the unit. Overrides:
-`WHISPER_MODEL`, `CUDA_ARCH`, `WHISPER_REF`. The unit transcribes English;
+toolkit. It clones a pinned whisper.cpp release (refusing it if the tag
+has moved off the pinned commit), builds `whisper-server` statically,
+installs it to `~/.local/bin`, downloads the model to
+`~/.local/share/passporter/whisper/` and checks its SHA-256, and enables
+the unit. Overrides: `WHISPER_MODEL`, `CUDA_ARCH`, `WHISPER_REF` (with
+`WHISPER_COMMIT`), `WHISPER_MODEL_SHA256`. The unit transcribes English;
 see [Deploy › Transcription](../deploy.md#build-and-install) for other
 languages.
 

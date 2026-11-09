@@ -32,7 +32,10 @@
 //!   phone may then watch (`GET /v1/terminals/:pane/screen`) and send
 //!   allowlisted keys to (`POST /v1/terminals/:pane/keys`: audited, rate
 //!   limited, never from the car). Only terminals opened this way, since
-//!   the bridge started, can be watched; any other pane is 404.
+//!   the bridge started, by the same device, and only while the pane still
+//!   runs the terminal herdr created for it (its terminal id, checked with
+//!   `pane.get` on every read and key send), can be used; any other pane
+//!   is 404.
 //!
 //! The work after the ledger runs in its own task, so a client hanging up
 //! cannot leave a run half-recorded.
@@ -43,7 +46,7 @@ pub(crate) mod extract;
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use axum::body::Bytes;
@@ -51,7 +54,7 @@ use axum::extract::{Path as UrlPath, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
-use herdr::PaneId;
+use herdr::{PaneId, TerminalId};
 use protocol::{
     AgentId, CommandCandidate, CommandHash, CommandList, CommandRefusal, CommandResult,
     CommandRunRequest, IdempotencyKey, MAX_SCREEN_LINES, Origin, RunTarget, Terminal,
@@ -186,7 +189,28 @@ pub struct Commands {
     run_limit: RateLimiter<Budget>,
     keys_limit: RateLimiter<Budget>,
     /// Terminals opened by runs, newest last.
-    terminals: Mutex<VecDeque<PaneId>>,
+    terminals: Mutex<VecDeque<Opened>>,
+}
+
+/// A terminal a run opened: for which device, and which herdr terminal
+/// its pane ran then.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Opened {
+    device: String,
+    pane: PaneId,
+    terminal: TerminalId,
+}
+
+/// Whether a pane is a terminal the asking device may use now.
+#[derive(Debug)]
+enum Live {
+    /// It is: the device's run opened it and it still runs that terminal.
+    Yes,
+    /// It is not (another device's, never opened, closed, or its id now
+    /// names another terminal).
+    No,
+    /// herdr did not say.
+    Unknown(herdr::Error),
 }
 
 impl std::fmt::Debug for Commands {
@@ -222,23 +246,45 @@ impl Commands {
         }
     }
 
-    fn remember(&self, pane: PaneId) {
-        let mut terminals = self
-            .terminals
+    fn terminals(&self) -> MutexGuard<'_, VecDeque<Opened>> {
+        self.terminals
             .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        terminals.retain(|known| *known != pane);
-        terminals.push_back(pane);
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn remember(&self, opened: Opened) {
+        let mut terminals = self.terminals();
+        terminals.retain(|known| known.pane != opened.pane);
+        terminals.push_back(opened);
         while terminals.len() > self.settings.max_terminals.max(1) {
             terminals.pop_front();
         }
     }
 
-    fn is_terminal(&self, pane: &PaneId) -> bool {
-        self.terminals
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .contains(pane)
+    /// Whether `pane` is a terminal `device`'s run opened that still runs
+    /// the terminal it was opened with (`pane.get`): a pane id herdr has
+    /// handed to another terminal is not it, and is forgotten.
+    async fn live(&self, device: &str, pane: &PaneId) -> Live {
+        let known = self
+            .terminals()
+            .iter()
+            .find(|known| known.device == device && known.pane == *pane)
+            .map(|known| known.terminal.clone());
+        let Some(terminal) = known else {
+            return Live::No;
+        };
+        let same = match self.control.pane(pane).await {
+            Ok(now) => now.terminal_id == terminal,
+            Err(error) if error.code().is_some_and(herdr::ErrorCode::is_not_found) => false,
+            Err(error) => return Live::Unknown(error),
+        };
+        if same {
+            Live::Yes
+        } else {
+            self.terminals()
+                .retain(|known| !(known.pane == *pane && known.terminal == terminal));
+            Live::No
+        }
     }
 }
 
@@ -517,7 +563,9 @@ async fn decide_and_run(
     }
     match body.target {
         RunTarget::Here => run_here(state, &again, &candidate).await,
-        RunTarget::NewTerminal => run_in_terminal(commands, &again, &source.cwd, &candidate).await,
+        RunTarget::NewTerminal => {
+            run_in_terminal(commands, device, &again, &source.cwd, &candidate).await
+        }
     }
 }
 
@@ -543,15 +591,17 @@ async fn run_here(state: &AppState, agent: &herdr::Agent, candidate: &CommandCan
 }
 
 /// Opens a tab in the agent's folder and types the command into its shell.
+/// Only `device` may then watch it or send it keys.
 async fn run_in_terminal(
     commands: &Commands,
+    device: &str,
     agent: &herdr::Agent,
     cwd: &Path,
     candidate: &CommandCandidate,
 ) -> Outcome {
     let label = label(agent);
-    let (_, pane) = match commands.tabs.open(&label, cwd).await {
-        Ok(opened) => opened,
+    let (pane, terminal) = match commands.tabs.open(&label, cwd).await {
+        Ok((_, root)) => (root.pane_id, root.terminal_id),
         Err(error) if !error.may_have_taken_effect() => {
             tracing::warn!(%error, "herdr could not open a tab for a command");
             return Outcome::undecided("herdr is unavailable; nothing ran.");
@@ -565,7 +615,11 @@ async fn run_in_terminal(
             ));
         }
     };
-    commands.remember(pane.clone());
+    commands.remember(Opened {
+        device: device.to_owned(),
+        pane: pane.clone(),
+        terminal,
+    });
     wait_for_shell(
         commands.control.as_ref(),
         &pane,
@@ -612,15 +666,26 @@ async fn is_dir(path: &Path) -> bool {
         .is_ok_and(|meta| meta.is_dir())
 }
 
-/// `GET /v1/terminals/:pane/screen`: the last lines of a terminal a run
-/// opened. 404 for any other pane, 502 if herdr fails.
+/// `GET /v1/terminals/:pane/screen`: the last lines of a terminal this
+/// device's run opened, while its pane still runs that terminal. 404 for
+/// any other pane, 502 if herdr fails.
 pub(crate) async fn screen(
     State(state): State<AppState>,
+    Extension(principal): Extension<Principal>,
     UrlPath(raw): UrlPath<String>,
 ) -> Response {
-    let Some(pane) = terminal(&state.commands, &raw) else {
+    let Ok(pane) = protocol::PaneId::new(raw) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    let pane = PaneId::new(pane.as_str());
+    match state.commands.live(&principal.device, &pane).await {
+        Live::Yes => {}
+        Live::No => return StatusCode::NOT_FOUND.into_response(),
+        Live::Unknown(error) => {
+            tracing::warn!(%error, "herdr pane lookup failed");
+            return StatusCode::BAD_GATEWAY.into_response();
+        }
+    }
     let lines = u32::try_from(MAX_SCREEN_LINES).unwrap_or(u32::MAX);
     match state.commands.control.read_recent(&pane, lines).await {
         Ok(text) => {
@@ -646,17 +711,11 @@ fn revision(text: &str) -> u64 {
     u64::from_be_bytes(first)
 }
 
-/// The pane in the path, if it is a terminal a run opened.
-fn terminal(commands: &Commands, raw: &str) -> Option<PaneId> {
-    let pane = protocol::PaneId::new(raw).ok()?;
-    let pane = PaneId::new(pane.as_str());
-    commands.is_terminal(&pane).then_some(pane)
-}
-
-/// `POST /v1/terminals/:pane/keys`: allowlisted keys into a terminal a run
-/// opened. Order: parse (400) → ledger → never the car (403) → a known
-/// terminal (404) → per-device rate limit (429) → audit `execute` → herdr
-/// → audit `result`.
+/// `POST /v1/terminals/:pane/keys`: allowlisted keys into a terminal this
+/// device's run opened. Order: parse (400) → ledger → never the car (403)
+/// → a terminal of this device's that still runs (404; 503 if herdr does
+/// not say) → per-device rate limit (429) → audit `execute` → herdr →
+/// audit `result`.
 pub(crate) async fn keys(
     State(state): State<AppState>,
     Extension(principal): Extension<Principal>,
@@ -717,11 +776,18 @@ async fn send_keys(
             "Terminals take no keys from the car.",
         );
     }
-    if !commands.is_terminal(&request.pane) {
-        return Outcome::refused(
-            CommandRefusal::NotFound,
-            "No terminal opened from the phone has that pane.",
-        );
+    match commands.live(device, &request.pane).await {
+        Live::Yes => {}
+        Live::No => {
+            return Outcome::refused(
+                CommandRefusal::NotFound,
+                "No terminal this phone opened runs in that pane.",
+            );
+        }
+        Live::Unknown(error) => {
+            tracing::warn!(%error, "herdr pane lookup failed");
+            return Outcome::undecided("herdr is unavailable; nothing was sent.");
+        }
     }
     if let Err(wait) = commands.keys_limit.check(budget) {
         return Outcome::rate_limited("Too many keys from this device; retry shortly.", wait);

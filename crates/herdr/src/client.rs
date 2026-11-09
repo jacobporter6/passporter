@@ -125,6 +125,10 @@ pub trait Herdr: Send + Sync {
         cwd: Option<&Path>,
     ) -> impl Future<Output = Result<Pane>> + Send;
 
+    /// One pane (`pane.get`): its terminal id tells whether it still runs
+    /// the terminal it was created with.
+    fn pane(&self, pane: &PaneId) -> impl Future<Output = Result<Pane>> + Send;
+
     fn read_pane(
         &self,
         pane: &PaneId,
@@ -587,6 +591,14 @@ impl Herdr for SocketClient {
         Ok(reply.pane)
     }
 
+    async fn pane(&self, pane: &PaneId) -> Result<Pane> {
+        let params = json!({"pane_id": pane.as_str()});
+        let reply: PaneReply = self
+            .call("pane.get", params, &["pane_info"], self.request_timeout)
+            .await?;
+        Ok(reply.pane)
+    }
+
     async fn read_pane(
         &self,
         pane: &PaneId,
@@ -702,6 +714,7 @@ impl EventStream for SocketEvents {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TerminalId;
     use tokio::net::UnixListener;
 
     /// A unix-socket server in a private temp dir, removed on drop.
@@ -849,6 +862,46 @@ mod tests {
             .expect("prompt ok");
 
         assert_eq!(agent.agent_status, AgentStatus::Done);
+    }
+
+    /// The reply shape of herdr 0.9.1's `pane.get` (as `herdr pane get` prints it).
+    #[tokio::test]
+    async fn gets_a_pane_with_its_terminal() {
+        let server = TestServer::replying(|req| {
+            assert_eq!(req["method"], "pane.get");
+            assert_eq!(req["params"], json!({"pane_id": "w5:p2"}));
+            vec![ok(
+                req,
+                &json!({"type": "pane_info", "pane": {
+                    "agent_status": "unknown", "cwd": "/home/dev/git/garden",
+                    "focused": false, "foreground_cwd": "/home/dev/git/garden",
+                    "pane_id": "w5:p2", "revision": 2,
+                    "scroll": {"max_offset_from_bottom": 0, "offset_from_bottom": 0,
+                               "viewport_rows": 57},
+                    "tab_id": "w5:t2", "terminal_id": "term_00000000000002",
+                    "terminal_title": "dev@workstation:~/git/garden",
+                    "terminal_title_stripped": "dev@workstation:~/git/garden",
+                    "workspace_id": "w5",
+                }}),
+            )]
+        });
+        let pane = server
+            .client()
+            .pane(&PaneId::new("w5:p2"))
+            .await
+            .expect("pane");
+        assert_eq!(pane.terminal_id, TerminalId::new("term_00000000000002"));
+
+        let gone = TestServer::replying(|req| {
+            vec![json!({"id": req["id"], "error": {"code": "pane_not_found",
+                                                  "message": "pane w9:p9 not found"}})]
+        });
+        let err = gone
+            .client()
+            .pane(&PaneId::new("w9:p9"))
+            .await
+            .expect_err("gone");
+        assert!(err.code().is_some_and(ErrorCode::is_not_found), "{err}");
     }
 
     #[tokio::test]

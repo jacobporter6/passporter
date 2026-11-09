@@ -43,8 +43,10 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::{self, Message};
 
-/// The only token [`StubAuth`] accepts.
+/// The token [`StubAuth`] accepts for `test-device`.
 pub(crate) const TOKEN: &str = "test-token";
+/// The token [`StubAuth`] accepts for a second device, `other-device`.
+pub(crate) const OTHER_TOKEN: &str = "other-token";
 
 /// How long any single expectation may take: a deadline for waiting on a
 /// real condition (a poll loop, an event, a reply), never a pause. A
@@ -60,22 +62,25 @@ pub(crate) const PATIENCE: Duration = Duration::from_secs(30);
 /// to expire sets it short itself.
 const FLOW_WAIT: Duration = PATIENCE;
 
-/// Accepts `Authorization: Bearer test-token`, refuses everything else.
+/// Accepts `Authorization: Bearer test-token` as `test-device` and
+/// `Bearer other-token` as `other-device`, refuses everything else.
 #[derive(Debug)]
 pub(crate) struct StubAuth;
 
 impl Authenticator for StubAuth {
     fn authenticate<'a>(&'a self, request: AuthRequest<'a>) -> AuthFuture<'a> {
-        let ok = request
+        let header = request
             .headers
             .get("authorization")
-            .is_some_and(|v| v.as_bytes() == format!("Bearer {TOKEN}").as_bytes());
+            .map(axum::http::HeaderValue::as_bytes);
+        let device = [(TOKEN, "test-device"), (OTHER_TOKEN, "other-device")]
+            .into_iter()
+            .find(|(token, _)| header == Some(format!("Bearer {token}").as_bytes()))
+            .map(|(_, device)| device);
         Box::pin(async move {
-            if ok {
-                Ok(Principal::new("test-device"))
-            } else {
-                Err(AuthRejection::Unauthenticated)
-            }
+            device
+                .map(Principal::new)
+                .ok_or(AuthRejection::Unauthenticated)
         })
     }
 }
@@ -241,6 +246,9 @@ impl Herdr for CuttableHerdr {
         cwd: Option<&Path>,
     ) -> herdr::Result<Pane> {
         self.fake.split_pane(pane, direction, cwd).await
+    }
+    async fn pane(&self, pane: &PaneId) -> herdr::Result<Pane> {
+        self.fake.pane(pane).await
     }
     async fn read_pane(
         &self,
@@ -530,8 +538,20 @@ impl Bridge {
         headers: &[(&str, &str)],
         body: &str,
     ) -> HttpResponse {
+        self.send_as(TOKEN, method, path, headers, body).await
+    }
+
+    /// Any request with `token`, extra headers and a body.
+    pub(crate) async fn send_as(
+        &self,
+        token: &str,
+        method: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: &str,
+    ) -> HttpResponse {
         let stream = TcpStream::connect(self.addr).await.expect("connect");
-        let auth = format!("Bearer {TOKEN}");
+        let auth = format!("Bearer {token}");
         let mut all = vec![("authorization", auth.as_str())];
         all.extend_from_slice(headers);
         request(stream, method, path, &all, body).await

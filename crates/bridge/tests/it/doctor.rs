@@ -522,18 +522,6 @@ async fn listen_against_the_allowlist_and_the_wireguard_opt_in() {
         "insecure_http_allow",
     );
 
-    deployment.config(
-        "listen = \"0.0.0.0:8443\"\ninsecure_http_over_wireguard = true\n\
-         insecure_http_allow = [\"0.0.0.0\"]\n",
-        "",
-    );
-    expect(
-        &deployment.doctor().await,
-        Check::Listen,
-        Status::Fail,
-        "never 0.0.0.0",
-    );
-
     // HTTPS anywhere, and X-Forwarded-For only from the edge.
     deployment.config("listen = \"192.0.2.10:8443\"\n", TLS);
     expect(
@@ -572,6 +560,42 @@ async fn listen_against_the_allowlist_and_the_wireguard_opt_in() {
         Check::Config,
         Status::Fail,
         "insecure_http_over_wireguard",
+    );
+}
+
+#[tokio::test]
+async fn a_wildcard_listen_is_refused_in_every_spelling() {
+    let deployment = Deployment::new().await;
+    // The config refuses a wildcard in the allowlist outright.
+    deployment.config(
+        "listen = \"0.0.0.0:8443\"\ninsecure_http_over_wireguard = true\n\
+         insecure_http_allow = [\"0.0.0.0\"]\n",
+        "",
+    );
+    expect(
+        &deployment.doctor().await,
+        Check::Config,
+        Status::Fail,
+        "never 0.0.0.0",
+    );
+    // The IPv4-mapped any-address is the wildcard too.
+    deployment.config("listen = \"[::ffff:0.0.0.0]:8443\"\n", "");
+    expect(
+        &deployment.doctor().await,
+        Check::Listen,
+        Status::Fail,
+        "never allowed on 0.0.0.0",
+    );
+    deployment.config(
+        "listen = \"[::ffff:0.0.0.0]:8443\"\ninsecure_http_over_wireguard = true\n\
+         insecure_http_allow = [\"192.0.2.10\"]\n",
+        "",
+    );
+    expect(
+        &deployment.doctor().await,
+        Check::Listen,
+        Status::Fail,
+        "never 0.0.0.0",
     );
 }
 

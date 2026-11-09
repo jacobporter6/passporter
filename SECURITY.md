@@ -14,7 +14,10 @@ bridge**. Treat it as remote code execution with a nice UI.
 - The insecure MVP mode (plain HTTP plus a static bearer token, for a phone
   that reaches the machine only over WireGuard) is off by default and
   exists for that narrow case. Avoid it; the bridge refuses the static
-  token once `[tls]` or `trusted_proxy` is configured.
+  token once `[tls]` or `trusted_proxy` is configured. It listens only on
+  the single address you allowlist (never a wildcard), but the bridge
+  cannot tell whether that address is a WireGuard interface: making sure
+  only the tunnel reaches it is up to you.
 - There is one user. Every paired device has the same authority. There is
   no multi-tenant isolation, and none is planned.
 
@@ -25,8 +28,12 @@ bridge**. Treat it as remote code execution with a nice UI.
   (`claude -p`) under **your own Claude Code login**, with no tools. This
   is the same data flow as using Claude Code itself. Disable it with
   `[tldr] enabled = false`; without a `claude` executable, nothing is sent.
-- **Web Push** pings go through your browser vendor's push service. They
-  carry an opaque random id, encrypted, and no agent content.
+- **Web Push** goes through your browser vendor's push service. The PWA's
+  subscriptions (the default) get pings: an opaque random id, encrypted,
+  and no agent content. Subscriptions that opt in to notices (the native
+  app) also carry short agent content, such as agent names, a dialog's
+  question and a *Decide* line, encrypted end to end (RFC 8291), so the
+  push service sees only ciphertext.
 - **Dictation** is transcribed by a local whisper.cpp server on loopback.
   Audio never leaves the machine.
 

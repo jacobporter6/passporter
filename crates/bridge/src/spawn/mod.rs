@@ -421,7 +421,7 @@ async fn spawn_agent(state: &AppState, project: &SpawnProject, request: &SpawnRe
         .open(project.name.as_str(), &project.path)
         .await
     {
-        Ok(opened) => opened,
+        Ok((tab, pane)) => (tab, pane.pane_id),
         Err(error) if !error.may_have_taken_effect() => {
             tracing::warn!(%error, "herdr could not open a tab for a new agent");
             return Outcome::undecided("herdr is unavailable; nothing was started.");

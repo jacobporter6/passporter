@@ -295,17 +295,17 @@ pub(super) fn listen(config: &Config) -> Finding {
                 "{listen} is off loopback and insecure_http_over_wireguard is not set: \
                  the bridge refuses plain HTTP there"
             ),
-            if listen.ip().is_unspecified() {
+            if crate::config::is_specific(listen.ip().to_canonical()) {
+                format!(
+                    "listen on 127.0.0.1 behind an HTTPS proxy (docs/deploy.md), add [tls], or (WireGuard only) set insecure_http_over_wireguard = \
+                     true and insecure_http_allow = [\"{}\"]",
+                    listen.ip().to_canonical()
+                )
+            } else {
                 "listen on 127.0.0.1 behind an HTTPS proxy (docs/deploy.md), add [tls], or (WireGuard only) on this machine's own address with \
                  insecure_http_over_wireguard = true and that IP in insecure_http_allow; plain \
                  HTTP is never allowed on 0.0.0.0 or ::"
                     .to_owned()
-            } else {
-                format!(
-                    "listen on 127.0.0.1 behind an HTTPS proxy (docs/deploy.md), add [tls], or (WireGuard only) set insecure_http_over_wireguard = \
-                     true and insecure_http_allow = [\"{}\"]",
-                    listen.ip()
-                )
             },
         ),
         Err(error) => Finding::fail(

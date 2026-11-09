@@ -1,13 +1,15 @@
 //! The admin socket: how `passporter pair` and `passporter devices` reach
 //! the running bridge.
 //!
-//! A Unix socket at `<state dir>/admin.sock` (socket `0600` in the `0700`
-//! state dir, so only the bridge's user can connect). Each connection
-//! carries one JSON line ([`AdminRequest`]) and gets one JSON line back
-//! ([`AdminResponse`]).
+//! A Unix socket at `<state dir>/admin.sock` (socket `0600` from the
+//! moment it appears, in the `0700` state dir, so only the bridge's user
+//! can connect; a peer of another uid is refused too, `SO_PEERCRED`).
+//! Each connection carries one JSON line ([`AdminRequest`]) and gets one
+//! JSON line back ([`AdminResponse`]).
 
+use std::fs::DirBuilder;
 use std::io;
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -127,9 +129,8 @@ pub fn spawn(
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(io_err("inspecting")(error)),
     }
-    let listener = UnixListener::bind(path).map_err(io_err("binding"))?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-        .map_err(io_err("restricting"))?;
+    let listener = bind_private(path).map_err(io_err("binding"))?;
+    let owner = std::fs::metadata(path).map_err(io_err("inspecting"))?.uid();
     let path = path.to_path_buf();
     Ok(tokio::spawn(async move {
         loop {
@@ -138,7 +139,7 @@ pub fn spawn(
                     Ok((stream, _)) => {
                         let auth = Arc::clone(&auth);
                         tokio::spawn(async move {
-                            if tokio::time::timeout(EXCHANGE_TIMEOUT, serve_one(&auth, stream)).await.is_err() {
+                            if tokio::time::timeout(EXCHANGE_TIMEOUT, serve_one(&auth, stream, owner)).await.is_err() {
                                 tracing::debug!("admin connection timed out");
                             }
                         });
@@ -155,7 +156,54 @@ pub fn spawn(
     }))
 }
 
-async fn serve_one(auth: &DeviceAuth, stream: UnixStream) {
+/// Binds a listener at `path` that is never reachable by anyone but its
+/// owner: it is bound inside a fresh `0700` directory next to `path`,
+/// restricted to `0600` there, and only then renamed into place. So there
+/// is no moment when the socket sits at `path` with the umask's mode, and
+/// no process-wide umask change.
+fn bind_private(path: &Path) -> io::Result<UnixListener> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
+    let mut nonce = [0u8; 8];
+    getrandom::fill(&mut nonce).map_err(io::Error::other)?;
+    let mut dir_name = std::ffi::OsString::from(".");
+    dir_name.push(name);
+    dir_name.push(format!(".bind-{}", u64::from_le_bytes(nonce)));
+    let dir = path.with_file_name(dir_name);
+    // `create` fails rather than reuse anything already at `dir`.
+    DirBuilder::new().mode(0o700).create(&dir)?;
+    let staged = dir.join(name);
+    let bound = UnixListener::bind(&staged).and_then(|listener| {
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600))?;
+        std::fs::rename(&staged, path)?;
+        Ok(listener)
+    });
+    let _ = std::fs::remove_file(&staged);
+    let cleaned = std::fs::remove_dir(&dir);
+    let listener = bound?;
+    cleaned?;
+    Ok(listener)
+}
+
+/// Answers one connection, if its peer is `owner` (the bridge's user):
+/// the socket's mode already says so, and this holds even if an operator
+/// loosens the state dir.
+async fn serve_one(auth: &DeviceAuth, stream: UnixStream, owner: u32) {
+    match stream.peer_cred() {
+        Ok(cred) if cred.uid() == owner => {}
+        Ok(cred) => {
+            tracing::warn!(
+                uid = cred.uid(),
+                "admin connection from another user refused"
+            );
+            return;
+        }
+        Err(error) => {
+            tracing::warn!(%error, "admin peer credentials unavailable");
+            return;
+        }
+    }
     let (read, mut write) = stream.into_split();
     let mut line = String::new();
     if BufReader::new(read.take(MAX_LINE))
@@ -253,6 +301,12 @@ mod tests {
         let task = spawn(Arc::clone(&auth), &path, shutdown).expect("spawn");
         let mode = std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+        let left: Vec<_> = std::fs::read_dir(tmp.path())
+            .expect("ls")
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+            .filter(|name| name.contains(".bind-"))
+            .collect();
+        assert!(left.is_empty(), "staging dir left behind: {left:?}");
 
         let paired = send(&path, &AdminRequest::Pair { name: None })
             .await
@@ -281,6 +335,37 @@ mod tests {
         trigger.trigger();
         task.await.expect("stops");
         assert!(!path.exists(), "socket removed on shutdown");
+    }
+
+    #[tokio::test]
+    async fn refuses_a_peer_of_another_user() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let auth =
+            Arc::new(DeviceAuth::open(tmp.path(), AuthSettings::default(), None).expect("auth"));
+        let me = std::fs::metadata(tmp.path()).expect("meta").uid();
+        for (owner, answered) in [(me, true), (me.wrapping_add(1), false)] {
+            let (mut client, bridge_end) = UnixStream::pair().expect("pair");
+            let auth = Arc::clone(&auth);
+            let served = tokio::spawn(async move { serve_one(&auth, bridge_end, owner).await });
+            client
+                .write_all(b"{\"op\":\"pair\"}\n")
+                .await
+                .expect("write");
+            let mut answer = String::new();
+            // A refused peer's unread request makes the close a reset.
+            if let Err(error) = client.read_to_string(&mut answer).await {
+                assert!(!answered, "owner {owner}: {error}");
+            }
+            served.await.expect("served");
+            assert_eq!(
+                answer.contains("\"paired\""),
+                answered,
+                "owner {owner}: {answer:?}"
+            );
+            if !answered {
+                assert!(answer.is_empty(), "{answer:?}");
+            }
+        }
     }
 
     #[tokio::test]

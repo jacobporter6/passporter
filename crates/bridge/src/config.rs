@@ -686,6 +686,13 @@ pub enum ParseError {
          must go: remove them, or remove [tls] to stay on plain HTTP over WireGuard"
     )]
     TlsWithPlainHttp,
+    /// An `insecure_http_allow` entry is not one specific unicast address
+    /// (the any-address, in any spelling, or a broadcast or multicast one).
+    #[error(
+        "insecure_http_allow lists {0}, which is not one specific address: list only the \
+         WireGuard interface's own IP (never 0.0.0.0 or ::)"
+    )]
+    InsecureHttpAllow(IpAddr),
     /// `tls.name` is not a DNS name.
     #[error("tls.name must be a DNS name, such as \"{DEFAULT_TLS_NAME}\"")]
     TlsName,
@@ -877,6 +884,18 @@ impl Config {
         {
             return Err(ParseError::TlsWithPlainHttp);
         }
+        let insecure_http_allow = raw
+            .insecure_http_allow
+            .into_iter()
+            .map(|ip| {
+                let ip = ip.to_canonical();
+                if is_specific(ip) {
+                    Ok(ip)
+                } else {
+                    Err(ParseError::InsecureHttpAllow(ip))
+                }
+            })
+            .collect::<Result<_, _>>()?;
         let state_dir = raw.state_dir.unwrap_or_else(default_state_dir);
         let tldr = raw.tldr.unwrap_or_default().resolve()?;
         let push = raw.push.map(RawPush::validate).transpose()?;
@@ -894,7 +913,7 @@ impl Config {
             api_token,
             allow_static_token,
             insecure_http_over_wireguard: raw.insecure_http_over_wireguard,
-            insecure_http_allow: raw.insecure_http_allow,
+            insecure_http_allow,
             audit_log: raw
                 .audit_log
                 .unwrap_or_else(|| state_dir.join(AUDIT_LOG_FILE)),
@@ -948,6 +967,14 @@ pub const AUDIT_LOG_FILE: &str = "audit.jsonl";
 
 /// `$XDG_STATE_HOME/passporter`, else `~/.local/state/passporter`, else a
 /// relative `state` without `HOME`.
+/// Whether `ip` (canonical: IPv4-mapped addresses as IPv4) names one
+/// specific unicast address a listener can bind: not the any-address, a
+/// broadcast or a multicast one. Plain HTTP off loopback binds only such.
+pub(crate) fn is_specific(ip: IpAddr) -> bool {
+    let broadcast = matches!(ip, IpAddr::V4(v4) if v4.is_broadcast());
+    !(ip.is_unspecified() || ip.is_multicast() || broadcast)
+}
+
 fn default_state_dir() -> PathBuf {
     if let Some(xdg) = std::env::var_os("XDG_STATE_HOME").filter(|v| !v.is_empty()) {
         return Path::new(&xdg).join("passporter");
@@ -1144,6 +1171,34 @@ mod tests {
         }
         // Spelling out the default (off) is fine.
         assert!(Config::parse(&format!("insecure_http_over_wireguard = false\n{tls}")).is_ok());
+    }
+
+    #[test]
+    fn insecure_http_allow_holds_only_specific_addresses() {
+        for ip in [
+            "0.0.0.0",
+            "::",
+            "::ffff:0.0.0.0",
+            "255.255.255.255",
+            "224.0.0.1",
+            "ff02::1",
+            "::ffff:224.0.0.1",
+        ] {
+            let err = Config::parse(&format!(
+                "insecure_http_over_wireguard = true\ninsecure_http_allow = [\"{ip}\"]"
+            ))
+            .expect_err(ip);
+            assert!(
+                matches!(err, ParseError::InsecureHttpAllow(_)),
+                "{ip}: {err}"
+            );
+        }
+        let mapped =
+            Config::parse("insecure_http_allow = [\"::ffff:192.0.2.10\"]").expect("parses");
+        assert_eq!(
+            mapped.insecure_http_allow,
+            vec!["192.0.2.10".parse::<IpAddr>().expect("ip")]
+        );
     }
 
     #[test]

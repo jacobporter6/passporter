@@ -7,8 +7,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use herdr::{
-    AgentName, AgentStatus, CreatedTab, CreatedWorkspace, Herdr, PaneId, ReadSource, ShellWait,
-    StartAgent, TabId, Target, Workspace, WorkspaceId,
+    AgentName, AgentStatus, CreatedTab, CreatedWorkspace, Herdr, Pane, PaneId, ReadSource,
+    ShellWait, StartAgent, TabId, Target, Workspace, WorkspaceId,
 };
 
 use crate::control::{HerdrControl, HerdrFuture};
@@ -48,6 +48,8 @@ pub trait SpawnControl: Send + Sync + 'static {
     /// `pane.send_text` of `line` plus Enter, into a shell pane (a runbook
     /// run's launch line, which only ever holds bridge-made paths).
     fn type_line<'a>(&'a self, pane: &'a PaneId, line: &'a str) -> HerdrFuture<'a, ()>;
+    /// `pane.get`: the pane now, with the terminal it runs.
+    fn pane<'a>(&'a self, pane: &'a PaneId) -> HerdrFuture<'a, Pane>;
     /// `pane.read` of the pane's recent output, at most `lines` lines.
     fn read_recent<'a>(&'a self, pane: &'a PaneId, lines: u32) -> HerdrFuture<'a, String>;
     /// `pane.send_keys` of allowlisted keys, into a terminal a command run
@@ -113,6 +115,10 @@ impl<H: Herdr + 'static> SpawnControl for HerdrControl<H> {
 
     fn send_keys<'a>(&'a self, pane: &'a PaneId, keys: &'a [&'a str]) -> HerdrFuture<'a, ()> {
         Box::pin(self.0.send_pane_keys(pane, keys))
+    }
+
+    fn pane<'a>(&'a self, pane: &'a PaneId) -> HerdrFuture<'a, Pane> {
+        Box::pin(self.0.pane(pane))
     }
 
     fn read_recent<'a>(&'a self, pane: &'a PaneId, lines: u32) -> HerdrFuture<'a, String> {
