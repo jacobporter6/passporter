@@ -7,16 +7,16 @@
 //! deadline ([`WAIT`]), and a failed one prints the page and the bridge's
 //! log.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::World;
 use crate::bridge::{Bridge, BridgeSpec};
 use crate::cdp::{Browser, CHROMIUM_ENV, Page, find_chromium};
 use crate::herdr::FakeHerdr;
 use crate::whisper::FakeWhisper;
-use crate::{SPAWN_PROJECT, WHISPER_TEXT, World};
 
 /// Environment variable naming the `passporter-bridge` binary.
 const BRIDGE_ENV: &str = "PASSPORTER_BRIDGE_BIN";
@@ -210,6 +210,27 @@ impl Rig {
     /// When the bridge binary or PWA build is missing, or anything fails to
     /// start.
     pub async fn start(spec: RigSpec) -> Option<Self> {
+        Self::start_with(spec, |root| {
+            if spec.reality {
+                World::reality(root)
+            } else {
+                World::create(root)
+            }
+        })
+        .await
+    }
+
+    /// Like [`Self::start`], around the world `make` builds in the rig's
+    /// scratch directory instead of a fixture world (`spec.reality` is not
+    /// consulted).
+    ///
+    /// # Panics
+    /// When the bridge binary or PWA build is missing, `make` fails, or
+    /// anything fails to start.
+    pub async fn start_with(
+        spec: RigSpec,
+        make: impl FnOnce(&Path) -> std::io::Result<World>,
+    ) -> Option<Self> {
         let Some(chromium) = find_chromium() else {
             skip(&format!(
                 "no Chromium found (install chromium, or set {CHROMIUM_ENV} to a Chrome/Chromium binary)"
@@ -230,23 +251,28 @@ impl Rig {
         );
 
         let scratch = tempfile::tempdir().expect("tempdir");
-        let world = if spec.reality {
-            World::reality(scratch.path())
-        } else {
-            World::create(scratch.path())
-        }
-        .expect("fixture world");
+        let world = make(scratch.path()).expect("fixture world");
         let herdr = FakeHerdr::serve(
             &scratch.path().join("herdr.sock"),
             world.agents.clone(),
             &world.workspace_labels(),
         )
         .expect("fake herdr");
-        let whisper = FakeWhisper::serve(WHISPER_TEXT)
+        let whisper = FakeWhisper::serve(&world.heard)
             .await
             .expect("fake whisper");
         let work_dir = scratch.path().join("bridge");
         std::fs::create_dir_all(&work_dir).expect("mkdir");
+        let spawn_projects: Vec<(&str, &Path)> = world
+            .spawn_projects
+            .iter()
+            .map(|(name, folder)| (name.as_str(), folder.as_path()))
+            .collect();
+        let runbooks: Vec<(&str, &Path, &[&str])> = spawn_projects
+            .first()
+            .map(|(_, folder)| (RUNBOOK, *folder, RUNBOOK_ARGV.as_slice()))
+            .into_iter()
+            .collect();
         let bridge = Bridge::start(&BridgeSpec {
             binary: &bridge_bin,
             static_dir: &dist,
@@ -257,8 +283,8 @@ impl Rig {
             whisper: Some(whisper.addr()),
             codex_dir: Some(&world.codex_dir),
             push: spec.push,
-            spawn_projects: &[(SPAWN_PROJECT, &world.spawn_project)],
-            runbooks: &[(RUNBOOK, &world.spawn_project, &RUNBOOK_ARGV)],
+            spawn_projects: &spawn_projects,
+            runbooks: &runbooks,
         })
         .await
         .expect("bridge starts");

@@ -401,7 +401,7 @@ async fn new_agent(page: &Page<'_>, bridge: &Bridge, herdr: &FakeHerdr, world: &
     };
     assert_eq!(kind, "claude");
     assert!(args.is_empty(), "no native arguments: {args:?}");
-    assert_eq!(cwd, &world.spawn_project);
+    assert_eq!(cwd, &world.spawn_projects[0].1);
     let path = page.eval("location.pathname").await.expect("evaluates");
     assert!(
         path.as_str()

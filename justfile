@@ -72,6 +72,11 @@ e2e:
     PASSPORTER_WEB_DIST="$PWD/crates/web/dist" \
         cargo nextest run --locked --package e2e --run-ignored only --no-capture
 
+# Record the demo video into target/demo (e2e/examples/demo.rs; needs Chromium and ffmpeg).
+demo: web-build
+    cargo build --locked --package bridge --bin passporter-bridge
+    cargo run --locked --package e2e --example demo
+
 # Reclaim stale build output across worktrees (see crates/xtask).
 prune *args:
     cargo xtask prune {{args}}
