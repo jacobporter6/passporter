@@ -91,6 +91,8 @@ struct Fixture {
     pane: PaneId,
     cwd: PathBuf,
     day: PathBuf,
+    /// The start time in the rollout's file name (`2026-11-08T13-45-33`).
+    stamp: String,
     rollout: PathBuf,
     _tmp: tempfile::TempDir,
 }
@@ -107,9 +109,13 @@ impl Fixture {
         let cwd = tmp.path().join("repo");
         fs::create_dir_all(&cwd).expect("cwd");
         let sessions = tmp.path().join("sessions");
-        let day = sessions.join("2026/11/08");
+        // Named for now, as Codex names a session it starts: the locator
+        // stops at file names a day older than the agent's arrival.
+        let now = now_rfc3339();
+        let day = sessions.join(now[..10].replace('-', "/"));
         fs::create_dir_all(&day).expect("day dir");
-        let rollout = day.join(format!("rollout-2026-11-08T13-45-33-{EXEC_SESSION}.jsonl"));
+        let stamp = now[..19].replace(':', "-");
+        let rollout = day.join(format!("rollout-{stamp}-{EXEC_SESSION}.jsonl"));
         append(&rollout, &text(&cwd));
 
         let bridge = Bridge::start_with(CuttableHerdr::new(), |settings| {
@@ -150,6 +156,7 @@ impl Fixture {
             pane,
             cwd,
             day,
+            stamp,
             rollout,
             _tmp: tmp,
         }
@@ -197,9 +204,11 @@ async fn a_codex_thread_is_found_by_cwd_and_followed() {
     // A session in the same repo that started before this agent arrived
     // (another pane's, or an old one) is not its thread, even though its
     // file is the newest.
+    // Same start in its name, and a session id that sorts after the
+    // agent's: listed first.
     let stale = f.day.join(format!(
-        "rollout-2026-11-08T23-59-59-{}.jsonl",
-        "01a1bb6f-45a9-7332-adc0-fd8600af2b96"
+        "rollout-{}-{}.jsonl",
+        f.stamp, "01a1bb6f-45a9-7332-adc0-fd8600af2b96"
     ));
     append(
         &stale,
