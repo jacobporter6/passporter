@@ -84,7 +84,7 @@ Please report privately; do not open a public issue.
 
 - Preferred: GitHub's private vulnerability reporting ("Report a
   vulnerability" under the repository's Security tab).
-- Or email: `SECURITY_CONTACT_TBD`.
+- Or email: info@portemporal.dev.
 
 Include what you found, how to reproduce it, and the impact you expect.
 This is a personal project maintained on a best-effort basis: expect an
