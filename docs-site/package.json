@@ -10,7 +10,7 @@
     "gen:check": "node scripts/gen/index.mjs --check && node scripts/check-repo.mjs",
     "build": "astro build",
     "preview": "astro preview --host 127.0.0.1",
-    "test": "node --test scripts/ src/lib/",
+    "test": "node --test \"scripts/**/*.test.mjs\" \"src/lib/**/*.test.mjs\"",
     "check:render": "node scripts/check-render.mjs",
     "check:dev": "node scripts/check-dev.mjs",
     "check:repo": "node scripts/check-repo.mjs",
