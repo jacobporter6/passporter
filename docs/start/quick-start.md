@@ -16,9 +16,19 @@ the shortest path: the bridge on loopback, Tailscale Serve for HTTPS, and a
 paired phone. The full reference, including other HTTPS setups, push and
 every optional feature, is [Deploy](../deploy.md).
 
+**How it gets on your phone.** There is no app-store app: the bridge
+serves the phone app itself. You open the bridge's address in Chrome on the
+phone, pair once, and add it to the home screen, where it opens like an app.
+How the phone reaches that address is up to you (a VPN such as Tailscale, or
+a reverse proxy), with one rule: it must be HTTPS with a certificate the
+phone already trusts, or pairing, the microphone and push will not work.
+Tailscale Serve, used below, gives you both the private route and the
+certificate in one command.
+
 | | |
 | --- | --- |
 | Runs on | The Linux machine where herdr and your agents run, as the same user |
+| Phone | Android with Chrome (tested). iPhone with Safari is untested |
 | You need | herdr, Claude Code or Codex, the Rust toolchain via rustup, `trunk` (or [mise](https://mise.jdx.dev)), and [Tailscale](https://tailscale.com) on the machine and the phone, with HTTPS certificates enabled |
 | Typical time | 15 minutes, most of it the first build |
 | Changes | Installs two binaries to `~/.local/bin` and one systemd user unit |
