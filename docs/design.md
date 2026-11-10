@@ -451,6 +451,30 @@ third-party push or CDN service; and **malicious content in agent output**
 | **2. PWA** | Triage, detail, quick reply, dictation, outbox, TL;DR | done; usable in Chrome on Android |
 | **3. Android** | APK with native notifications + inline reply, UnifiedPush, native recorder, Android Auto | planned |
 | **4. Hardening** | WebAuthn step-up, app lock, SQLite ledger, audit viewer | planned (see docs/security.md, known gaps) |
+| **5. Sessions** | One app over several herdr sessions (below) | planned |
+
+### Planned: several herdr sessions
+
+Today the bridge watches exactly one herdr session: the socket in
+`herdr_socket`, else herdr's default (`~/.config/herdr/herdr.sock`). Each
+named session (`herdr --session <name>`) has its own socket, so agents in
+any other session are invisible to the phone.
+
+The plan is sessions as the app's top level, kept apart rather than merged:
+
+- **One session at a time.** The triage page shows a single session, say
+  `prod` or `dev`. A switcher in the header's top corner cycles through them
+  and can add one. Blocked, working and done never mix across sessions, so
+  each list keeps meaning one place.
+- **Still loud across sessions.** A session that is not on screen but has a
+  blocked agent shows it on the switcher (a count), and pushes still fire, so
+  switching to `dev` never hides that `prod` is waiting on you.
+- **Bridge.** One herdr connection per session, found from herdr's session
+  list (new sessions show up without a restart) or listed in config.
+  Actions (reply, approve, spawn) go to the socket of the agent's session.
+- **Protocol.** Agent ids gain the session name, because pane ids are only
+  unique within a session. This changes ids, so existing deep links and
+  outbox entries need a migration or a clean break on upgrade.
 
 
 ## 11. Decisions
