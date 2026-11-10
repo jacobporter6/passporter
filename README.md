@@ -135,6 +135,9 @@ cloud VM). It is a client of herdr, not a replacement.
   tools from `mise.toml`);
 - HTTPS in front of the bridge: [Tailscale](https://tailscale.com) is the
   easiest; Caddy with a domain works too;
+- a phone: Android with Chrome is what is tested; iPhone with Safari is
+  untested. There is no app-store app: the bridge serves the phone app,
+  and you add it to the home screen;
 - optional: an NVIDIA GPU and the CUDA toolkit for fast dictation (the CPU
   works with a smaller whisper model);
 - optional: a logged-in `claude` CLI for headlines, TL;DRs and suggestions.

@@ -15,7 +15,8 @@
 #   4. installs it to ~/.local/bin and the model to
 #      ~/.local/share/passporter/whisper/, after checking the model's
 #      SHA-256 (known for the default models; see WHISPER_MODEL_SHA256);
-#   5. installs, enables and (re)starts whisper-server.service.
+#   5. installs, enables and (re)starts whisper-server.service, with the
+#      helper that makes it wait at boot for the GPU (await-gpu.sh).
 #
 # Safe to re-run: it rebuilds, reinstalls and restarts; the model is only
 # downloaded once.
@@ -75,6 +76,7 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 src="${HOME}/.local/src/whisper.cpp"
 bin_dir="${HOME}/.local/bin"
 model_dir="${HOME}/.local/share/passporter/whisper"
+libexec_dir="${HOME}/.local/libexec/passporter"
 unit_dir="${HOME}/.config/systemd/user"
 
 say() { printf '\n==> %s\n' "$*"; }
@@ -208,6 +210,8 @@ fi
 ln -sfn "$(basename "$model")" "${model_dir}/model.bin"
 
 say "Installing the systemd user unit"
+install -d -m 0755 "$libexec_dir"
+install -m 0755 "${repo}/deploy/whisper/await-gpu.sh" "${libexec_dir}/whisper-await-gpu"
 install -d -m 0755 "$unit_dir"
 install -m 0644 "${repo}/deploy/whisper/whisper-server.service" "${unit_dir}/whisper-server.service"
 systemctl --user daemon-reload
