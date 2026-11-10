@@ -740,6 +740,14 @@ warning), `WHISPER_MODEL_SHA256=<sha256>` (known for `large-v3-turbo`,
 `base.en` and `small.en`; another model without it is installed unverified,
 with a warning).
 
+At boot, the unit waits for the NVIDIA device nodes before starting (the
+user manager can otherwise start it before the driver is ready, and
+whisper.cpp would quietly transcribe on the CPU until the next restart). It
+waits up to 60 s, then starts anyway, on the CPU if the GPU never appeared;
+on a machine without an NVIDIA GPU it doesn't wait. If `journalctl --user -u
+whisper-server` shows "no GPU found" on a GPU machine, `systemctl --user
+restart whisper-server` puts it back on the GPU.
+
 The unit passes `--language en`, which skips language detection; edit
 `deploy/whisper/whisper-server.service` to `--language auto` (or your
 language) to dictate in other languages.

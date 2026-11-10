@@ -30,6 +30,13 @@ ExecStart=%h/.local/bin/whisper-server \
     --language en \
     --convert \
     --threads 4
+# At boot the NVIDIA device nodes can appear a few seconds after the user
+# manager starts this unit; whisper.cpp would then run on the CPU until the
+# next restart. Wait for them (up to WHISPER_GPU_WAIT_SECS, default 60), then
+# start regardless, on the CPU if the GPU never showed up. Returns at once on
+# a machine without an NVIDIA GPU.
+ExecStartPre=%h/.local/libexec/passporter/whisper-await-gpu
+TimeoutStartSec=120
 Restart=on-failure
 RestartSec=5
 
