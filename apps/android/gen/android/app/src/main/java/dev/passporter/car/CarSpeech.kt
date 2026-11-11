@@ -29,10 +29,11 @@ import dev.passporter.notify.actions.ActionFeedback
  * it is, announced or not. If the notification is gone (swiped, or
  * cleared as old news), the answer comes back while Android Auto projects
  * (the driver must hear it); off the car only one the person must act on
- * comes back (not sent, unsure, not paired), quietly, and other old news
- * stays cleared. The title is the notification's own: the name in the
- * intent is display only, and anything holding the reply intent could
- * fill it in. The look and the post hold [NotificationLock].
+ * comes back (refused, not sent, unsure, not paired), and other old news
+ * stays cleared; off the car an answer never alerts. The title is the
+ * notification's own while it shows; the name in the intent (display
+ * only, and fillable by anything holding the reply intent) is used only to
+ * bring a gone conversation back. The look and the post hold [NotificationLock].
  */
 class CarSpeech(
     context: Context,
@@ -45,7 +46,7 @@ class CarSpeech(
 
     /** The bridge answered [job] with [speech]; [sent] when it reached the agent. */
     fun answer(job: CarJob, speech: String, sent: Boolean) =
-        post(job.request, job.name, job.utterance, speech, keepShadeActions = !sent, mustReturn = false)
+        post(job.request, job.name, job.utterance, speech, keepShadeActions = !sent, mustReturn = !sent)
 
     /**
      * The app answers [request] itself, for [trouble]; [utterance] is what
@@ -90,8 +91,8 @@ class CarSpeech(
                 Log.i(TAG, "newer news replaced the conversation; the car's answer is not shown")
                 return@synchronized
             }
-            val quiet = base == null && !projection.isProjecting()
-            if (quiet && !mustReturn) {
+            val quiet = !projection.isProjecting()
+            if (base == null && quiet && !mustReturn) {
                 Log.i(TAG, "the conversation is gone and the car with it; the car's answer is not shown")
                 return@synchronized
             }
@@ -109,7 +110,7 @@ class CarSpeech(
                 // A new message: the car announces it. Off the car, back on the phone quietly.
                 .setOnlyAlertOnce(quiet)
                 .setSilent(quiet)
-            builder.addExtras(base?.extras?.marks() ?: Bundle().apply { stamp(request) })
+            builder.addExtras(base?.extras?.marks() ?: Bundle().apply { stamp(request, name) })
             if (base != null) {
                 copyActions(base, builder, visible = keepShadeActions)
             } else {
@@ -138,9 +139,10 @@ class CarSpeech(
         getString(ActionFeedback.EXTRA_JOB)?.let { kept.putString(ActionFeedback.EXTRA_JOB, it) }
     }
 
-    private fun Bundle.stamp(request: CarRequest) {
+    private fun Bundle.stamp(request: CarRequest, name: String) {
         request.question?.let { putString(NoticeNotification.EXTRA_QUESTION, it) }
         putLong(NoticeNotification.EXTRA_STAMP, request.stamp)
+        putString(NoticeNotification.EXTRA_AGENT_NAME, name)
     }
 
     /**

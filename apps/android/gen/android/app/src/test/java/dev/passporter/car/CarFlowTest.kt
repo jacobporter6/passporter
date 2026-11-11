@@ -338,6 +338,19 @@ class CarFlowTest {
     }
 
     @Test
+    fun aRefusalComesBackQuietlyAfterTheDriveButASentAnswerDoesNot() {
+        show(notice())
+        manager.cancelAll()
+        projecting = false
+        CarSpeech(context).answer(carJob("yes"), "Allowed: pnpm test", sent = true)
+        assertNull(shown())
+        CarSpeech(context).answer(carJob("yes"), "The agent has moved on. Please check your phone.", sent = false)
+        val back = requireNotNull(shown())
+        assertEquals("Passporter: The agent has moved on. Please check your phone.", messages(back).last())
+        assertTrue("quietly", back.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0)
+    }
+
+    @Test
     fun theTitleIsTheNotificationsWhateverTheIntentSays() {
         show(notice())
         val reply = car(requireNotNull(shown()), CarAction.REPLY)

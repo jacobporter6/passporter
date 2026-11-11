@@ -447,7 +447,8 @@ paired, unreachable after the last retry or once too old, not sure it went
 through). If news replaced the conversation meanwhile, the news stays; if
 the conversation is gone (swiped, cleared as old news), the answer comes
 back while Android Auto projects; off the car only one you must act on
-comes back (not sent, unsure, not paired), quietly. After a sent answer
+comes back (refused, not sent, unsure, not paired), and off the car an
+answer never alerts. After a sent answer
 the car's reply stays on the notification (Google's compliance asks for
 both car actions on a message the car should read); a second answer to
 the same dialog is read back as *The agent has moved on*.
@@ -504,7 +505,7 @@ What to expect:
 
 | Notice | In the car |
 |---|---|
-| `blocked` (announced) | Read aloud: "widget: Run `pnpm test`?"; reply offered |
+| `blocked` (announced) | Read aloud: "widget: Run `pnpm test`?"; reply offered. **Blocking**: this proves Android Auto takes the *invisible* reply; with the phone unlocked, a spoken "yes" must reach `car-reply` (the bridge's audit: `origin: "car"`), never the shade's *Deny with note* |
 | A real hook-matched dialog, you say "yes" | "Allowed: …" read back; the agent continues (audit: `origin: "car"`) |
 | The same, you say "no, use the other file" | "Denied, and sent your note."; the agent gets the note |
 | You say "yes but run the tests first" | "I'm not sure what you meant. Say just yes to allow, or no and what to do instead."; nothing sent, you can answer again |
