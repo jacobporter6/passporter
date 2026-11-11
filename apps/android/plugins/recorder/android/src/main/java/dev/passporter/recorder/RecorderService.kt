@@ -35,9 +35,13 @@ class RecorderService : Service() {
     /** The start that began the latest take; main thread only. */
     private var latestStart = 0
 
+    /** The latest start of any kind (a Stop tap too); main thread only. */
+    private var latestCommand = 0
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        latestCommand = startId
         if (intent?.action == ACTION_STOP) {
             // The notification's Stop: end the take, then go (also for a
             // stale Stop that started this service with no take at all).
@@ -81,7 +85,10 @@ class RecorderService : Service() {
         main.post {
             if (startId != latestStart) return@post
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            // Refused by Android if a newer start (a take's, just sent) is
+            // still on its way: that start brings the service back to the
+            // foreground.
+            stopSelfResult(latestCommand)
         }
     }
 

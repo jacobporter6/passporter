@@ -107,8 +107,12 @@ internal class TakeStore(private val dir: File) {
                 val reason = EndReason.of(entry.optString("endedBy")) ?: return null
                 val bytes = entry.optLong("bytes", -1)
                 val durationMs = entry.optLong("durationMs", 0)
-                if (bytes <= 0 || durationMs <= 0 || audio(id).length() != bytes) return null
-                Take(id, tag, durationMs, bytes, reason, entry.optLong("endedAt"))
+                if (bytes <= 0 || durationMs <= 0) return null
+                val endedAt = entry.optLong("endedAt")
+                // An audio file that does not match (its last writes lost
+                // to a power cut, say) is finished again from its frames.
+                if (audio(id).length() != bytes) return finish(id, reason, endedAt)
+                Take(id, tag, durationMs, bytes, reason, endedAt)
             }
             else -> null
         }

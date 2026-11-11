@@ -183,6 +183,10 @@ thread_local! {
     static LIVE: RefCell<Vec<AudioId>> = const { RefCell::new(Vec::new()) };
     /// Starts on their way: the take they start is not known yet.
     static STARTING: Cell<u32> = const { Cell::new(0) };
+    /// When the page last came back into view (ms since the epoch).
+    static SHOWN_AT: Cell<f64> = const { Cell::new(0.0) };
+    /// The listener that keeps [`SHOWN_AT`], once a take has started.
+    static ON_SHOWN: RefCell<Option<Closure<dyn FnMut()>>> = const { RefCell::new(None) };
 }
 
 /// The backend, if [`backend`] has already found out.
@@ -474,9 +478,10 @@ pub fn adopted(take: &NativeTake, audio: Vec<u8>) -> Option<(AgentId, Recording,
 /// the cap), one recovered after the app was killed, and one still
 /// running from a page that is gone (it is stopped first). Each is stored
 /// as a clip for its agent, so that agent's screen shows it on a card.
-/// Takes are stored under their own ids, and never over a clip already
-/// stored under that id, so running this twice, or on two screens at
-/// once, stores each take once and never resets one on its way.
+/// Takes are stored under their own ids, and a take whose clip is
+/// already stored is only released, so running this again never resets a
+/// clip on its way. (Two runs at the same instant may both store a take:
+/// the same clip twice, under one id.)
 pub async fn adopt<S: ClipStore, T: AudioTransport>(courier: &Courier<S, T>) {
     let Ok(status) = status().await else {
         return;
@@ -522,6 +527,40 @@ fn page_hidden() -> bool {
     web_sys::window()
         .and_then(|w| w.document())
         .is_some_and(|d| d.visibility_state() == web_sys::VisibilityState::Hidden)
+}
+
+/// Starts keeping [`SHOWN_AT`], once per page.
+fn watch_visibility() {
+    ON_SHOWN.with_borrow_mut(|slot| {
+        if slot.is_some() {
+            return;
+        }
+        let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+            return;
+        };
+        let listener = Closure::<dyn FnMut()>::new(|| {
+            if !page_hidden() {
+                SHOWN_AT.set(js_sys::Date::now());
+            }
+        });
+        if document
+            .add_event_listener_with_callback("visibilitychange", listener.as_ref().unchecked_ref())
+            .is_ok()
+        {
+            *slot = Some(listener);
+        }
+    });
+}
+
+/// Whether a take that ended at `ended_at` (ms since the epoch) ended out
+/// of the user's sight: the page is hidden now, or came back into view
+/// (at `shown_at`) only after it ended. A throttled hidden page may notice
+/// the end only once it is visible again.
+#[must_use]
+pub fn ended_unseen(hidden_now: bool, shown_at: f64, ended_at: u64) -> bool {
+    #[allow(clippy::cast_precision_loss)] // ms since the epoch: below 2^52
+    let ended_at = ended_at as f64;
+    hidden_now || shown_at >= ended_at
 }
 
 fn warn(message: &str) {
@@ -574,6 +613,7 @@ impl AudioCapture for NativeCapture {
             .await
             .map_err(|failure| capture_error(&failure))?;
         LIVE.with_borrow_mut(|live| live.push(started.id.clone()));
+        watch_visibility();
         drop(starting);
         let start_ms = js_sys::Date::now();
         sink(CaptureEvent::Started { at_ms: start_ms });
@@ -669,7 +709,8 @@ impl Take {
             Ok(Some(take)) => match read_all(&take).await {
                 Ok(audio) => {
                     let mut events = vec![CaptureEvent::Data(audio)];
-                    events.extend(closing(&take, self.start_ms, self.max_ms, page_hidden()));
+                    let unseen = ended_unseen(page_hidden(), SHOWN_AT.get(), take.ended_at);
+                    events.extend(closing(&take, self.start_ms, self.max_ms, unseen));
                     events
                 }
                 Err(failure) => vec![CaptureEvent::Failed(failure.message)],
@@ -984,6 +1025,20 @@ mod tests {
         };
         assert_eq!(recording.stopped_by, StopReason::TooLong);
         assert_eq!(recording.duration_ms, 294_976);
+    }
+
+    #[test]
+    fn an_end_is_unseen_if_the_page_was_hidden_when_it_happened() {
+        assert!(ended_unseen(true, 0.0, 5_000), "hidden now");
+        assert!(
+            ended_unseen(false, 6_000.0, 5_000),
+            "shown again only after it ended: noticed late"
+        );
+        assert!(
+            !ended_unseen(false, 4_000.0, 5_000),
+            "on screen when it ended"
+        );
+        assert!(!ended_unseen(false, 0.0, 5_000), "never hidden");
     }
 
     #[test]

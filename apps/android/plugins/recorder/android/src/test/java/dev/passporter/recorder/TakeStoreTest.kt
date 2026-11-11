@@ -78,11 +78,13 @@ class TakeStoreTest {
     }
 
     @Test
-    fun a_finished_journal_must_match_its_audio() {
+    fun audio_that_no_longer_matches_its_journal_is_finished_again() {
         store.begin(id, tag, 1_000).writeBytes(Frames.frames(5))
         store.finish(id, EndReason.USER, 2_000)
         store.audio(id).appendBytes(ByteArray(3))
-        assertTrue("a changed file is not that take", store.open(3_000, DAY).isEmpty())
+        assertEquals(listOf(Take(id, tag, 320, 500, EndReason.USER, 2_000)), store.open(3_000, DAY))
+        store.audio(id).writeBytes(Frames.frame().copyOf(40))
+        assertTrue("no whole frame left: gone", store.open(3_000, DAY).isEmpty())
         assertTrue(files().isEmpty())
     }
 
