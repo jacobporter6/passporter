@@ -26,6 +26,10 @@ rustup show      # the toolchain pinned in rust-toolchain.toml, with the wasm ta
 just             # lists every recipe
 ```
 
+To build the Android app, run `just android-setup` once: it installs a JDK,
+the SDK and NDK, the Rust Android targets and the Tauri CLI
+([Android toolchain](android.md)).
+
 ## The loop
 
 ```mermaid
