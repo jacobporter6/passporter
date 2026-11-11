@@ -1,0 +1,7 @@
+<resources>
+    <!-- Dark only, like the PWA: the window paints its background before the
+         webview's first frame, so there is no white flash at launch. -->
+    <style name="Theme.Passporter" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:windowBackground">@color/ic_launcher_background</item>
+    </style>
+</resources>
