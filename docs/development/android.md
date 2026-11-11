@@ -180,12 +180,19 @@ device-to-device transfer copy the app's data (`allowBackup="false"` plus
 backup and data-extraction rules that exclude everything), so the key
 stays on the phone; a new phone pairs afresh.
 
-Fence 1 also covers frames only on a current WebView: Tauri learns each
+Fence 1 does not see POST navigations (Android does not report them); the
+pages' CSP `form-action` (`'self'` on the bridge, `'none'` on the Connect
+page) covers form submissions instead.
+
+Fence 2 tells frames apart only on a current WebView: Tauri learns each
 frame's own origin through `WEB_MESSAGE_LISTENER` (Android System WebView
-86 and later). On an older WebView every frame's message is labelled with
-the main page's URL, so only the PWA's CSP keeps a foreign frame from
-borrowing the bridge capability. That is harmless while the capability
-grants nothing; the first plugin task gates the grant on the feature.
+86 and later). On an older WebView every message is labelled with the URL
+the main page last started loading, so only the PWA's CSP keeps a foreign
+frame from borrowing the bridge capability, and a message sent while the
+Connect page is being replaced can even count as local. That is harmless
+while the capability grants nothing and no local capability exists; the
+first plugin task gates the grant on the feature and must not add a local
+capability.
 
 ## What it installs, and where
 

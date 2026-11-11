@@ -3,6 +3,11 @@
 //! bridge's PWA. Every other
 //! navigation is refused, so no other page ever runs where Tauri's IPC is
 //! injected (design §8, "no page but Passporter's own reaches native IPC").
+//!
+//! Android does not ask about POST navigations, so form submissions are
+//! fenced by the pages' CSP instead: the bridge's `form-action 'self'`
+//! (`crates/bridge/src/server/headers.rs`) and the Connect page's
+//! `form-action 'none'`.
 
 use url::Url;
 

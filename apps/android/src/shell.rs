@@ -68,7 +68,11 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             let _ = bridge.set(origin);
             WebviewUrl::External(url)
         }
-        Ok(None) | Err(_) => WebviewUrl::App(CONNECT_PAGE.into()),
+        Ok(None) => WebviewUrl::App(CONNECT_PAGE.into()),
+        Err(error) => {
+            log_to_logcat(&error);
+            WebviewUrl::App(CONNECT_PAGE.into())
+        }
     };
     let guard = Arc::clone(&bridge);
     app.manage(Shell {
@@ -89,8 +93,10 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 /// Tauri tells frames apart only on `WebView`s with `WEB_MESSAGE_LISTENER`
 /// (`WebView` 86 and later); on older ones every frame's message carries the
 /// main frame's URL, and only the PWA's CSP keeps foreign frames out.
-/// Before the first permission is added here, gate the grant on that
-/// feature (docs/development/android.md, "How the shell works").
+/// Messages sent while the Connect page is being replaced can even be
+/// labelled local. Before the first permission is added here, gate the grant
+/// on that feature, and never add a local capability (docs/development/android.md,
+/// "How the shell works").
 fn grant_ipc(app: &AppHandle, origin: &BridgeOrigin) -> tauri::Result<()> {
     app.add_capability(
         CapabilityBuilder::new(BRIDGE_CAPABILITY)
@@ -104,8 +110,7 @@ fn grant_ipc(app: &AppHandle, origin: &BridgeOrigin) -> tauri::Result<()> {
 /// opens its PWA. Answers the bundled Connect page only.
 ///
 /// The bridge is chosen once: to change it, clear the app's storage. The
-/// address is saved last, so a failure leaves nothing that the next launch
-/// would pick up.
+/// address is saved first, so a failure there changes nothing.
 #[tauri::command]
 #[expect(
     clippy::needless_pass_by_value,
@@ -127,17 +132,29 @@ fn connect(
             "already connected to {current}; clear the app's storage to change it"
         ));
     }
-    grant_ipc(&app, &origin).map_err(|error| format!("could not allow {origin}: {error}"))?;
     shell
         .store
         .save(&origin)
         .map_err(|error| format!("could not save the address: {error}"))?;
     let url = origin.url().clone();
+    // Granted last: Tauri cannot take a capability back, so no grant is
+    // made for an origin that did not become the bridge.
+    let granted = grant_ipc(&app, &origin);
     shell
         .bridge
         .set(origin)
         .map_err(|_| "already connected".to_owned())?;
+    granted.map_err(|error| format!("could not allow the bridge: {error}"))?;
     window
         .navigate(url)
         .map_err(|error| format!("could not open the bridge: {error}"))
+}
+
+/// Leaves a trace for "the app forgot its bridge": stderr goes to logcat.
+#[expect(
+    clippy::print_stderr,
+    reason = "the shell has no logger; stderr is logcat"
+)]
+fn log_to_logcat(error: &dyn std::error::Error) {
+    eprintln!("passporter: saved bridge unreadable, showing Connect: {error}");
 }
