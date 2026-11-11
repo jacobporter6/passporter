@@ -97,7 +97,7 @@ Three deliverables:
 |---|---|---|
 | `crates/bridge` | Rust service (axum) on the dev machine. Wraps herdr + Claude transcripts into a small, typed, authenticated API. | systemd user unit (or any supervisor); reachable only through your HTTPS proxy |
 | `crates/web` | Mobile-first PWA, Rust compiled to WASM (Leptos). Works on its own in Chrome; also the UI inside the Android app. | served by the bridge |
-| `apps/android` (planned, not built) | Tauri 2 mobile shell around `crates/web` plus Kotlin plugins: notifications with inline reply, Android Auto messaging, UnifiedPush, recording that survives app kills. | sideloaded APK |
+| `apps/android` (built: shell; plugins in progress) | Tauri 2 mobile shell around `crates/web` plus Kotlin plugins: notifications with inline reply, Android Auto messaging, UnifiedPush, recording that survives app kills. | sideloaded APK |
 
 Shared crates: `crates/protocol` (serde types compiled into both the bridge and
 the WASM frontend, so an API mismatch is a build error), `crates/herdr`
@@ -336,9 +336,11 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
   headline), the TL;DR *Decide* line once there is one, and the pending id
   to answer with. Every message is end-to-end encrypted to the phone (RFC
   8291), so the push service only sees ciphertext. The app registers
-  with the phone's distributor while paired and shows a notice with no
-  network call, also with its process cold. Web Push (PWA) subscriptions
-  keep the content-free ping, and the PWA inside the app makes none.
+  with the phone's distributor while paired and shows a notice as a
+  notification with no network call, also with its process cold (T31a,
+  T32a); a tap opens that agent (T30c); replies and Android Auto are not
+  built yet. Web Push (PWA) subscriptions keep the content-free ping, and
+  the PWA inside the app makes none.
 - **Only news disrupts.** A message is sent only if its reason still holds
   when its debounce ends (the agent still blocked, or its finished turn
   still unread), and only for a change since the last one; it carries
@@ -436,7 +438,7 @@ third-party push or CDN service; and **malicious content in agent output**
 | Bridge | axum + tokio + tower-http, rusqlite, rustls | Small, typed, one static binary |
 | Validation | serde types in `crates/protocol`, strict deserialization (`deny_unknown_fields` on inbound) | Shared types on both ends; the compiler checks the contract |
 | Web | Leptos (CSR) → WASM, built with trunk; `web-sys`/`gloo` for browser APIs (IndexedDB, MediaRecorder, WebAuthn, Push) | Fine-grained reactivity without a virtual DOM; small bundle. Browser APIs are clunkier from Rust, which costs effort, not quality |
-| Android (planned) | Tauri 2 mobile + Kotlin plugins | Rust-native shell around the same Leptos UI; proper Kotlin plugin system |
+| Android (shell built; plugins in progress) | Tauri 2 mobile + Kotlin plugins | Rust-native shell around the same Leptos UI; proper Kotlin plugin system |
 | Speech-to-text | whisper.cpp server (CUDA or CPU), local | Private. A GPU makes large models fast |
 | Push | Web Push (VAPID) in the PWA; UnifiedPush (e.g. ntfy) planned for the APK | No content through third parties |
 | Summaries | `claude -p --model haiku` | Uses the existing login, no stored key |

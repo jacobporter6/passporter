@@ -1,6 +1,7 @@
 package dev.passporter.app
 
 import android.os.Bundle
+import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 import dev.passporter.notify.NotificationPermission
 import dev.passporter.push.PushRegistration
@@ -15,6 +16,10 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+  }
+
+  override fun onWebViewCreate(webView: WebView) {
+    ShellPlugin.wrap(this, webView)
   }
 
   override fun onResume() {

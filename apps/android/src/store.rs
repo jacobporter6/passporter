@@ -84,6 +84,16 @@ impl Store {
             .map_err(|source| io_error("writing", &partial, source))?;
         fs::rename(&partial, &self.path).map_err(|source| io_error("replacing", &self.path, source))
     }
+
+    /// Deletes the saved origin, so the next launch opens the Connect page.
+    /// Nothing saved is not an error.
+    pub fn forget(&self) -> Result<(), StoreError> {
+        match fs::remove_file(&self.path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(io_error("deleting", &self.path, source)),
+        }
+    }
 }
 
 fn io_error(action: &'static str, path: &Path, source: io::Error) -> StoreError {
@@ -127,6 +137,19 @@ mod tests {
             .map(|e| e.expect("entry").file_name())
             .collect();
         assert_eq!(entries, [FILE_NAME], "no partial file is left behind");
+    }
+
+    #[test]
+    fn forgetting_leaves_nothing_saved() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Store::in_dir(dir.path());
+        store.forget().expect("nothing to forget is fine");
+        store
+            .save(&origin("https://bridge.example.org"))
+            .expect("save");
+        store.forget().expect("forget");
+        assert!(store.load().expect("load").is_none());
+        store.forget().expect("forgetting twice is fine");
     }
 
     #[test]

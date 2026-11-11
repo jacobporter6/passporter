@@ -5,6 +5,10 @@
     <string name="push_no_distributor_title">Notifications need ntfy</string>
     <string name="push_no_distributor_message">To get agent news while Passporter is closed, install a UnifiedPush distributor such as ntfy (from F-Droid or Google Play), then open Passporter again.</string>
 
+    <!-- Launcher shortcut (res/xml/shortcuts.xml). -->
+    <string name="shortcut_bridge_short">Bridge</string>
+    <string name="shortcut_bridge_long">Bridge address</string>
+
     <!-- Agent notifications (dev.passporter.notify). -->
     <string name="notify_channel_needs_you">Needs you</string>
     <string name="notify_channel_needs_you_description">An agent is waiting for your answer.</string>
