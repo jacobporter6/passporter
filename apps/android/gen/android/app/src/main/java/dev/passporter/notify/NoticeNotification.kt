@@ -14,6 +14,7 @@ import androidx.core.content.LocusIdCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import dev.passporter.app.MainActivity
 import dev.passporter.app.R
+import dev.passporter.car.CarActions
 import dev.passporter.notify.actions.NoticeActions
 
 /**
@@ -23,8 +24,9 @@ import dev.passporter.notify.actions.NoticeActions
  *
  * Car-safe text: the conversation shows the agent's name, then its one
  * line (what it asks, or the turn's headline) and the *Decide* line, and
- * nothing else. The actions (reply, *Allow once* / *Deny*) are
- * [NoticeActions]'s.
+ * nothing else; Android Auto reads the same. The shade's actions (reply,
+ * *Allow once* / *Deny*) are [NoticeActions]'s; an announced notice also
+ * carries Android Auto's two invisible ones, [CarActions]'s.
  */
 object NoticeNotification {
     /** Channel of blocked agents: high importance, it waits for you. */
@@ -102,7 +104,8 @@ object NoticeNotification {
     /**
      * The notification of [notice]. It is news ([NotificationPlanner]), so
      * it alerts even when it replaces the agent's last one. Its actions are
-     * [NoticeActions]'s: what the notice can be answered with from the shade.
+     * [NoticeActions]'s: what the notice can be answered with from the shade;
+     * its invisible ones [CarActions]'s, for Android Auto, if it is announced.
      */
     fun build(context: Context, notice: Notice, now: Long): Notification {
         val agent = person(notice)
@@ -115,6 +118,8 @@ object NoticeNotification {
                 else -> R.string.notify_finished_fallback
             },
         )
+        // One agent, one conversation: Android Auto reads the agent's name, then each message.
+        style.setGroupConversation(false)
         style.addMessage(headline, now, agent)
         notice.decide?.let { style.addMessage(context.getString(R.string.notify_decide, it), now, agent) }
         val builder = conversation(context, notice.agentId, notice.state, style, now)
@@ -123,6 +128,7 @@ object NoticeNotification {
             // News that replaces the agent's last notification sounds again.
             .setOnlyAlertOnce(false)
         NoticeActions.build(context, notice).forEach(builder::addAction)
+        CarActions.build(context, notice).forEach(builder::addInvisibleAction)
         question(notice)?.let { builder.addExtras(Bundle().apply { putString(EXTRA_QUESTION, it) }) }
         return builder.build()
     }

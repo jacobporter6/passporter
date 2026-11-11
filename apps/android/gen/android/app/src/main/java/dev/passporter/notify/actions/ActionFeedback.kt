@@ -76,8 +76,8 @@ class ActionFeedback(
 
     /**
      * A tap that queued nothing ([Unsendable]): the notification stays as
-     * it was, actions included, with the reason under it (nothing for an
-     * empty entry), so a reply's spinner stops.
+     * it was, actions included (Android Auto's too), with the reason under
+     * it (nothing for an empty entry), so a reply's spinner stops.
      */
     fun refused(request: ActionRequest, name: String, reason: Unsendable) = synchronized(NotificationLock) {
         val base = active(request) ?: return
@@ -157,6 +157,8 @@ class ActionFeedback(
             for (index in 0 until NotificationCompat.getActionCount(base)) {
                 NotificationCompat.getAction(base, index)?.let(builder::addAction)
             }
+            // Android Auto's, so the car can still take the conversation.
+            NotificationCompat.getInvisibleActions(base).forEach(builder::addInvisibleAction)
         }
         try {
             manager.notify(NoticeNotification.tag(request.agent), NoticeNotification.ID, builder.build())

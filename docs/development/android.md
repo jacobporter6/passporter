@@ -17,9 +17,9 @@ asks for your bridge's HTTPS address (the one you open in Chrome), then
 loads the PWA from there, so the app shows exactly what the browser shows
 and picks up PWA updates without a new APK. You pair the phone in the PWA
 as usual; in the app the device key is made and kept by native code (see
-[Device identity](#device-identity)). Other native plugins (notifications,
-UnifiedPush, Android Auto) are later additions; the dictation recorder
-is native already ([Dictation](#dictation)).
+[Device identity](#device-identity)). Notifications, [Android
+Auto](#android-auto) and the dictation recorder ([Dictation](#dictation))
+are native; UnifiedPush is a later addition.
 
 Building it needs a JDK, the Android SDK and NDK, the Rust Android
 targets and the Tauri CLI. One script installs all of them under your
@@ -298,7 +298,7 @@ A notice can be answered without opening the app (package
 | Blocked, with a pending id | *Allow once* | `choose` of the dialog's low-risk `yes` | none | — |
 | | *Deny* | `choose` of its low-risk `no` (else `no_feedback`) | none | — |
 | | *Deny with note* | `choose` of `no_feedback`, the text as `feedbackText` | none | `dev.passporter.notify.TEXT` |
-| Finished | *Reply* | `prompt` with the text | `SEMANTIC_ACTION_REPLY` | `dev.passporter.notify.TEXT` |
+| Finished | *Reply* | `prompt` with the text | none | `dev.passporter.notify.TEXT` |
 
 *Allow once* appears only when the notice shows the whole ask: a line cut
 by the bridge or the app (ending in `…`) could hide the rest of a command,
@@ -307,15 +307,17 @@ kind of dialog it is, so a question or a plan approval offers the same
 actions: a Yes/No question takes *Allow once* as its Yes, others end as
 *Answer this one in the app*. A dialog without a pending id (the bridge could not parse it), or a state
 this app predates, has no actions: the tap opens the app. *Always allow* and
-other elevated options are never offered. The dialog answers carry no
-semantic action, so nothing in the system triggers them by guessing; none
-shows a user interface. Nothing is answered while the phone is locked:
+other elevated options are never offered. No shade action carries a
+semantic action, so nothing in the system (Android Auto, an assistant)
+triggers them by guessing; the only semantic actions are Android Auto's
+own, invisible ([Android Auto](#android-auto)). None shows a user
+interface. Nothing is answered while the phone is locked:
 Android 12 and later ask you to unlock first, and on every version the
 receiver refuses while the keyguard shows (*Unlock your phone to answer*),
 also when a watch or another app fires the action, and also while Smart
-Lock keeps the phone unlockable without a credential. Mark-as-read is
-not offered: the bridge has no API for it (a turn is unread until herdr
-sees the pane).
+Lock keeps the phone unlockable without a credential. The shade offers
+no mark-as-read: the bridge has no API for it (a turn is unread until
+herdr sees the pane).
 
 Each tap is a broadcast to `NoticeActionReceiver` (explicit, not exported;
 pending intents immutable except the two with a `RemoteInput`). It makes
@@ -375,6 +377,125 @@ Answers are ordinary WorkManager jobs, not expedited ones: an expedited job
 needs a foreground-service notification on Android 11 and older. A reply
 from the shade wakes the app, so the job usually runs at once; under Doze
 it can wait for the next maintenance window.
+
+## Android Auto
+
+Android Auto reads announced notices aloud and takes a spoken reply
+([design §6.6](../design.md#66-notifications-and-android-auto)). There is
+no car UI: the app is a messaging app for Android Auto
+(`res/xml/automotive_app_desc.xml` with `<uses name="notification"/>`,
+named by the manifest's `com.google.android.gms.car.application`
+meta-data), and its notifications are what Google's "Extend messaging
+notifications to Android Auto" asks for: `MessagingStyle` (one agent, one
+non-group conversation, the agent as a bot `Person`), a reply action with
+`SEMANTIC_ACTION_REPLY`, one `RemoteInput` and no user interface, and a
+mark-as-read action with `SEMANTIC_ACTION_MARK_AS_READ`.
+
+Those two are **invisible** actions (package `dev.passporter.car`), on an
+announced notice only (`announce`: the bridge applies `car_announce_done`,
+so a blocked agent always, a finished turn once its TL;DR has a *Decide*
+line by default). Android Auto takes a messaging notification only with
+both, so a notice that is not announced is not read aloud in the car. They
+are the notification's only semantic actions: the shade's *Allow once*,
+*Deny*, *Deny with note* and *Reply* carry none, so the car never reaches
+them.
+
+| Car action | Intent data | Does |
+|---|---|---|
+| Reply (`RemoteInput` `dev.passporter.car.UTTERANCE`) | `passporter://car/reply/<agent>/dialog/<pending>`, `…/blocked` or `…/turn` | Sends the utterance, as heard, to `POST /v1/agents/:id/car-reply` with a **car**-scope session |
+| Mark as read | `passporter://car/read/<agent>/…` | Local only: a finished turn's notification goes (it was heard); a blocked agent's stays, since it still waits |
+
+Both are broadcasts to `CarReplyReceiver` (explicit, not exported; the
+reply's pending intent is mutable for its `RemoteInput`, the other
+immutable). It acts **only while Android Auto projects**, and then also
+with the phone locked; otherwise it does nothing at all. It reads Android
+Auto's connection provider (`content://androidx.car.app.connection`, the
+source of `androidx.car.app`'s `CarConnection`) directly, and only when
+that provider belongs to Android Auto's package; anything else is no car
+(docs/security.md has why).
+
+| File | What |
+|---|---|
+| `CarRequest.kt` | The two actions and the `CarRequest` in the intent's data (what the car read: a named dialog, an unnamed one, a turn) |
+| `CarActions.kt`, `CarReplyReceiver.kt` | The invisible actions, and their receiver |
+| `CarProjection.kt` | Whether Android Auto projects |
+| `CarJob.kt`, `CarOutbox.kt` | The reply as a durable job (key, utterance, pending id fixed when the car hears it) and its outbox: the shade's backoff (30 s, doubling) and attempts (8); replies to one agent go in order |
+| `CarReplySender.kt` | One attempt over `DeviceAuth` with `Scope.CAR`, and the answer (`CarReply`: a sentence and the result) |
+| `CarSpeech.kt` | The answer in the conversation, for the car to read aloud |
+
+The utterance is made fit for the bridge's `Utterance` (one line, no
+hidden characters, at most 1 KiB) and otherwise sent as heard: the bridge
+maps it with its tiny vocabulary under the car policy (`yes` alone allows
+once a dialog a hook matched exactly; `no …` denies, the rest as the note;
+"yes, but…" is refused; anything else is a prompt only while no dialog is
+open). The bridge's sentence ("Allowed: pnpm test", "Denied, and sent your
+note.", "I'm not sure what you meant…") is added to the conversation as a
+message from *Passporter*, after your words, as a new message the car
+announces; the car actions stay, so you can answer again. When the bridge
+gives no sentence the app says why itself (nothing heard, too long, not
+paired, unreachable after the last retry, not sure it went through). If
+news replaced the conversation meanwhile, the news stays.
+
+### Testing with the Desktop Head Unit
+
+The Desktop Head Unit (DHU) runs Android Auto's car side on the dev
+machine, with the phone on USB. You need a phone with Android Auto (built
+in since Android 10) and the debug APK installed.
+
+1. **Install the DHU** (into the same SDK as the rest):
+
+   ```sh
+   eval "$(MISE_ENV=android mise env --shell bash)"
+   "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager --sdk_root="$ANDROID_HOME" --install 'extras;google;auto'
+   ```
+
+   It needs the host's `libc++.so.1` (on Arch `pacman -S libc++`; or point
+   `LD_LIBRARY_PATH` at the NDK's
+   `toolchains/llvm/prebuilt/linux-x86_64/lib/x86_64-unknown-linux-gnu`).
+   Check it with `"$ANDROID_HOME"/extras/google/auto/desktop-head-unit --version`.
+2. **Android Auto developer mode** on the phone: Settings → Connected
+   devices → Connection preferences → Android Auto (or the Android Auto
+   app), scroll to *Version* and tap it ten times. Then, in the menu's
+   *Developer settings*, turn on **Unknown sources**: Android Auto ignores
+   sideloaded apps otherwise (decision D3). Under *Notifications*, make
+   sure messages are shown and read aloud.
+3. **Start the head unit server**: in Android Auto's menu, *Start head
+   unit server* (it stays on until you stop it).
+4. **Forward the port and run the DHU**, with the phone on adb:
+
+   ```sh
+   adb forward tcp:5277 tcp:5277
+   "$ANDROID_HOME"/extras/google/auto/desktop-head-unit
+   ```
+
+   The DHU window shows the car screen; the phone now projects (lock it to
+   test as in the car). Type `help` in the DHU's console for its commands;
+   `mic begin` speaks through the dev machine's microphone (or use the
+   on-screen mic), `day`/`night` switch the theme.
+5. **Send a notice.** The debug samples go through the same path (their
+   agents are not on your bridge, so a reply is answered *That agent is
+   gone*):
+
+   ```sh
+   adb shell am broadcast -n dev.passporter.app/dev.passporter.notify.SampleNoticeReceiver --es sample blocked
+   ```
+
+   For a real answer, leave the phone paired and let an agent on the
+   bridge ask something (a Claude Code permission dialog the hook
+   reports) or finish a turn whose TL;DR has a *Decide* line.
+
+What to expect:
+
+| Notice | In the car |
+|---|---|
+| `blocked` (announced) | Read aloud: "widget: Run `pnpm test`?"; reply offered |
+| A real hook-matched dialog, you say "yes" | "Allowed: …" read back; the agent continues (audit: `origin: "car"`) |
+| The same, you say "no, use the other file" | "Denied, and sent your note."; the agent gets the note |
+| You say "yes but run the tests first" | "I'm not sure what you meant. Say just yes to allow, or no and what to do instead."; nothing sent, you can answer again |
+| A dialog only the screen parse described | Refused aloud; answer it on the phone |
+| `decide` (announced finished turn) | Read aloud with its *Decide* line; a free reply goes to the agent as a prompt ("Sent.") |
+| `finished` (not announced) | Silent in the car; shown on the phone |
+| The phone off the car, locked or not | Car actions do nothing; the shade asks to unlock |
 
 ## Links, taps and the Bridge page
 
@@ -577,6 +698,7 @@ quick settings' active-apps list.
 | Build tools | 37.0.0 | `~/.local/share/android-sdk/build-tools` | `setup.sh` |
 | NDK | r29 (29.0.14206865) | `~/.local/share/android-sdk/ndk/` (`NDK_HOME`) | `setup.sh`, `mise.android.toml` |
 | Rust targets | `aarch64`, `armv7`, `i686`, `x86_64` Android | rustup, for the toolchain in `rust-toolchain.toml` | `setup.sh` |
+| Desktop Head Unit (optional, installed by hand) | `extras;google;auto` 2.0 | `~/.local/share/android-sdk/extras/google/auto` | — ([Testing with the Desktop Head Unit](#testing-with-the-desktop-head-unit)) |
 
 `ANDROID_HOME` is `~/.local/share/android-sdk`, set in
 `mise.android.toml`'s `[env]`. The NDK version appears in both `setup.sh`

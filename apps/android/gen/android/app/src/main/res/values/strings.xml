@@ -36,4 +36,15 @@
     <string name="notify_not_sent_too_long">Too long for a reply here: open the app</string>
     <string name="notify_not_sent_failed">Not sent: open the app</string>
     <string name="notify_unlock_to_answer">Unlock your phone to answer</string>
+
+    <!-- Android Auto (dev.passporter.car): read aloud in the car. -->
+    <string name="car_action_reply">Reply</string>
+    <string name="car_action_mark_as_read">Mark as read</string>
+    <string name="car_reply_hint">Reply</string>
+    <string name="car_trouble_not_heard">I didn\'t catch that. Please say it again.</string>
+    <string name="car_trouble_too_long">That was too long to send from the car. Please use your phone.</string>
+    <string name="car_trouble_not_paired">This phone isn\'t paired with your computer any more. Please open Passporter.</string>
+    <string name="car_trouble_unreachable">I couldn\'t reach your computer, so that may not have gone through. Please check your phone.</string>
+    <string name="car_trouble_uncertain">I\'m not sure that went through. Please check your phone.</string>
+    <string name="car_trouble_failed">That didn\'t go through. Please check your phone.</string>
 </resources>
