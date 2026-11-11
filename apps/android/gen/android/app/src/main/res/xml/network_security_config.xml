@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- No plain HTTP, and only the system's certificate authorities: the bridge's
+     HTTPS proxy serves a publicly trusted certificate (docs/deploy.md).
+     User-installed CAs are not trusted. To trust a private CA, see
+     docs/development/android.md. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
