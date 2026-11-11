@@ -87,6 +87,14 @@ class RecorderServiceTest {
     }
 
     @Test
+    fun a_stale_stop_tap_does_not_leave_the_service_running() {
+        val service = Robolectric.buildService(RecorderService::class.java, Intent().setAction(RecorderService.ACTION_STOP))
+            .create().startCommand(0, 1).get()
+        settle()
+        assertTrue(shadowOf(service).isStoppedBySelf)
+    }
+
+    @Test
     fun a_newer_take_keeps_the_service() {
         val first = recorder.start(tag, 60_000)
         input.write(1)

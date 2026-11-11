@@ -453,6 +453,7 @@ impl Dictation {
             });
             return;
         };
+        let clip_id = id.clone();
         match courier()
             .keep(self.agent.clone(), id, recording, now())
             .await
@@ -463,14 +464,20 @@ impl Dictation {
                 }
                 if native {
                     let id = clip.meta.audio_id.clone();
-                    spawn_local(async move { native::release(&id).await });
+                    spawn_local(async move { native::settle(&id, true).await });
                 }
                 self.deliver(clip, self.send.get(), note).await;
             }
-            Err(error) => self.set_phase(Phase::Failed {
-                id: None,
-                message: format!("Couldn't save the recording on this phone: {}.", error.0),
-            }),
+            Err(error) => {
+                if native {
+                    // Still safe natively: a later visit stores it.
+                    native::settle(&clip_id, false).await;
+                }
+                self.set_phase(Phase::Failed {
+                    id: None,
+                    message: format!("Couldn't save the recording on this phone: {}.", error.0),
+                });
+            }
         }
     }
 
@@ -825,7 +832,9 @@ pub const fn stop_note(reason: StopReason, send: bool) -> Option<&'static str> {
             Some("Recording stopped at the length limit. Sending what you said.")
         }
         (StopReason::TooLong, false) => Some("Recording stopped at the length limit."),
-        (StopReason::Interrupted, _) => Some("Recording stopped: the microphone went away."),
+        (StopReason::Interrupted, _) => {
+            Some("Recording stopped: the microphone went away, or a call took it.")
+        }
         // Said on the transcript card (`card_note`).
         (StopReason::User | StopReason::Silence | StopReason::Hidden, _) => None,
     }

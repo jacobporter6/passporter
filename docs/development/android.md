@@ -461,7 +461,10 @@ and uploads it in seconds.
 
 A take that ended with no page waiting for it is stored when an agent
 screen next opens, and waits on its agent's card for review, never sent
-unseen. Takes nobody released are deleted after seven days, as the PWA's
+unseen. So does one the page was waiting for that ended out of its sight:
+at the length cap while the page was hidden, or from the notification's
+Stop. Only the PWA's own stop, or the cap on screen, sends (when sending
+on stop is on). Takes nobody released are deleted after seven days, as the PWA's
 own clips are.
 
 **Permissions.** `RECORD_AUDIO` is asked at the first `start` (the

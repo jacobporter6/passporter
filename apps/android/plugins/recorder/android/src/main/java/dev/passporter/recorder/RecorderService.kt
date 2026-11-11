@@ -39,9 +39,13 @@ class RecorderService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            // The notification's Stop: the service is in the foreground
-            // already, and goes once the take has ended.
-            Recorder.worker.execute { Recorder.get(this).stopActive(EndReason.USER) }
+            // The notification's Stop: end the take, then go (also for a
+            // stale Stop that started this service with no take at all).
+            val latest = latestStart
+            Recorder.worker.execute {
+                Recorder.get(this).stopActive(EndReason.USER)
+                leave(latest)
+            }
             return START_NOT_STICKY
         }
         latestStart = startId
@@ -52,6 +56,9 @@ class RecorderService : Service() {
         } catch (e: RuntimeException) {
             // Not allowed now (Android 12+ background-start rules, or no
             // microphone permission): end the take, keeping what was said.
+            // Stopping a service started for the foreground without it may
+            // still make Android report the app; there is nothing better to
+            // do once startForeground is refused.
             Log.e(TAG, "the recording service could not go to the foreground", e)
             Recorder.worker.execute { Recorder.get(this).stopActive(EndReason.ERROR) }
             stopSelf(startId)
@@ -65,16 +72,16 @@ class RecorderService : Service() {
     }
 
     /**
-     * Leaves the foreground and stops, unless a newer take started
-     * meanwhile (its start keeps the service, under a newer [startId]).
-     * Runs on [Recorder.worker].
+     * Leaves the foreground and stops, unless a take is running or a newer
+     * take's start ([startId] is not the latest) came meanwhile. Stops
+     * whatever started it last, a Stop tap included. Runs on [Recorder.worker].
      */
     private fun leave(startId: Int) {
         if (Recorder.get(this).isActive()) return
         main.post {
             if (startId != latestStart) return@post
             ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-            stopSelf(startId)
+            stopSelf()
         }
     }
 

@@ -191,22 +191,28 @@ pub fn known_backend() -> Option<Backend> {
     BACKEND.get()
 }
 
-/// Which recorder this page uses, asked once per page session.
+/// Which recorder this page uses, found out once per page session: a
+/// plugin that is there but fails to answer is asked again next time.
 pub async fn backend() -> Backend {
     if let Some(known) = BACKEND.get() {
         return known;
     }
     let in_app = invoke_fn().is_some();
-    let chosen = if in_app {
-        let status = status().await;
-        if let Err(failure) = &status {
-            web_sys::console::warn_1(&format!("native recorder: {}", failure.message).into());
-        }
-        backend_for(in_app, &status)
+    let status = if in_app {
+        status().await
     } else {
-        Backend::Media
+        Err(Failure {
+            message: "not in the app".to_owned(),
+            code: None,
+        })
     };
-    BACKEND.set(Some(chosen));
+    let chosen = backend_for(in_app, &status);
+    match &status {
+        // Settled: the plugin answered, or is not granted here at all.
+        Ok(_) => BACKEND.set(Some(chosen)),
+        Err(failure) if failure.code.is_none() => BACKEND.set(Some(chosen)),
+        Err(failure) => warn(&failure.message),
+    }
     chosen
 }
 
@@ -293,10 +299,21 @@ async fn stop(id: &AudioId) -> Result<NativeTake, Failure> {
     call("stop", &args(&IdArgs { id })?).await
 }
 
+/// Hands take `id` over to the clip store: the page has stored it (`stored`)
+/// and its native copy is released, or storing failed and the take is left
+/// to [`adopt`]. Until this, [`adopt`] leaves the take alone, so a take on
+/// its way is never stored a second time.
+pub async fn settle(id: &AudioId, stored: bool) {
+    if stored {
+        release(id).await;
+    }
+    LIVE.with_borrow_mut(|live| live.retain(|live| live != id));
+}
+
 /// Deletes the native copy of take `id`, once its clip is stored. Best
-/// effort: a take left behind is stored again (under the same id) by the
-/// next [`adopt`], and swept by the plugin after seven days.
-pub async fn release(id: &AudioId) {
+/// effort: a take left behind is released by the next [`adopt`] (which
+/// finds its clip), or swept by the plugin after seven days.
+async fn release(id: &AudioId) {
     let released = match args(&IdArgs { id }) {
         Ok(args) => call::<()>("release", &args).await,
         Err(failure) => Err(failure),
@@ -382,18 +399,25 @@ pub fn level(active: &ActiveTake, start_ms: f64) -> CaptureEvent {
 }
 
 /// The events that end a take that started at `start_ms` once its audio
-/// has been delivered: `Ended` at its real length, after a `Tick` at the
-/// cap when the cap ended it, so the recorder reports the length cap
-/// rather than an interruption.
+/// has been delivered: `Ended` at its real length, after what tells the
+/// recorder why it ended (a page's own stop has already told it):
+///
+/// - the cap, seen on a visible page: a `Tick` at the cap, so it reports
+///   the length cap (and a take that sends, sends);
+/// - the cap while the page was `hidden`, or the notification's Stop:
+///   `Hidden`, so the take waits on a card, never sent unseen;
+/// - a call, a failure: nothing, so it reports an interruption (a card).
 #[must_use]
-pub fn closing(take: &NativeTake, start_ms: f64, max_ms: u64) -> Vec<CaptureEvent> {
+pub fn closing(take: &NativeTake, start_ms: f64, max_ms: u64, hidden: bool) -> Vec<CaptureEvent> {
     #[allow(clippy::cast_precision_loss)] // ms of a take: far below 2^52
     let at = |ms: u64| start_ms + ms as f64;
     let mut events = Vec::with_capacity(2);
-    if take.ended_by == EndedBy::Cap {
-        events.push(CaptureEvent::Tick {
+    match take.ended_by {
+        EndedBy::Cap if !hidden => events.push(CaptureEvent::Tick {
             at_ms: at(max_ms.max(take.duration_ms)),
-        });
+        }),
+        EndedBy::Cap | EndedBy::User => events.push(CaptureEvent::Hidden),
+        EndedBy::Focus | EndedBy::Error | EndedBy::Interrupted | EndedBy::Unknown => {}
     }
     events.push(CaptureEvent::Ended {
         at_ms: at(take.duration_ms),
@@ -450,8 +474,9 @@ pub fn adopted(take: &NativeTake, audio: Vec<u8>) -> Option<(AgentId, Recording,
 /// the cap), one recovered after the app was killed, and one still
 /// running from a page that is gone (it is stopped first). Each is stored
 /// as a clip for its agent, so that agent's screen shows it on a card.
-/// Takes are stored under their own ids, so running this twice, or on two
-/// screens at once, stores each take once.
+/// Takes are stored under their own ids, and never over a clip already
+/// stored under that id, so running this twice, or on two screens at
+/// once, stores each take once and never resets one on its way.
 pub async fn adopt<S: ClipStore, T: AudioTransport>(courier: &Courier<S, T>) {
     let Ok(status) = status().await else {
         return;
@@ -465,6 +490,11 @@ pub async fn adopt<S: ClipStore, T: AudioTransport>(courier: &Courier<S, T>) {
         }
     }
     for take in plan.adopt {
+        // Stored already (a release that did not get through): only release.
+        if matches!(courier.load(&take.id).await, Ok(Some(_))) {
+            release(&take.id).await;
+            continue;
+        }
         let audio = match read_all(&take).await {
             Ok(audio) => audio,
             Err(failure) => {
@@ -485,6 +515,13 @@ pub async fn adopt<S: ClipStore, T: AudioTransport>(courier: &Courier<S, T>) {
             Err(error) => warn(&error.to_string()),
         }
     }
+}
+
+/// Whether the page is hidden (screen off, another app in front).
+fn page_hidden() -> bool {
+    web_sys::window()
+        .and_then(|w| w.document())
+        .is_some_and(|d| d.visibility_state() == web_sys::VisibilityState::Hidden)
 }
 
 fn warn(message: &str) {
@@ -632,7 +669,7 @@ impl Take {
             Ok(Some(take)) => match read_all(&take).await {
                 Ok(audio) => {
                     let mut events = vec![CaptureEvent::Data(audio)];
-                    events.extend(closing(&take, self.start_ms, self.max_ms));
+                    events.extend(closing(&take, self.start_ms, self.max_ms, page_hidden()));
                     events
                 }
                 Err(failure) => vec![CaptureEvent::Failed(failure.message)],
@@ -644,7 +681,11 @@ impl Take {
             Err(failure) => vec![CaptureEvent::Failed(failure.message)],
         };
         self.state.set(State::Done);
-        LIVE.with_borrow_mut(|live| live.retain(|id| id != &self.id));
+        // A take with audio becomes a recording, which the engine stores and
+        // then settles ([`settle`]); any other end leaves nothing to store.
+        if !events.iter().any(|e| matches!(e, CaptureEvent::Data(_))) {
+            LIVE.with_borrow_mut(|live| live.retain(|id| id != &self.id));
+        }
         for event in events {
             (self.sink)(event);
         }
@@ -897,14 +938,23 @@ mod tests {
 
     #[test]
     fn a_take_ends_at_its_real_length_and_the_cap_says_so() {
-        let user = closing(&take(ID, EndedBy::User), 1_000.0, 295_000);
-        assert_eq!(user, vec![CaptureEvent::Ended { at_ms: 62_440.0 }]);
+        let call = closing(&take(ID, EndedBy::Focus), 1_000.0, 295_000, false);
+        assert_eq!(call, vec![CaptureEvent::Ended { at_ms: 62_440.0 }]);
+        let stopped = closing(&take(ID, EndedBy::User), 1_000.0, 295_000, false);
+        assert_eq!(
+            stopped,
+            vec![
+                CaptureEvent::Hidden,
+                CaptureEvent::Ended { at_ms: 62_440.0 }
+            ],
+            "the notification's Stop: the user is elsewhere"
+        );
         let capped = NativeTake {
             duration_ms: 294_976,
             ..take(ID, EndedBy::Cap)
         };
         assert_eq!(
-            closing(&capped, 0.0, 295_000),
+            closing(&capped, 0.0, 295_000, false),
             vec![
                 CaptureEvent::Tick { at_ms: 295_000.0 },
                 CaptureEvent::Ended { at_ms: 294_976.0 }
@@ -925,7 +975,7 @@ mod tests {
         };
         recorder.feed(CaptureEvent::Started { at_ms: 0.0 });
         recorder.feed(CaptureEvent::Data(vec![1]));
-        let mut steps = closing(&capped, 0.0, 295_000)
+        let mut steps = closing(&capped, 0.0, 295_000, false)
             .into_iter()
             .map(|event| recorder.feed(event));
         assert_eq!(steps.next(), Some(Step::Stop(StopReason::TooLong)));
@@ -934,6 +984,34 @@ mod tests {
         };
         assert_eq!(recording.stopped_by, StopReason::TooLong);
         assert_eq!(recording.duration_ms, 294_976);
+    }
+
+    #[test]
+    fn a_take_capped_while_the_page_was_hidden_waits_for_review() {
+        use super::super::engine::sends_after;
+        use super::super::recorder::{Recorder, RecorderConfig, Step};
+        let capped = NativeTake {
+            duration_ms: 294_976,
+            ..take(ID, EndedBy::Cap)
+        };
+        let mut recorder = Recorder::new(RecorderConfig {
+            silence: None,
+            max_ms: 295_000.0,
+        });
+        recorder.feed(CaptureEvent::Started { at_ms: 0.0 });
+        recorder.feed(CaptureEvent::Data(vec![1]));
+        let last = closing(&capped, 0.0, 295_000, true)
+            .into_iter()
+            .map(|event| recorder.feed(event))
+            .last();
+        let Some(Step::Finished(recording)) = last else {
+            panic!("finished")
+        };
+        assert_eq!(recording.stopped_by, StopReason::Hidden);
+        assert!(
+            !sends_after(recording.stopped_by, true),
+            "never sent unseen"
+        );
     }
 
     #[test]
