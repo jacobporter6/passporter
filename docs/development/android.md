@@ -167,9 +167,9 @@ safe and the change out of commits (`SecurityConfigTest` rejects it on purpose).
 |---|---|
 | `src/lib.rs`, `src/shell.rs` | The Tauri app: the main window, the app commands (`connect`, `bridge`, `forget_bridge`), the navigation guard, the bridge capability. `shell.rs` builds for Android only |
 | `src/native.rs` | The Tauri plugin `passporter-shell`: registers the app's own Kotlin side (`ShellPlugin`, below) and talks to it. Android only |
-| `src/origin.rs`, `src/navigation.rs`, `src/store.rs`, `src/destination.rs` | The rules, in plain Rust tested on any host: what counts as a bridge origin, which pages the webview may show, where the origin is saved, where a notification tap, the shortcut or a failed load sends the webview |
+| `src/origin.rs`, `src/navigation.rs`, `src/store.rs`, `src/destination.rs` | The rules, in plain Rust tested on any host: what counts as a bridge origin, which pages the webview may show, where the origin is saved, which page the webview opens on, where a notification tap, the shortcut, a failed load or a rebuilt webview sends it |
 | `connect/` | The bundled pages (`frontendDist`): the Connect page (`index.html`) and the Bridge page (`bridge.html`) |
-| `gen/android/app/src/main/java/dev/passporter/app/` | `MainActivity` (wraps each new webview's client); `ShellPlugin` (the shell's Kotlin side: intents, restart), `ShellRequest` (what it asks the shell to show), `ShellWebViewClient` (wraps wry's client: refused links to the browser, failed loads, history), `BridgeShortcutActivity` (the shortcut's trampoline) |
+| `gen/android/app/src/main/java/dev/passporter/app/` | `MainActivity` (wraps each new webview's client); `ShellPlugin` (the shell's Kotlin side: intents, restart), `ShellRequest` (what it asks the shell to show), `ShellWebViewClient` (wraps wry's client: refused links to the browser, failed loads, history), `WebViewBuilds` (tells the shell when wry rebuilds the webview), `BridgeShortcutActivity` (the shortcut's trampoline) |
 | `plugins/device/` | The device identity plugin: Keystore key, native bridge client, the PWA's `device` commands ([Device identity](#device-identity)) |
 | `tauri.conf.json` | App id `dev.passporter.app`, name, the Connect page's CSP |
 | `gen/android/` | The Gradle project from `cargo tauri android init`, trimmed: manifest, theme, icons, network security config, signing, JVM tests. Build output and the files Tauri regenerates on each build are gitignored |
@@ -385,6 +385,18 @@ ignores every request until a bridge is paired.
   again when it restores the app from Recents is ignored. The id is
   checked against the bridge's id rules on both sides (`AgentId`), and the URL against the
   navigation guard.
+- **A rebuilt webview.** Android re-creates `MainActivity` for a
+  configuration change the manifest does not list (a new font or display
+  size, or a switch between left-to-right and right-to-left languages;
+  rotation and dark mode are listed, so they keep the webview). wry then builds a new webview and loads the first page
+  it was given at launch again (`FirstPage` in `destination.rs`). That page
+  is the bridge's, except on the launch where you paired: there it is the
+  Connect page, which the guard refuses once paired. So `WebViewBuilds`
+  tells the shell about every webview after the process's first, and the
+  shell then opens the bridge's start page (the Bridge page, if it does not
+  load). The guard is unchanged: the bridge needs no allowance. A process
+  Android ended in the background starts afresh from Recents, on the saved
+  bridge.
 - **A link to another site** that you tap in the PWA (the link confirm's
   *Open*) opens in your browser. The guard still refuses it in the webview;
   `ShellWebViewClient` then opens it with an Android `VIEW` intent only for
