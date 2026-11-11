@@ -16,6 +16,7 @@ import dev.passporter.device.Method
 import dev.passporter.notify.AgentId
 import dev.passporter.notify.NoticeNotification
 import dev.passporter.notify.NoticeState
+import dev.passporter.notify.NotificationLock
 
 /** One agent's news notification on show: who, and why it was news. */
 data class ShownNotice(
@@ -68,12 +69,15 @@ object Reconciler {
 
     /**
      * The news notifications on show. Those showing the progress of an
-     * answer ([ActionFeedback.EXTRA_JOB]) are not news: see [answers].
+     * answer ([ActionFeedback.EXTRA_JOB], see [answers]) or its outcome
+     * ([ActionFeedback.EXTRA_OUTCOME], left to the person) are not news.
      */
     fun shown(context: Context): List<ShownNotice> =
         context.getSystemService(NotificationManager::class.java).activeNotifications.mapNotNull { posted ->
             val notification = posted.notification
-            if (posted.id != NoticeNotification.ID || notification.extras.containsKey(ActionFeedback.EXTRA_JOB)) {
+            val extras = notification.extras
+            val answer = extras.containsKey(ActionFeedback.EXTRA_JOB) || extras.containsKey(ActionFeedback.EXTRA_OUTCOME)
+            if (posted.id != NoticeNotification.ID || answer) {
                 return@mapNotNull null
             }
             val agent = posted.tag?.let(AgentId::parse) ?: return@mapNotNull null
@@ -84,8 +88,8 @@ object Reconciler {
     /**
      * The agents whose notification shows the progress of an answer
      * ([ActionFeedback.EXTRA_JOB]) posted before [before], with the job's
-     * key: a leftover once that job is no longer queued (lost, or long
-     * settled).
+     * key: a leftover once that job is no longer queued (lost: a settled
+     * job's notification is gone or shows its outcome).
      */
     fun answers(context: Context, before: Long): Map<AgentId, String> =
         context.getSystemService(NotificationManager::class.java).activeNotifications.mapNotNull { posted ->
@@ -144,16 +148,24 @@ class ReconcileWorker internal constructor(
         val agents = response.takeIf { it.isSuccess }?.let { BridgeState.agents(it.body) } ?: return Result.success()
         // Only what is still on show as it was: news posted while the list
         // was on its way stays.
-        val current = Reconciler.shown(applicationContext).toSet()
-        for (agent in Reconciler.stale(shown.filter { it in current }, agents)) {
-            manager.cancel(NoticeNotification.tag(agent), NoticeNotification.ID)
+        synchronized(NotificationLock) {
+            val current = Reconciler.shown(applicationContext).toSet()
+            for (agent in Reconciler.stale(shown.filter { it in current }, agents)) {
+                manager.cancel(NoticeNotification.tag(agent), NoticeNotification.ID)
+            }
         }
         return Result.success()
     }
 
     private fun clearLeftovers() {
-        for ((agent, key) in Reconciler.answers(applicationContext, now() - Reconciler.ANSWER_GRACE_MS)) {
-            if (!isQueued(key)) manager.cancel(NoticeNotification.tag(agent), NoticeNotification.ID)
+        val before = now() - Reconciler.ANSWER_GRACE_MS
+        val lost = Reconciler.answers(applicationContext, before).filterValues { !isQueued(it) }
+        synchronized(NotificationLock) {
+            // Only those still showing the same lost job.
+            val current = Reconciler.answers(applicationContext, before)
+            for ((agent, key) in lost) {
+                if (current[agent] == key) manager.cancel(NoticeNotification.tag(agent), NoticeNotification.ID)
+            }
         }
         frozen.keys().filterNot(isQueued).forEach(frozen::remove)
     }

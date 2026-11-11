@@ -297,14 +297,17 @@ A notice can be answered without opening the app (package
 | | *Deny with note* | `choose` of `no_feedback`, the text as `feedbackText` | none | `dev.passporter.notify.TEXT` |
 | Finished | *Reply* | `prompt` with the text | `SEMANTIC_ACTION_REPLY` | `dev.passporter.notify.TEXT` |
 
-A dialog without a pending id (the bridge could not parse it), or a state
+A notice does not say what kind of dialog it is, so a question or a plan
+approval (which have no `yes`/`no`) offers the same three actions, and
+they end as *Answer this one in the app*. A dialog without a pending id (the bridge could not parse it), or a state
 this app predates, has no actions: the tap opens the app. *Always allow* and
 other elevated options are never offered. The dialog answers carry no
 semantic action, so nothing in the system triggers them by guessing; none
 shows a user interface. Nothing is answered while the phone is locked:
 Android 12 and later ask you to unlock first, and on every version the
-receiver refuses (*Unlock your phone to answer*), also when a watch or
-another app fires the action. Mark-as-read is
+receiver refuses while the keyguard shows (*Unlock your phone to answer*),
+also when a watch or another app fires the action, and also while Smart
+Lock keeps the phone unlockable without a credential. Mark-as-read is
 not offered: the bridge has no API for it (a turn is unread until herdr
 sees the pane).
 
@@ -319,7 +322,7 @@ be answered twice), and queues it:
 | `NoticeAction.kt` | Which actions a notice offers (pure), and the `ActionRequest` in the intent's data, `passporter://action/<action>/<agent>[/<pending>]` |
 | `NoticeActions.kt`, `NoticeActionReceiver.kt` | The notification actions, and their receiver |
 | `OutboxJob.kt` | The job, and the text rules (`ReplyText`: at most 4 KiB, a note on one line) |
-| `Outbox.kt`, `OutboxData.kt`, `OutboxWorker.kt` | The native outbox: WorkManager jobs, network-bound, with exponential backoff from 30 s and at most 8 attempts (about an hour online); a `Retry-After` longer than the backoff is followed, up to 15 min. The unique work is per question: a dialog takes one answer (a second tap queues nothing), replies to an agent go one after the other |
+| `Outbox.kt`, `OutboxData.kt`, `OutboxWorker.kt` | The native outbox: WorkManager jobs, network-bound, with exponential backoff from 30 s and at most 8 attempts (about an hour online); a `Retry-After` longer than the backoff is followed for a dialog answer, up to 15 min (a reply keeps the backoff, so a later reply behind it never overtakes it). The unique work is per question: a dialog takes one answer (a second tap queues nothing), replies to an agent go one after the other |
 | `OutboxSender.kt`, `SendOutcome.kt`, `ActionBody.kt`, `BridgeState.kt`, `Bridge.kt`, `FrozenBodies.kt` | One attempt: reads the agent (and the dialog) with `DeviceAuth`, posts `POST /v1/actions` with `origin: "notification"`, classifies the answer |
 | `ActionFeedback.kt` | The notification while sending, after (removed when sent), or with the reason it was not sent |
 | `Reconciler.kt` | Clears old news when the app comes to the foreground and after a sent answer |
@@ -341,7 +344,7 @@ deciding it again. The bridge's own rules still apply on top
 | 422 `no_pending_input` or `unknown_option` (the dialog went meanwhile) | *Already answered* |
 | 403, 400, another 422, or no low-risk option to choose | *Answer this one in the app* |
 | `failed` (herdr failed after sending) | *Not sure it arrived: open the app* (never resent) |
-| no answer, 5xx, 429, a sign-in the bridge refused | retried; after the last attempt *Couldn't reach the bridge: open the app* |
+| no answer, 5xx, 429, a sign-in the bridge refused | retried; after the last attempt *Couldn't reach the bridge: open the app*, or *Not sure it arrived* once the action itself was sent |
 | not paired or revoked | *Not paired: open the app* |
 
 If news replaced the notification meanwhile (a new dialog, a new turn), the
@@ -353,9 +356,10 @@ reads `GET /v1/agents` (only if a notification is showing) and removes a
 dialog's notification once the agent is no longer blocked, a finished
 turn's once it is no longer unread, and any whose agent is gone (an
 agent herdr cannot tell about keeps its notification). An answer's
-notification is cleared once its job is no longer queued (a lost job, or
-an outcome you have seen), and so are the frozen bodies of jobs that are
-gone.
+notification is cleared once its job is no longer queued (a job lost
+while *Sending…*), and so are the frozen bodies of jobs that are gone. A
+final outcome (*Already answered*, *Not sure it arrived*, ...) stays until
+you dismiss or tap it, or news replaces it.
 
 Answers are ordinary WorkManager jobs, not expedited ones: an expedited job
 needs a foreground-service notification on Android 11 and older. A reply

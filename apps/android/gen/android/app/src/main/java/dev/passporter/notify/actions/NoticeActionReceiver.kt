@@ -15,7 +15,8 @@ import java.util.concurrent.Executors
  * queues it ([Outbox]). Not exported, so only holders of this app's
  * pending intents reach it: the shade, and also a watch, a car or a
  * notification listener the person allowed. So it answers only while the
- * phone is unlocked ([Unsendable.LOCKED]), whoever fired the action.
+ * phone is unlocked, keyguard dismissed ([Unsendable.LOCKED]), whoever
+ * fired the action.
  *
  * Taps are handled one at a time, off the main thread: a second tap on a
  * dialog's notification sees the first one's job and queues nothing.
@@ -29,7 +30,11 @@ class NoticeActionReceiver : BroadcastReceiver() {
         }
         val name = intent.getStringExtra(NoticeActions.EXTRA_NAME).orEmpty()
         val typed = if (request.action.takesText) typed(intent) else null
-        val locked = context.getSystemService(KeyguardManager::class.java).isDeviceLocked
+        // isDeviceLocked is false while a trust agent (Smart Lock: a trusted
+        // watch or car, on-body detection) keeps the phone unlockable without
+        // a credential; the keyguard still shows then.
+        val keyguard = context.getSystemService(KeyguardManager::class.java)
+        val locked = keyguard.isDeviceLocked || keyguard.isKeyguardLocked
         val app = context.applicationContext
         // Null only when called directly (tests), not as a broadcast.
         val pending: PendingResult? = goAsync()
@@ -53,13 +58,28 @@ class NoticeActionReceiver : BroadcastReceiver() {
         } else {
             null
         }
-        if (request.action.answersDialog && Outbox.isQueued(context, request)) {
+        if (request.action.answersDialog && queued(context, request)) {
             return feedback.refused(request, name, Unsendable.ALREADY_SENDING)
         }
         val job = OutboxJob.create(request, text, name, System.currentTimeMillis())
         feedback.sending(job)
-        Outbox.enqueue(context, job)
+        try {
+            Outbox.enqueue(context, job)
+        } catch (e: Exception) {
+            // WorkManager's database failed: say so rather than spin.
+            Log.e(TAG, "could not queue an answer", e)
+            feedback.notSent(job, NotSent.FAILED)
+        }
     }
+
+    /** [Outbox.isQueued]; a broken WorkManager counts as nothing queued, and enqueueing then says so. */
+    private fun queued(context: Context, request: ActionRequest): Boolean =
+        try {
+            Outbox.isQueued(context, request)
+        } catch (e: Exception) {
+            Log.e(TAG, "could not read the outbox", e)
+            false
+        }
 
     companion object {
         private const val TAG = "PassporterNotify"

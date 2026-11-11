@@ -8,9 +8,10 @@ import androidx.work.WorkerParameters
 /**
  * Runs one attempt of an [OutboxJob] ([OutboxSender]) and shows how it
  * went ([ActionFeedback]). A retry follows WorkManager's exponential
- * backoff, or the bridge's `Retry-After` when that is longer (up to
- * [Outbox.MAX_RETRY_AFTER_SECS]); after
- * [Outbox.MAX_ATTEMPTS] the job gives up as [NotSent.UNREACHABLE].
+ * backoff, or, for a dialog answer, the bridge's `Retry-After` when that
+ * is longer (up to [Outbox.MAX_RETRY_AFTER_SECS]); after
+ * [Outbox.MAX_ATTEMPTS] the job gives up as [NotSent.UNREACHABLE] (or
+ * [NotSent.UNCERTAIN] once a body was sent).
  */
 class OutboxWorker internal constructor(
     context: Context,
@@ -48,12 +49,17 @@ class OutboxWorker internal constructor(
 
     private fun retry(job: OutboxJob, attempt: Int, afterSecs: Long?, feedback: ActionFeedback): Result {
         if (attempt + 1 >= Outbox.MAX_ATTEMPTS) {
+            // A body was sent at least once: it may have arrived (a read
+            // timeout), so do not claim it never reached the bridge.
+            val reason = if (frozen.get(job.key) != null) NotSent.UNCERTAIN else NotSent.UNREACHABLE
             frozen.remove(job.key)
-            feedback.notSent(job, NotSent.UNREACHABLE)
+            feedback.notSent(job, reason)
             return Result.success()
         }
-        if (afterSecs != null && afterSecs > Outbox.backoffSecs(runAttemptCount)) {
-            // This run ends; the next one, appended to it, waits as asked.
+        // A dialog's chain holds this job alone, so the next run can follow it
+        // after the bridge's delay. A reply's chain may hold a later reply,
+        // which an appended run would let go first: replies keep the backoff.
+        if (job.request.action.answersDialog && afterSecs != null && afterSecs > Outbox.backoffSecs(runAttemptCount)) {
             Outbox.enqueueAfter(applicationContext, job, afterSecs, attempt + 1)
             return Result.success()
         }

@@ -11,6 +11,7 @@ import androidx.core.app.Person
 import dev.passporter.app.R
 import dev.passporter.notify.NoticeNotification
 import dev.passporter.notify.NoticeState
+import dev.passporter.notify.NotificationLock
 
 /**
  * Shows the progress of an answer given from the shade in the agent's own
@@ -24,10 +25,15 @@ import dev.passporter.notify.NoticeState
  * - [notSent]: a short reason (*Already answered*, *The agent moved on:
  *   open the app*, ...) under the conversation; a tap opens the app.
  *
- * A job's notification carries its key ([EXTRA_JOB]). If news replaced it
- * in the meantime (a new dialog, a new turn), the news stays as it is:
- * whatever happened to the older answer, the news is what matters now. A
- * job's notification left over (its job lost) is cleared by [Reconciler].
+ * While its job runs, the notification carries the job's key
+ * ([EXTRA_JOB]); a final outcome is marked [EXTRA_OUTCOME] instead, and
+ * stays until the person dismisses or taps it, or news replaces it. If news
+ * replaced the notification meanwhile (a new dialog, a new turn), the news
+ * stays as it is: whatever happened to the older answer, the news is what
+ * matters now. A job's notification left over (its job lost) is cleared by
+ * [Reconciler]. Every look-then-change holds [NotificationLock], as
+ * [dev.passporter.notify.NoticeNotifier] does, so news posted meanwhile is
+ * never overwritten.
  */
 class ActionFeedback(
     context: Context,
@@ -38,23 +44,23 @@ class ActionFeedback(
     private val system = this.context.getSystemService(NotificationManager::class.java)
 
     /** [job] was taken and queued. */
-    fun sending(job: OutboxJob) {
+    fun sending(job: OutboxJob) = synchronized(NotificationLock) {
         val base = active(job.request)
-        repost(job.request, job.name, base, answer(job.request.action, job.text), status = R.string.notify_sending, job.key)
+        repost(job.request, job.name, base, answer(job.request.action, job.text), R.string.notify_sending, Mark.Job(job.key))
     }
 
     /** [job] reached the agent. */
-    fun sent(job: OutboxJob) {
+    fun sent(job: OutboxJob) = synchronized(NotificationLock) {
         if (isOwnedBy(job)) manager.cancel(NoticeNotification.tag(job.request.agent), NoticeNotification.ID)
     }
 
     /** [job] was not sent, for [reason]. */
-    fun notSent(job: OutboxJob, reason: NotSent) {
+    fun notSent(job: OutboxJob, reason: NotSent) = synchronized(NotificationLock) {
         val base = active(job.request)
         when {
             // Swiped away while sending: the person still learns it failed.
-            base == null -> repost(job.request, job.name, null, answer(job.request.action, job.text), message(reason), job.key)
-            base.extras.getString(EXTRA_JOB) == job.key -> repost(job.request, job.name, base, null, message(reason), job.key)
+            base == null -> repost(job.request, job.name, null, answer(job.request.action, job.text), message(reason), Mark.Outcome)
+            base.extras.getString(EXTRA_JOB) == job.key -> repost(job.request, job.name, base, null, message(reason), Mark.Outcome)
             else -> Log.i(TAG, "not sent ($reason); newer news replaced its notification")
         }
     }
@@ -64,7 +70,7 @@ class ActionFeedback(
      * it was, actions included, with the reason under it (nothing for an
      * empty entry), so a reply's spinner stops.
      */
-    fun refused(request: ActionRequest, name: String, reason: Unsendable) {
+    fun refused(request: ActionRequest, name: String, reason: Unsendable) = synchronized(NotificationLock) {
         val base = active(request) ?: return
         val status = when (reason) {
             Unsendable.EMPTY -> null
@@ -72,8 +78,18 @@ class ActionFeedback(
             Unsendable.TOO_LONG -> R.string.notify_not_sent_too_long
             Unsendable.LOCKED -> R.string.notify_unlock_to_answer
         }
-        val key = base.extras.getString(EXTRA_JOB)
-        repost(request, name, base, null, status, key, keepActions = true)
+        val mark = base.extras.getString(EXTRA_JOB)?.let(Mark::Job)
+            ?: Mark.Outcome.takeIf { base.extras.getBoolean(EXTRA_OUTCOME) }
+        repost(request, name, base, null, status, mark, keepActions = true)
+    }
+
+    /** What a reposted notification says about the outbox. */
+    private sealed interface Mark {
+        /** It shows the progress of the job keyed [key]. */
+        data class Job(val key: String) : Mark
+
+        /** It shows a job's final outcome. */
+        data object Outcome : Mark
     }
 
     private fun isOwnedBy(job: OutboxJob): Boolean = active(job.request)?.extras?.getString(EXTRA_JOB) == job.key
@@ -96,7 +112,7 @@ class ActionFeedback(
         base: Notification?,
         answer: CharSequence?,
         status: Int?,
-        key: String?,
+        mark: Mark?,
         keepActions: Boolean = false,
     ) {
         val style = base?.let(NotificationCompat.MessagingStyle::extractMessagingStyleFromNotification)
@@ -112,7 +128,11 @@ class ActionFeedback(
             .setOnlyAlertOnce(true)
             .setSilent(true)
         status?.let { builder.setSubText(context.getString(it)).setContentText(context.getString(it)) }
-        key?.let { builder.addExtras(Bundle().apply { putString(EXTRA_JOB, it) }) }
+        when (mark) {
+            is Mark.Job -> builder.addExtras(Bundle().apply { putString(EXTRA_JOB, mark.key) })
+            Mark.Outcome -> builder.addExtras(Bundle().apply { putBoolean(EXTRA_OUTCOME, true) })
+            null -> Unit
+        }
         if (keepActions && base != null) {
             for (index in 0 until NotificationCompat.getActionCount(base)) {
                 NotificationCompat.getAction(base, index)?.let(builder::addAction)
@@ -137,6 +157,9 @@ class ActionFeedback(
     companion object {
         /** The extra that names the job whose progress a notification shows. */
         const val EXTRA_JOB = "dev.passporter.notify.JOB"
+
+        /** The extra that marks a notification showing an answer's final outcome. */
+        const val EXTRA_OUTCOME = "dev.passporter.notify.OUTCOME"
 
         private const val TAG = "PassporterNotify"
 

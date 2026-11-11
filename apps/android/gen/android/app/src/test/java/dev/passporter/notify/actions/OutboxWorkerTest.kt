@@ -195,6 +195,8 @@ class OutboxWorkerTest {
         assertEquals(listOf("widget: Run `pnpm test`?", "you: Allow once"), messages(shown))
         assertEquals("never resent", 1, stale.actions.size)
         assertEquals("never fails a reply after it", WorkInfo.State.SUCCEEDED, queued().single().state)
+        assertNull("an outcome, no longer a job", shown.extras.getString(ActionFeedback.EXTRA_JOB))
+        assertTrue(shown.extras.getBoolean(ActionFeedback.EXTRA_OUTCOME))
     }
 
     @Test
@@ -222,6 +224,26 @@ class OutboxWorkerTest {
         assertEquals(ListenableWorker.Result.success(), last.doWork())
         assertEquals("Couldn't reach the bridge: open the app", subText(requireNotNull(shown())))
         assertTrue(frozen.bodies.isEmpty())
+    }
+
+    @Test
+    fun givingUpAfterABodyWasSentSaysItMayHaveArrived() {
+        val job = job(NoticeAction.ALLOW_ONCE)
+        show(notice())
+        ActionFeedback(context).sending(job)
+        frozen.put(KEY, "{}")
+        val timeouts = FakeBridge { HttpResponse(504, "") }
+        assertEquals(ListenableWorker.Result.success(), worker(timeouts, job, runs = Outbox.MAX_ATTEMPTS - 1).doWork())
+        assertEquals("Not sure it arrived: open the app", subText(requireNotNull(shown())))
+        assertTrue(frozen.bodies.isEmpty())
+    }
+
+    @Test
+    fun aReplyKeepsTheBackoffWhateverTheRetryAfter() {
+        val job = job(NoticeAction.REPLY, text = "go")
+        val limited = FakeBridge.of(status = "done", dialog = "null", since = 0, action = HttpResponse(429, "", retryAfterSecs = 600))
+        assertEquals(ListenableWorker.Result.retry(), worker(limited, job).doWork())
+        assertTrue("nothing appended after a later reply", queued().isEmpty())
     }
 
     @Test
@@ -269,6 +291,16 @@ class OutboxWorkerTest {
         val shown = requireNotNull(shown())
         assertEquals("Unlock your phone to answer", subText(shown))
         assertEquals("still answerable once unlocked", 3, NotificationCompat.getActionCount(shown))
+    }
+
+    @Test
+    fun aKeyguardKeptOpenByATrustAgentStillCounts() {
+        show(notice())
+        // Smart Lock: not "device locked", but the keyguard shows.
+        shadowOf(context.getSystemService(KeyguardManager::class.java)).setKeyguardLocked(true)
+        tap(0)
+        assertTrue(queued().isEmpty())
+        assertEquals("Unlock your phone to answer", subText(requireNotNull(shown())))
     }
 
     @Test

@@ -49,8 +49,10 @@ object Outbox {
     /**
      * Queues [job]'s next attempt after [delaySecs] (cut to
      * [MAX_RETRY_AFTER_SECS]), to follow the running one: a bridge's
-     * `Retry-After` longer than the backoff. [attempts] is how many it has
-     * had so far.
+     * `Retry-After` longer than the backoff. Only for a dialog answer, whose
+     * chain holds it alone. [attempts] is how many it has had so far. Not
+     * waited on: it runs from a worker, which must not block on WorkManager's
+     * own task queue.
      */
     fun enqueueAfter(context: Context, job: OutboxJob, delaySecs: Long, attempts: Int) {
         WorkManager.getInstance(context).enqueueUniqueWork(

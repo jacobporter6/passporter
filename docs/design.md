@@ -217,8 +217,9 @@ PendingInput = {
   composer instead). Suggestions are computed on the bridge **when the event
   arrives, before the push goes out**, so they are ready when the notification
   is opened.
-- **Natural-language → option mapping** (used for car and notification
-  replies): a strict, conservative classifier. Clear affirmatives ("yes",
+- **Natural-language → option mapping** (used for car replies; the
+  native notification asks with explicit *Allow once* / *Deny* / *Deny with
+  note* actions instead, §6.6): a strict, conservative classifier. Clear affirmatives ("yes",
   "go ahead", "do it") map to *Allow once* / proceed. Anything else maps to
   *Deny + feedback text*, or is sent as a prompt. "Always allow" is never chosen
   from free text.

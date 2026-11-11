@@ -141,4 +141,15 @@ class ReconcilerTest {
         assertEquals(emptySet<String>(), frozen.keys())
         assertTrue("no news on show: no request", bridge.requests.isEmpty())
     }
+
+    @Test
+    fun anOutcomeStaysUntilThePersonSeesIt() {
+        show(notice())
+        val job = job(NoticeAction.ALLOW_ONCE)
+        ActionFeedback(context).sending(job)
+        ActionFeedback(context).notSent(job, NotSent.UNCERTAIN)
+        // The agent moved on, and the job is long gone: still shown.
+        run(FakeBridge { HttpResponse(200, "[]") }, queued = emptySet())
+        assertEquals(setOf("w1:p1"), tags())
+    }
 }
