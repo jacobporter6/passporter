@@ -117,6 +117,7 @@ export const sidebar = [
   group('Operations', ['docs/operations/']),
   group('Development', [
     'docs/development/contributing.md',
+    'docs/development/android.md',
     ['docs/testing.md', 'Testing'],
     'docs/development/e2e.md',
     'docs/development/docs.md',

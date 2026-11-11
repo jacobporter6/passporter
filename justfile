@@ -77,6 +77,10 @@ demo: web-build
     cargo build --locked --package bridge --bin passporter-bridge
     cargo run --locked --package e2e --example demo
 
+# Install the Android toolchain under your user: JDK, SDK, NDK, Rust targets, Tauri CLI (docs/development/android.md).
+android-setup:
+    deploy/android/setup.sh
+
 # Reclaim stale build output across worktrees (see crates/xtask).
 prune *args:
     cargo xtask prune {{args}}
