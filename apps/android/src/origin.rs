@@ -33,6 +33,11 @@ pub enum OriginError {
     /// cannot express. Use the bridge's DNS name.
     #[error("use the bridge's name, not an IPv6 address")]
     Ipv6,
+    /// A name that is not a plain DNS name (letters, digits, `-` and `.`
+    /// once in punycode), or a `localhost` name, which on the phone means
+    /// the phone itself (`tauri.localhost` is the app's own pages).
+    #[error("use the bridge's DNS name")]
+    Host,
 }
 
 impl BridgeOrigin {
@@ -63,6 +68,7 @@ impl BridgeOrigin {
         match url.host() {
             None => return Err(OriginError::Invalid),
             Some(Host::Ipv6(_)) => return Err(OriginError::Ipv6),
+            Some(Host::Domain(name)) if !is_dns_name(name) => return Err(OriginError::Host),
             Some(Host::Domain(_) | Host::Ipv4(_)) => {}
         }
         let origin = url.origin().ascii_serialization();
@@ -86,13 +92,26 @@ impl BridgeOrigin {
     /// The Tauri remote-capability pattern that matches every page of this
     /// origin and nothing else: `https://host[:port]/*`.
     ///
-    /// Hosts are ASCII (punycode) domains or IPv4 addresses, so they hold
-    /// no `URLPattern` syntax; IPv6 literals, whose brackets and colons would,
-    /// are refused by [`BridgeOrigin::parse`].
+    /// Hosts are plain DNS names (letters, digits, `-`, `.`) or IPv4
+    /// addresses, so they hold no `URLPattern` syntax (`*`, `(`, `{`, `+`,
+    /// `:` and brackets are all refused by [`BridgeOrigin::parse`]).
     #[must_use]
     pub fn capability_pattern(&self) -> String {
         format!("{}*", self.0)
     }
+}
+
+/// Whether `name` (already lowercased and punycoded by `url`) is a DNS name
+/// that can be a remote bridge: non-empty labels of letters, digits and
+/// `-`, and not `localhost` or under it.
+fn is_dns_name(name: &str) -> bool {
+    let labels_ok = name.split('.').all(|label| {
+        !label.is_empty()
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    });
+    labels_ok && name != "localhost" && !name.ends_with(".localhost")
 }
 
 impl fmt::Display for BridgeOrigin {
@@ -166,6 +185,15 @@ mod tests {
             ("https://[::1]:8443", OriginError::Ipv6),
             ("https://", OriginError::Invalid),
             ("https://exa mple.org", OriginError::Invalid),
+            ("*", OriginError::Host),
+            ("https://*.example.org", OriginError::Host),
+            ("https://a(b).example", OriginError::Host),
+            ("https://a+.example", OriginError::Host),
+            ("https://{a}.example", OriginError::Host),
+            ("https://a..example", OriginError::Host),
+            ("https://localhost:8443", OriginError::Host),
+            ("https://tauri.localhost", OriginError::Host),
+            ("https://bridge.localhost", OriginError::Host),
         ];
         for (input, expected) in cases {
             assert_eq!(BridgeOrigin::parse(input), Err(expected), "{input:?}");
@@ -204,6 +232,20 @@ mod tests {
                     "https://bridge.example.org.evil.example/",
                     "https://sub.bridge.example.org/",
                     "https://evil.example/https://bridge.example.org/",
+                ],
+            ),
+            (
+                "https://xn--brcke-lva.example",
+                [
+                    "https://xn--brcke-lva.example/agents",
+                    "https://brücke.example/",
+                ],
+                [
+                    "https://brcke.example/",
+                    "https://evil.xn--brcke-lva.example/",
+                    "https://xn--brcke-lva.example:8443/",
+                    "https://tauri.localhost/",
+                    "https://example/",
                 ],
             ),
             (

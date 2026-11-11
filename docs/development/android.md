@@ -101,6 +101,11 @@ storage*); that also forgets the pairing.
 A debug and a release build use different keys, so Android refuses to
 install one over the other: uninstall first.
 
+A debug build is for development: it is debuggable, and its webview can be
+inspected over USB, so anyone with your unlocked phone and a cable can run
+script as your paired device or copy its data. For everyday use install a
+release build, and turn *USB debugging* off again after installing.
+
 ## Release builds
 
 A release APK is signed with your own key, which only you hold. Create it
@@ -163,15 +168,23 @@ Only Passporter's own pages reach native IPC, by three fences:
 
 1. **Navigation.** The webview shows the bundled Connect page until you
    connect, then only the paired origin, and refuses every other
-   navigation (`navigation.rs`).
+   navigation (`navigation.rs`). Back is a history navigation the guard
+   does not see, so the Connect page removes itself from history when it
+   opens the bridge.
    The PWA's CSP (`default-src 'self'`) keeps other origins out of frames
    and scripts.
 2. **Capability.** At launch, or when you connect, the shell grants a
    remote capability to exactly `https://<bridge>/*` in the main window.
+   The address must be a plain DNS name or IPv4 address, so the pattern
+   holds no wildcard syntax; `localhost` names are refused.
    It lists the plugin permissions the PWA may use (none yet).
 3. **App commands.** The app has no ACL manifest, so Tauri refuses its own
    commands (`connect`) to every remote page; only the bundled Connect
    page can call them.
+
+Everything on the bridge's origin counts as Passporter, so serve nothing
+else on that host name: another app behind the same proxy name would get
+the same access.
 
 The address is saved in the app's private storage (`bridge-origin` in the
 data directory); it is not a secret. The device key and session tokens
@@ -219,7 +232,9 @@ the app don't download them.
 
 Gradle and the Android Gradle plugin are not installed here: the app's
 Gradle wrapper fetches them into `~/.gradle` on its first build (Gradle
-9.6.1, checked against its pinned SHA-256; AGP 9.3.1). A debug
+9.6.1, checked against its pinned SHA-256; AGP 9.3.1 and the AndroidX
+libraries are pinned by version only, without Gradle dependency
+verification). A debug
 build also creates the debug signing key `~/.android/debug.keystore`.
 
 ## Upgrading

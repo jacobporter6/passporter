@@ -21,6 +21,8 @@ pub const LOCAL_HOST: &str = "tauri.localhost";
 ///
 /// Once paired, the bundled pages are refused too: nothing on the bridge's
 /// pages can send the webview back to a page that may call app commands.
+/// History navigations (Back) skip this check, so the Connect page leaves
+/// history when it opens the bridge (`connect.js`).
 #[must_use]
 pub fn allows(url: &Url, bridge: Option<&BridgeOrigin>) -> bool {
     match bridge {
@@ -60,6 +62,11 @@ mod tests {
         let page = url("https://bridge.example.org/agents/w1:p1");
         assert!(!allows(&page, None));
         assert!(allows(&page, Some(&bridge)));
+        // A blob the PWA made carries the bridge's origin, and its CSP.
+        assert!(allows(
+            &url("blob:https://bridge.example.org/1b4f"),
+            Some(&bridge)
+        ));
     }
 
     #[test]
@@ -78,6 +85,7 @@ mod tests {
             "data:text/html,<p>hi</p>",
             "file:///sdcard/page.html",
             "about:blank",
+            "blob:https://evil.example/1b4f",
         ] {
             assert!(!allows(&url(page), Some(&bridge)), "{page}");
         }

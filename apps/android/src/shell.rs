@@ -11,7 +11,7 @@
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use tauri::ipc::CapabilityBuilder;
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 use crate::navigation;
 use crate::origin::BridgeOrigin;
@@ -63,13 +63,17 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     // why it cannot.
     let start = match store.load() {
         Ok(Some(origin)) => {
-            grant_ipc(app, &origin)?;
+            // Without the grant the PWA still works, minus native plugins.
+            if let Err(error) = grant_ipc(app, &origin) {
+                log_to_logcat(&error);
+            }
             let url = origin.url().clone();
             let _ = bridge.set(origin);
             WebviewUrl::External(url)
         }
         Ok(None) => WebviewUrl::App(CONNECT_PAGE.into()),
         Err(error) => {
+            // A trace for "the app forgot its bridge".
             log_to_logcat(&error);
             WebviewUrl::App(CONNECT_PAGE.into())
         }
@@ -107,7 +111,9 @@ fn grant_ipc(app: &AppHandle, origin: &BridgeOrigin) -> tauri::Result<()> {
 }
 
 /// Pairs the app with the bridge at `address` (what the person typed) and
-/// opens its PWA. Answers the bundled Connect page only.
+/// answers the URL to open. Answers the bundled Connect page only, which
+/// then replaces itself with that URL (`location.replace`), so Back never
+/// returns to it: history navigations skip the navigation guard.
 ///
 /// The bridge is chosen once: to change it, clear the app's storage. The
 /// address is saved first, so a failure there changes nothing.
@@ -116,12 +122,7 @@ fn grant_ipc(app: &AppHandle, origin: &BridgeOrigin) -> tauri::Result<()> {
     clippy::needless_pass_by_value,
     reason = "Tauri hands command arguments over by value"
 )]
-fn connect(
-    app: AppHandle,
-    window: WebviewWindow,
-    shell: State<'_, Shell>,
-    address: &str,
-) -> Result<(), String> {
+fn connect(app: AppHandle, shell: State<'_, Shell>, address: &str) -> Result<String, String> {
     let origin = BridgeOrigin::parse(address).map_err(|error| error.to_string())?;
     let _connecting = shell
         .connecting
@@ -136,7 +137,7 @@ fn connect(
         .store
         .save(&origin)
         .map_err(|error| format!("could not save the address: {error}"))?;
-    let url = origin.url().clone();
+    let url = origin.url().to_string();
     // Granted last: Tauri cannot take a capability back, so no grant is
     // made for an origin that did not become the bridge.
     let granted = grant_ipc(&app, &origin);
@@ -145,16 +146,14 @@ fn connect(
         .set(origin)
         .map_err(|_| "already connected".to_owned())?;
     granted.map_err(|error| format!("could not allow the bridge: {error}"))?;
-    window
-        .navigate(url)
-        .map_err(|error| format!("could not open the bridge: {error}"))
+    Ok(url)
 }
 
-/// Leaves a trace for "the app forgot its bridge": stderr goes to logcat.
+/// Logs a launch problem the app recovers from: stderr goes to logcat.
 #[expect(
     clippy::print_stderr,
     reason = "the shell has no logger; stderr is logcat"
 )]
 fn log_to_logcat(error: &dyn std::error::Error) {
-    eprintln!("passporter: saved bridge unreadable, showing Connect: {error}");
+    eprintln!("passporter: {error}");
 }
