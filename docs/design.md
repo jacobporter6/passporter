@@ -217,8 +217,9 @@ PendingInput = {
   composer instead). Suggestions are computed on the bridge **when the event
   arrives, before the push goes out**, so they are ready when the notification
   is opened.
-- **Natural-language → option mapping** (used for car and notification
-  replies): a strict, conservative classifier. Clear affirmatives ("yes",
+- **Natural-language → option mapping** (used for car replies; the
+  native notification asks with explicit *Allow once* / *Deny* / *Deny with
+  note* actions instead, §6.6): a strict, conservative classifier. Clear affirmatives ("yes",
   "go ahead", "do it") map to *Allow once* / proceed. Anything else maps to
   *Deny + feedback text*, or is sent as a prompt. "Always allow" is never chosen
   from free text.
@@ -268,6 +269,21 @@ PendingInput = {
   `MediaRecorder` holds the take in memory until it stops. iOS Safari stops
   the capture outright. Recording in the background belongs to the native
   app, with a foreground service.
+- **In the Android app the take is native** (the `recorder` plugin): a
+  foreground service (type `microphone`, with an ongoing notification and
+  its Stop) records AAC in ADTS frames to app-private storage
+  (`noBackupFilesDir`), each frame written as it is encoded, so the take
+  goes on with the screen off and survives the webview reloading or the
+  app being swiped away; if the process is killed, the frames on disk are
+  kept (at most the encoder's last fraction of a second is lost) and
+  recovered at the next start. A call or another app taking the audio
+  focus ends the take, keeping what was said. The PWA only starts and
+  stops it, then reads the audio over IPC into the same clip a browser
+  take makes (stored in `IndexedDB` under the take's id, released natively
+  only after that), so upload, transcription and the card are unchanged.
+  A take no page was waiting for (it ended while the app was closed, or
+  was recovered) waits on its agent's card, never sent unseen. Without the
+  plugin (Chrome, an old `WebView`) the PWA records as above.
 - whisper.cpp's server ends every segment with a newline, and a segment can
   end mid-word or before punctuation (`" dict"`, `"ation,"`): segments join
   as they are, each one's leading space deciding where a word starts.
@@ -338,9 +354,10 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
   8291), so the push service only sees ciphertext. The app registers
   with the phone's distributor while paired and shows a notice as a
   notification with no network call, also with its process cold (T31a,
-  T32a); a tap opens that agent (T30c); replies and Android Auto are not
-  built yet. Web Push (PWA) subscriptions keep the content-free ping, and
-  the PWA inside the app makes none.
+  T32a); a tap opens that agent (T30c), and it can be answered from the
+  shade (T31b); Android Auto is not built yet. Web Push (PWA)
+  subscriptions keep the content-free ping, and the PWA inside the app
+  makes none.
 - **Only news disrupts.** A message is sent only if its reason still holds
   when its debounce ends (the agent still blocked, or its finished turn
   still unread), and only for a change since the last one; it carries
@@ -348,10 +365,16 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
   its finished turn still unread. If a push still finds nothing to report (a
   late race), the PWA never alerts: a showing notification is re-shown
   silently in place, else a silent one is shown and closes itself.
-- **Notifications** (native, planned) use `MessagingStyle`, one conversation per agent.
-  A reply action uses `RemoteInput` (inline text/voice reply in the shade),
-  plus option actions such as *Allow once* / *Deny* for permissions and a
-  mark-as-read action.
+- **Notifications** (native) use `MessagingStyle`, one conversation per agent.
+  A dialog gets *Allow once*, *Deny* and *Deny with note* (`RemoteInput`,
+  the note as feedback, like the PWA's "Deny opens dictation"); a finished
+  turn gets a `RemoteInput` reply (inline text/voice) sent as a prompt.
+  Each answer is a durable WorkManager job with its idempotency key and
+  `origin: "notification"` (§6.5), and the notification shows how it went
+  (sent, already answered, the agent moved on). The app clears
+  notifications whose news is old when it comes to the foreground. A
+  mark-as-read action waits for a bridge API (a turn is unread until herdr
+  sees the pane). See docs/development/android.md.
 - **Android Auto** (planned) uses the messaging category: no custom car UI, just
   correctly built notifications plus the `automotive_app_desc` declaration
   (`<uses name="notification"/>`). Android Auto reads "widget: run

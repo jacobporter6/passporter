@@ -46,6 +46,10 @@
             android:noHistory="true"
             android:taskAffinity=""
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <!-- Answers from notification actions (dev.passporter.notify.actions). -->
+        <receiver
+            android:name="dev.passporter.notify.actions.NoticeActionReceiver"
+            android:exported="false" />
         <!-- UnifiedPush events (dev.passporter.push), from the connector's receiver. -->
         <service
             android:name="dev.passporter.push.PassporterPushService"

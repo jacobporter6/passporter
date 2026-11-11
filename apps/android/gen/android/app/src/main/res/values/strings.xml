@@ -20,4 +20,24 @@
     <string name="notify_decide">Decide: %1$s</string>
     <string name="notify_public_blocked">An agent needs you</string>
     <string name="notify_public_finished">An agent finished its turn</string>
+
+    <!-- Answers from the shade (dev.passporter.notify.actions). -->
+    <string name="notify_action_reply">Reply</string>
+    <string name="notify_action_allow_once">Allow once</string>
+    <string name="notify_action_deny">Deny</string>
+    <string name="notify_action_deny_note">Deny with note</string>
+    <string name="notify_reply_hint">Reply to the agent</string>
+    <string name="notify_deny_note_hint">What should it do instead?</string>
+    <string name="notify_you_denied_with">Deny: %1$s</string>
+    <string name="notify_sending">Sending…</string>
+    <string name="notify_not_sent_answered">Already answered</string>
+    <string name="notify_not_sent_moved_on">The agent moved on: open the app</string>
+    <string name="notify_not_sent_gone">That agent is gone</string>
+    <string name="notify_not_sent_needs_app">Answer this one in the app</string>
+    <string name="notify_not_sent_uncertain">Not sure it arrived: open the app</string>
+    <string name="notify_not_sent_not_paired">Not paired: open the app</string>
+    <string name="notify_not_sent_unreachable">Couldn\'t reach the bridge: open the app</string>
+    <string name="notify_not_sent_too_long">Too long for a reply here: open the app</string>
+    <string name="notify_not_sent_failed">Not sent: open the app</string>
+    <string name="notify_unlock_to_answer">Unlock your phone to answer</string>
 </resources>

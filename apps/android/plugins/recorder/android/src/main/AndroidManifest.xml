@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Asked at runtime when the PWA starts the first take. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- A take records in a foreground service of type microphone, so it
+         goes on with the screen off or the app in the background. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <application>
+        <!-- Started only by the app itself (RecorderService.start), while a
+             take runs; its notification's Stop action is an explicit,
+             immutable PendingIntent. -->
+        <service
+            android:name=".RecorderService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+    </application>
+</manifest>

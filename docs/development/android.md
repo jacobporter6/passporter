@@ -18,8 +18,9 @@ loads the PWA from there, so the app shows exactly what the browser shows
 and picks up PWA updates without a new APK. You pair the phone in the PWA
 as usual; in the app the device key is made and kept by native code (see
 [Device identity](#device-identity)). Agent news arrives through
-UnifiedPush as native notifications ([Push](#push)); the recorder and
-Android Auto are later additions.
+UnifiedPush as native notifications ([Push](#push)); the dictation
+recorder is native already ([Dictation](#dictation)); Android Auto is a
+later addition.
 
 Building it needs a JDK, the Android SDK and NDK, the Rust Android
 targets and the Tauri CLI. One script installs all of them under your
@@ -173,6 +174,7 @@ safe and the change out of commits (`SecurityConfigTest` rejects it on purpose).
 | `gen/android/app/src/main/java/dev/passporter/app/` | `MainActivity` (wraps each new webview's client); `ShellPlugin` (the shell's Kotlin side: intents, restart), `ShellRequest` (what it asks the shell to show), `ShellWebViewClient` (wraps wry's client: refused links to the browser, failed loads, history), `WebViewBuilds` (tells the shell when wry rebuilds the webview), `BridgeShortcutActivity` (the shortcut's trampoline) |
 | `gen/android/app/src/main/java/dev/passporter/push/` | UnifiedPush registration and incoming notices ([Push](#push)) |
 | `plugins/device/` | The device identity plugin: Keystore key, native bridge client, the PWA's `device` commands ([Device identity](#device-identity)) |
+| `plugins/recorder/` | The dictation recorder plugin: a foreground service that records takes to app-private files, the PWA's `recorder` commands ([Dictation](#dictation)) |
 | `tauri.conf.json` | App id `dev.passporter.app`, name, the Connect page's CSP |
 | `gen/android/` | The Gradle project from `cargo tauri android init`, trimmed: manifest, theme, icons, network security config, signing, JVM tests. Build output and the files Tauri regenerates on each build are gitignored |
 
@@ -198,7 +200,8 @@ Only Passporter's own pages reach native IPC, by three fences:
    remote capability to exactly `https://<bridge>/*` in the main window.
    The address must be a plain DNS name or IPv4 address, so the pattern
    holds no wildcard syntax; `localhost` names are refused.
-   It lists the plugin permissions the PWA may use: `device:default`.
+   It lists the plugin permissions the PWA may use: `device:default` and
+   `recorder:default`.
    It is granted only on a WebView with `WEB_MESSAGE_LISTENER` (below).
 3. **App commands.** The app has no ACL manifest, so Tauri refuses its own
    commands (`connect`, `bridge`, `forget_bridge`) to every remote page;
@@ -264,10 +267,10 @@ opens the app with the intent `passporter://agent/<id>` (the id is one
 percent-encoded path segment: read it with `NoticeNotification.agentToOpen`).
 
 A tap opens that agent's screen ([Links, taps and the Bridge
-page](#links-taps-and-the-bridge-page)). Known gap: nothing clears a notification once its news is old (a dialog you answered
-on the desktop stays until you tap or swipe it), because the bridge sends
-no "resolved" message. Each agent's conversation shortcut stays too;
-Android drops the oldest once the app reaches its shortcut limit.
+page](#links-taps-and-the-bridge-page)); old news is cleared when you open
+the app ([Answering from the shade](#answering-from-the-shade)). Known gap:
+each agent's conversation shortcut stays; Android drops the oldest once
+the app reaches its shortcut limit.
 
 A debug build can post sample messages through the same path, from the dev
 machine with the phone on adb (`-n` targets the receiver, which only adb's
@@ -283,7 +286,97 @@ same agent at a new dialog: alerts again, in place), `finished` (on
 more) and `many` (four agents, one conversation each; one name and line
 cut at their bounds). Each broadcast is a new message; add `--es ping
 1234` to two broadcasts to send the same message twice, and the second
-must not buzz. Release builds leave the receiver out.
+must not buzz. Release builds leave the receiver out. The sample agents are
+not on your bridge, so their actions end as *That agent is gone*, and
+opening the app clears them ([old news](#answering-from-the-shade)).
+
+### Answering from the shade
+
+A notice can be answered without opening the app (package
+`dev.passporter.notify.actions`). What it offers:
+
+| Notice | Action | Sends | Semantic action | `RemoteInput` key |
+|---|---|---|---|---|
+| Blocked, with a pending id | *Allow once* | `choose` of the dialog's low-risk `yes` | none | — |
+| | *Deny* | `choose` of its low-risk `no` (else `no_feedback`) | none | — |
+| | *Deny with note* | `choose` of `no_feedback`, the text as `feedbackText` | none | `dev.passporter.notify.TEXT` |
+| Finished | *Reply* | `prompt` with the text | `SEMANTIC_ACTION_REPLY` | `dev.passporter.notify.TEXT` |
+
+*Allow once* appears only when the notice shows the whole ask: a line cut
+by the bridge or the app (ending in `…`) could hide the rest of a command,
+so it gets *Deny* and *Deny with note* only. A notice does not say what
+kind of dialog it is, so a question or a plan approval offers the same
+actions: a Yes/No question takes *Allow once* as its Yes, others end as
+*Answer this one in the app*. A dialog without a pending id (the bridge could not parse it), or a state
+this app predates, has no actions: the tap opens the app. *Always allow* and
+other elevated options are never offered. The dialog answers carry no
+semantic action, so nothing in the system triggers them by guessing; none
+shows a user interface. Nothing is answered while the phone is locked:
+Android 12 and later ask you to unlock first, and on every version the
+receiver refuses while the keyguard shows (*Unlock your phone to answer*),
+also when a watch or another app fires the action, and also while Smart
+Lock keeps the phone unlockable without a credential. Mark-as-read is
+not offered: the bridge has no API for it (a turn is unread until herdr
+sees the pane).
+
+Each tap is a broadcast to `NoticeActionReceiver` (explicit, not exported;
+pending intents immutable except the two with a `RemoteInput`). It makes
+an `OutboxJob` with a fresh idempotency key, appends the answer to the
+conversation as your message with *Sending…* (and no actions, so it cannot
+be answered twice), and queues it:
+
+| File | What |
+|---|---|
+| `NoticeAction.kt` | Which actions a notice offers (pure), and the `ActionRequest` in the intent's data, `passporter://action/<action>/<agent>[/<pending>]` |
+| `NoticeActions.kt`, `NoticeActionReceiver.kt` | The notification actions, and their receiver |
+| `OutboxJob.kt` | The job, and the text rules (`ReplyText`: at most 4 KiB, a note on one line) |
+| `Outbox.kt`, `OutboxData.kt`, `OutboxWorker.kt` | The native outbox: WorkManager jobs, network-bound, with exponential backoff from 30 s and at most 8 attempts (roughly an hour online); a `Retry-After` longer than the backoff is followed for a dialog answer, up to 15 min (a reply keeps the backoff, so a later reply behind it never overtakes it). The unique work is per question: a dialog takes one answer (a second tap queues nothing), replies to an agent go one after the other |
+| `OutboxSender.kt`, `SendOutcome.kt`, `ActionBody.kt`, `BridgeState.kt`, `Bridge.kt`, `FrozenBodies.kt` | One attempt: reads the agent (and the dialog) with `DeviceAuth`, posts `POST /v1/actions` with `origin: "notification"`, classifies the answer |
+| `ActionFeedback.kt` | The notification while sending, after (removed when sent), or with the reason it was not sent |
+| `Reconciler.kt` | Clears old news when the app comes to the foreground and after a sent answer |
+
+A notice has no `expectedSeq` or option ids, so the first attempt reads
+them, as the bridge's car replies do: the agent from `GET /v1/agents`, and
+for a dialog answer `GET /v1/agents/:id/pending`, which must still show the
+notice's dialog. A reply goes only while the agent is ready (`done`
+since before you replied, or `idle`: herdr marks a turn seen when you
+look at the pane). The body is then frozen, and a retry
+resends it unchanged, so the bridge replays a lost answer instead of
+deciding it again. The bridge's own rules still apply on top
+(`origin: "notification"`: no prompt into a dialog, no `!`/`/`/`#` prompt).
+
+| Bridge's answer | Shown |
+|---|---|
+| sent | the notification is removed |
+| 409, or the dialog changed before sending | *Already answered* (a reply: *The agent moved on: open the app*) |
+| 422 `no_pending_input` or `unknown_option` (the dialog went meanwhile) | *Already answered* |
+| 403, 400, another 422, or no low-risk option to choose | *Answer this one in the app* |
+| `failed` (herdr failed after sending) | *Not sure it arrived: open the app* (never resent) |
+| no answer, 5xx, 429, a sign-in the bridge refused | retried; after the last attempt *Couldn't reach the bridge: open the app*, or *Not sure it arrived* once the action itself was sent |
+| not paired or revoked | *Not paired: open the app* |
+
+If news replaced the notification meanwhile (a new dialog, a new turn), the
+news stays and the older answer's outcome is not shown.
+
+**Old news is cleared.** The bridge sends no "resolved" message, so when
+the app comes to the foreground, and after an answer was sent, a worker
+reads `GET /v1/agents` (only if a notification is showing) and removes a
+dialog's notification once the agent is no longer blocked, a finished
+turn's once it is no longer unread, and any whose agent is gone (an
+agent herdr cannot tell about keeps its notification). An answer's
+notification is cleared once its job is no longer queued (a job lost
+while *Sending…*), and so are the frozen bodies of jobs that are gone. A
+final outcome (*Already answered*, *Not sure it arrived*, ...) stays until
+you dismiss or tap it, or news replaces it; if the notification was gone
+by then (swiped, or tapped into the app), only an outcome you must act on
+(*Not sure it arrived*, *Not sent*, *Not paired*, ...) comes back. A tap
+on a notice that news replaced meanwhile queues nothing: each notification
+names its question (`EXTRA_QUESTION`: the pending id, or `turn`).
+
+Answers are ordinary WorkManager jobs, not expedited ones: an expedited job
+needs a foreground-service notification on Android 11 and older. A reply
+from the shade wakes the app, so the job usually runs at once; under Doze
+it can wait for the next maintenance window.
 
 ## Push
 
@@ -471,6 +564,76 @@ Failures are `DeviceAuthException` subclasses: `NotPaired`, `Forgotten`
 later), `RateLimited`, `Refused`, `Keystore`, and so on. Another plugin uses
 it by depending on the library in its `android/build.gradle.kts`:
 `implementation(project(":tauri-plugin-device"))`.
+
+## Dictation
+
+In the browser a take lives in the page: `MediaRecorder` holds it in
+memory and the PWA stops it when the page is hidden ([design
+§6.3](../design.md#63-dictation-first-class)). In the app the plugin in
+`plugins/recorder` (Kotlin package `dev.passporter.recorder`) records
+instead, so a long dictation survives the screen turning off, the webview
+reloading and the app being killed.
+
+| File | What |
+|---|---|
+| `Recorder.kt` | One take at a time: start, stop, cancel, status, read, release. A take ends when the PWA stops it, from the notification's Stop, at the length cap the PWA asked for (just under five minutes), when a call or another app takes the audio focus, or when the microphone fails; every way but a cancel keeps what was recorded |
+| `RecorderService.kt` | The foreground service (type `microphone`) a take runs in, with an ongoing notification (time recorded, Stop; a tap opens the app). It goes when the take ends |
+| `TakeStore.kt`, `Adts.kt` | Takes on disk, in `noBackupFilesDir/recordings`: `<id>.aac` and its journal `<id>.json` |
+| `AudioInput.kt`, `AudioFocus.kt` | `MediaRecorder` (AAC-LC, mono, 16 kHz, 32 kbit/s, in ADTS frames) and audio focus, behind interfaces the tests fake |
+| `RecorderPlugin.kt` | The PWA's commands, with strict arguments; asks for the microphone at the first `start` |
+
+**What the PWA does.** `crates/web/src/voice/native.rs` feature-detects
+the plugin (it answers `status`) and records through it; otherwise
+(Chrome, an old WebView) dictation uses `MediaRecorder`, unchanged. The
+PWA starts a take tagged with the agent's id, polls its level for the
+meter, and on stop reads the audio over IPC (base64, 256 KiB at a time)
+into the same clip a browser take makes. The clip is stored in IndexedDB
+under the take's own id, and only then released natively, so the take is
+always in at least one durable place; upload, transcription, the
+transcript card and the offline retries are the PWA's as before.
+
+**Why the PWA uploads, not native code.** The bridge's upload needs the
+clip's size before the first byte (`POST /v1/audio`), so nothing can go
+up until the take ends, and what comes back (the transcript) is only
+useful in the PWA: sent as a prompt or shown on a card. A native upload
+would duplicate the courier (renames, re-uploads, transcript polling)
+for little gain, and `HttpsURLConnection` cannot send the `PATCH` the
+chunks use. If the app dies after a take ends, the next launch stores
+and uploads it in seconds.
+
+**What survives what.**
+
+- *Screen off, another app, the notification shade:* the take goes on in
+  the foreground service; the PWA's meter catches up when it is visible
+  again.
+- *Task swiped away:* the service and the take go on (the notification
+  stays, with Stop). Reopening the app reloads the PWA, which stops a
+  take no page of its own started and puts it on its agent's card.
+- *Process killed* (low memory, force stop): `MediaRecorder` writes each
+  AAC frame to the file as it is encoded, so the file holds everything up
+  to the encoder's last fraction of a second. The journal still says
+  `recording`; at the next start the recorder cuts any torn last frame
+  off, takes the length from the frames, and lists the take as
+  `interrupted`. What is lost: the frames still in the encoder, and the
+  rest of the dictation, since nothing records once the process is gone.
+- *A call:* the call takes the audio focus, which ends the take, keeping
+  what was said (a brief sound such as a notification only ducks it).
+
+A take that ended with no page waiting for it is stored when an agent
+screen next opens, and waits on its agent's card for review, never sent
+unseen. So does one the page was waiting for that ended out of its sight:
+at the length cap while the page was hidden, or from the notification's
+Stop. Only the PWA's own stop, or the cap on screen, sends (when sending
+on stop is on). Takes nobody released are deleted after seven days, as the PWA's
+own clips are.
+
+**Permissions.** `RECORD_AUDIO` is asked at the first `start` (the
+permission alias `microphone`); a refusal reads "Allow it for Passporter
+in Android's settings" in the PWA. The plugin's manifest adds
+`FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_MICROPHONE` and the service.
+Without `POST_NOTIFICATIONS` (Android 13+, asked once a bridge is
+connected) the service still records; Android then lists it only in the
+quick settings' active-apps list.
 
 ## What it installs, and where
 

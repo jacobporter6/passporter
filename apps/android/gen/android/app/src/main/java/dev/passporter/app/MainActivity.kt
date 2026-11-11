@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
 import dev.passporter.notify.NotificationPermission
+import dev.passporter.notify.actions.Reconciler
 import dev.passporter.push.PushRegistration
 
 class MainActivity : TauriActivity() {
@@ -25,5 +26,6 @@ class MainActivity : TauriActivity() {
   override fun onResume() {
     super.onResume()
     notificationPermission.askIfDue()
+    Reconciler.schedule(this)
   }
 }
