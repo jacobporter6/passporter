@@ -26,7 +26,10 @@ object Outbox {
     /** The first retry's delay; each next one doubles. */
     const val BACKOFF_SECS = 30L
 
-    /** Attempts before giving up: about an hour of an unreachable bridge, online. */
+    /**
+     * Attempts before giving up: about an hour of an unreachable bridge,
+     * online (approximate: a followed `Retry-After` starts the backoff again).
+     */
     const val MAX_ATTEMPTS = 8
 
     /** The longest `Retry-After` followed; a longer one is cut to it. */
@@ -51,15 +54,24 @@ object Outbox {
      * [MAX_RETRY_AFTER_SECS]), to follow the running one: a bridge's
      * `Retry-After` longer than the backoff. Only for a dialog answer, whose
      * chain holds it alone. [attempts] is how many it has had so far. Not
-     * waited on: it runs from a worker, which must not block on WorkManager's
-     * own task queue.
+     * waited on (a failure is shown when it comes): the worker that calls it
+     * is still running, and its chain's update waits for that.
      */
     fun enqueueAfter(context: Context, job: OutboxJob, delaySecs: Long, attempts: Int) {
-        WorkManager.getInstance(context).enqueueUniqueWork(
+        val result = WorkManager.getInstance(context).enqueueUniqueWork(
             uniqueName(job.request),
             ExistingWorkPolicy.APPEND_OR_REPLACE,
             request(job, delaySecs.coerceAtMost(MAX_RETRY_AFTER_SECS), attempts),
-        )
+        ).result
+        val app = context.applicationContext
+        result.addListener({
+            try {
+                result.get()
+            } catch (e: Exception) {
+                // WorkManager's database failed: the answer is lost; say so.
+                ActionFeedback(app).notSent(job, NotSent.FAILED)
+            }
+        }, Runnable::run)
     }
 
     /** Whether an answer to [request]'s question is queued or running. Blocking. */

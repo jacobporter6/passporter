@@ -199,4 +199,17 @@ class OutboxSenderTest {
         assertEquals("two reads, then the action twice", 4, bridge.requests.size)
         assertTrue(frozen.bodies.isEmpty())
     }
+
+    @Test
+    fun a409WhileTheDialogIsStillPendingMeansTheAgentMovedOn() {
+        val seqOnly = HttpResponse(409, """{"status":"stale","pending":{"id":"screen-2-ab","kind":"permission"}}""")
+        assertEquals(SendOutcome.Final(NotSent.MOVED_ON), send(FakeBridge.of(action = seqOnly), job(NoticeAction.ALLOW_ONCE)))
+    }
+
+    @Test
+    fun aStoppedAttemptKeepsItsFrozenBody() {
+        val outcome = OutboxSender(FakeBridge.of(), frozen).send(job(NoticeAction.ALLOW_ONCE)) { true }
+        assertEquals(SendOutcome.Sent, outcome)
+        assertEquals("the rerun resends it", setOf(KEY), frozen.keys())
+    }
 }

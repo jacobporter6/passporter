@@ -2,6 +2,7 @@ package dev.passporter.notify.actions
 
 import dev.passporter.notify.AgentId
 import dev.passporter.notify.PendingId
+import dev.passporter.notify.PlainText
 import java.util.UUID
 
 /**
@@ -55,7 +56,8 @@ enum class Unsendable {
  * The person's reply or note, made fit for the bridge's text rules
  * (`protocol::text`): tabs turned into spaces, Unicode line and paragraph
  * separators into line breaks, other control characters (`\r` included)
- * dropped, and trimmed. A prompt keeps its line breaks; a note
+ * and hidden characters (bidi marks, zero-width spaces: [PlainText]'s
+ * rule) dropped, and trimmed. A prompt keeps its line breaks; a note
  * (single-line `feedbackText`) gets spaces instead. Text with nothing
  * visible (only joiners, say) is empty. What else the bridge refuses (a misplaced
  * invisible character, say) comes back as a refusal and is shown as such.
@@ -67,24 +69,27 @@ object ReplyText {
      */
     const val MAX_BYTES = 4 * 1024
 
-    private const val LINE_SEPARATOR = '\u2028'
-    private const val PARAGRAPH_SEPARATOR = '\u2029'
+    private const val LINE_SEPARATOR = 0x2028
+    private const val PARAGRAPH_SEPARATOR = 0x2029
 
-    /** Not whitespace, a format character (joiners) or a variation selector: blank by the bridge's rule. */
+    /** Not whitespace, a joiner or a variation selector: blank by the bridge's rule (hidden ones are gone). */
     private fun isVisible(char: Char): Boolean =
-        !char.isWhitespace() && Character.getType(char) != Character.FORMAT.toInt() && char !in '\uFE00'..'\uFE0F'
+        !char.isWhitespace() && char != '\u200C' && char != '\u200D' && char !in '\uFE00'..'\uFE0F'
 
     /** [raw] cleaned for [action], or why it cannot be sent. */
     fun clean(raw: CharSequence?, action: NoticeAction): Result {
         val singleLine = action != NoticeAction.REPLY
         val text = buildString {
-            raw?.forEach { char ->
+            raw?.codePoints()?.forEach { codePoint ->
                 when {
-                    char == LINE_SEPARATOR || char == PARAGRAPH_SEPARATOR -> append(if (singleLine) ' ' else '\n')
-                    char == '\n' && !singleLine -> append(char)
-                    char == '\n' || char == '\t' -> append(' ')
-                    Character.isISOControl(char) -> Unit
-                    else -> append(char)
+                    codePoint == LINE_SEPARATOR || codePoint == PARAGRAPH_SEPARATOR ->
+                        append(if (singleLine) ' ' else '\n')
+                    codePoint == '\n'.code && !singleLine -> append('\n')
+                    codePoint == '\n'.code || codePoint == '\t'.code -> append(' ')
+                    // Controls (`\r`), bidi marks, zero-width spaces: what the
+                    // bridge refuses (`protocol::text::is_hidden_char`).
+                    Character.isISOControl(codePoint) || PlainText.isHidden(codePoint) -> Unit
+                    else -> appendCodePoint(codePoint)
                 }
             }
         }.trim()

@@ -3,6 +3,7 @@ package dev.passporter.notify.actions
 import android.net.Uri
 import dev.passporter.notify.AgentId
 import dev.passporter.notify.Notice
+import dev.passporter.notify.NoticeNotification
 import dev.passporter.notify.NoticeState
 import dev.passporter.notify.PendingId
 
@@ -42,6 +43,10 @@ enum class NoticeAction(
     val answersDialog: Boolean get() = this != REPLY
 
     companion object {
+        private const val ELLIPSIS = "…"
+
+        private fun shownWhole(line: String?): Boolean = line != null && !line.endsWith(ELLIPSIS)
+
         /** The action spelled [wire], or `null`. */
         fun fromWire(wire: String): NoticeAction? = entries.firstOrNull { it.wire == wire }
 
@@ -51,12 +56,19 @@ enum class NoticeAction(
          * (it names the dialog on screen when the notice went out); without
          * one, or for a state this app predates, the tap that opens the app
          * is the only way. *Always allow* and other elevated options are
-         * never offered from the shade.
+         * never offered from the shade, and *Allow once* only when the
+         * notice shows what it allows whole: a line cut (by the bridge or
+         * this app, ending in `…`) could hide the rest of a command behind
+         * a harmless start, and no line shows nothing at all. Denying is
+         * always safe.
          */
         fun of(notice: Notice): List<NoticeAction> =
             when (notice.state) {
-                NoticeState.BLOCKED ->
-                    if (notice.pendingId != null) listOf(ALLOW_ONCE, DENY, DENY_WITH_NOTE) else emptyList()
+                NoticeState.BLOCKED -> when {
+                    notice.pendingId == null -> emptyList()
+                    shownWhole(notice.line) -> listOf(ALLOW_ONCE, DENY, DENY_WITH_NOTE)
+                    else -> listOf(DENY, DENY_WITH_NOTE)
+                }
                 NoticeState.FINISHED -> listOf(REPLY)
                 NoticeState.UNKNOWN -> emptyList()
             }
@@ -81,6 +93,9 @@ data class ActionRequest(
     init {
         require((pending != null) == action.answersDialog) { "a pending id exactly for dialog answers" }
     }
+
+    /** The question it answers, as its notification names it ([NoticeNotification.EXTRA_QUESTION]). */
+    val question: String get() = pending?.value ?: NoticeNotification.TURN
 
     /** The intent data of this request. */
     fun toUri(): Uri =

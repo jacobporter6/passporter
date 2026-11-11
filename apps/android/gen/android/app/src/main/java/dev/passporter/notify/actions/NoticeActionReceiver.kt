@@ -62,7 +62,10 @@ class NoticeActionReceiver : BroadcastReceiver() {
             return feedback.refused(request, name, Unsendable.ALREADY_SENDING)
         }
         val job = OutboxJob.create(request, text, name, System.currentTimeMillis())
-        feedback.sending(job)
+        if (!feedback.sending(job)) {
+            Log.i(TAG, "ignored a tap on a notice that newer news replaced")
+            return
+        }
         try {
             Outbox.enqueue(context, job)
         } catch (e: Exception) {

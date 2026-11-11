@@ -29,14 +29,18 @@ class OutboxSender(
     private val bridge: Bridge,
     private val frozen: FrozenBodies,
 ) {
-    /** One attempt at [job]. Never throws. */
-    fun send(job: OutboxJob): SendOutcome {
+    /**
+     * One attempt at [job]. Never throws. The frozen body is forgotten once
+     * the outcome is final, unless [stopped] says WorkManager stopped the
+     * attempt meanwhile: it runs the job again, which must resend that body.
+     */
+    fun send(job: OutboxJob, stopped: () -> Boolean = { false }): SendOutcome {
         val outcome = try {
             attempt(job)
         } catch (e: DeviceAuthException) {
             failure(e)
         }
-        if (outcome !is SendOutcome.Retry) frozen.remove(job.key)
+        if (outcome !is SendOutcome.Retry && !stopped()) frozen.remove(job.key)
         return outcome
     }
 
@@ -107,9 +111,7 @@ class OutboxSender(
     private fun answer(job: OutboxJob, response: HttpResponse): SendOutcome =
         when {
             // Final for the key whatever the body says (the outbox contract).
-            response.status == 409 -> SendOutcome.Final(
-                if (job.request.action == NoticeAction.REPLY) NotSent.MOVED_ON else NotSent.ALREADY_ANSWERED,
-            )
+            response.status == 409 -> SendOutcome.Final(stale(job, response.body))
             response.isSuccess -> if (status(response.body) == "sent") {
                 SendOutcome.Sent
             } else {
@@ -136,6 +138,21 @@ class OutboxSender(
             response.status == 401 -> SendOutcome.Final(NotSent.NOT_PAIRED)
             else -> SendOutcome.Final(NotSent.FAILED)
         }
+
+    /**
+     * Why a 409 came: the dialog was answered, unless the bridge says it is
+     * still pending (only the agent's seq moved): then, as for a reply,
+     * the agent moved on.
+     */
+    private fun stale(job: OutboxJob, body: String): NotSent {
+        val pending = job.request.pending ?: return NotSent.MOVED_ON
+        val current = try {
+            JSONObject(body).optJSONObject("pending")?.opt("id") as? String
+        } catch (_: JSONException) {
+            null
+        }
+        return if (current == pending.value) NotSent.MOVED_ON else NotSent.ALREADY_ANSWERED
+    }
 
     private fun status(body: String): String? = field(body, "status")
 

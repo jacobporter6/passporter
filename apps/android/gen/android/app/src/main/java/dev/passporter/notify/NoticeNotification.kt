@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -31,6 +32,17 @@ object NoticeNotification {
 
     /** Channel of finished turns: default importance. */
     const val CHANNEL_FINISHED = "finished"
+
+    /**
+     * The extra naming the question a notification asks: the dialog's
+     * pending id, or [TURN] for a finished turn ([question]). An answer
+     * from the shade checks it, so a tap on an older notice never lands on
+     * newer news.
+     */
+    const val EXTRA_QUESTION = "dev.passporter.notify.QUESTION"
+
+    /** [EXTRA_QUESTION] of a finished turn. */
+    const val TURN = "turn"
 
     /** The notification id; the tag ([tag]) tells agents apart. */
     const val ID = 1
@@ -111,6 +123,7 @@ object NoticeNotification {
             // News that replaces the agent's last notification sounds again.
             .setOnlyAlertOnce(false)
         NoticeActions.build(context, notice).forEach(builder::addAction)
+        question(notice)?.let { builder.addExtras(Bundle().apply { putString(EXTRA_QUESTION, it) }) }
         return builder.build()
     }
 
@@ -185,6 +198,14 @@ object NoticeNotification {
                 ),
             )
             .build()
+
+    /** What [notice] asks, as [EXTRA_QUESTION]; `null` when it cannot be answered from the shade. */
+    fun question(notice: Notice): String? =
+        when (notice.state) {
+            NoticeState.BLOCKED -> notice.pendingId?.value
+            NoticeState.FINISHED -> TURN
+            NoticeState.UNKNOWN -> null
+        }
 
     /** The state whose channel is [channel], or `null` for any other channel. */
     internal fun stateOf(channel: String?): NoticeState? =

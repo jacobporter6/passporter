@@ -43,10 +43,16 @@ class ActionFeedback(
     private val manager = NotificationManagerCompat.from(this.context)
     private val system = this.context.getSystemService(NotificationManager::class.java)
 
-    /** [job] was taken and queued. */
-    fun sending(job: OutboxJob) = synchronized(NotificationLock) {
+    /**
+     * [job] is about to be queued: shown as sending, unless its notice was
+     * replaced by news meanwhile (another dialog, a new turn). Then nothing
+     * changes, and the job must not be queued: `false`.
+     */
+    fun sending(job: OutboxJob): Boolean = synchronized(NotificationLock) {
         val base = active(job.request)
+        if (base != null && !asks(base, job.request)) return false
         repost(job.request, job.name, base, answer(job.request.action, job.text), R.string.notify_sending, Mark.Job(job.key))
+        true
     }
 
     /** [job] reached the agent. */
@@ -58,8 +64,11 @@ class ActionFeedback(
     fun notSent(job: OutboxJob, reason: NotSent) = synchronized(NotificationLock) {
         val base = active(job.request)
         when {
-            // Swiped away while sending: the person still learns it failed.
-            base == null -> repost(job.request, job.name, null, answer(job.request.action, job.text), message(reason), Mark.Outcome)
+            // Gone while sending (swiped, or tapped into the app): only an
+            // outcome that needs the person comes back.
+            base == null -> if (reason in WORTH_RETURNING) {
+                repost(job.request, job.name, null, answer(job.request.action, job.text), message(reason), Mark.Outcome)
+            }
             base.extras.getString(EXTRA_JOB) == job.key -> repost(job.request, job.name, base, null, message(reason), Mark.Outcome)
             else -> Log.i(TAG, "not sent ($reason); newer news replaced its notification")
         }
@@ -72,14 +81,19 @@ class ActionFeedback(
      */
     fun refused(request: ActionRequest, name: String, reason: Unsendable) = synchronized(NotificationLock) {
         val base = active(request) ?: return
-        val status = when (reason) {
-            Unsendable.EMPTY -> null
-            Unsendable.ALREADY_SENDING -> R.string.notify_sending
-            Unsendable.TOO_LONG -> R.string.notify_not_sent_too_long
-            Unsendable.LOCKED -> R.string.notify_unlock_to_answer
-        }
         val mark = base.extras.getString(EXTRA_JOB)?.let(Mark::Job)
             ?: Mark.Outcome.takeIf { base.extras.getBoolean(EXTRA_OUTCOME) }
+        // Newer news is reposted as it is, which only stops the spinner.
+        val status = if (!asks(base, request)) {
+            null
+        } else {
+            when (reason) {
+                Unsendable.EMPTY -> null
+                Unsendable.ALREADY_SENDING -> R.string.notify_sending
+                Unsendable.TOO_LONG -> R.string.notify_not_sent_too_long
+                Unsendable.LOCKED -> R.string.notify_unlock_to_answer
+            }
+        }
         repost(request, name, base, null, status, mark, keepActions = true)
     }
 
@@ -91,6 +105,10 @@ class ActionFeedback(
         /** It shows a job's final outcome. */
         data object Outcome : Mark
     }
+
+    /** Whether [notification] (news or an answer's progress) asks [request]'s question. */
+    private fun asks(notification: Notification, request: ActionRequest): Boolean =
+        notification.extras.getString(NoticeNotification.EXTRA_QUESTION) == request.question
 
     private fun isOwnedBy(job: OutboxJob): Boolean = active(job.request)?.extras?.getString(EXTRA_JOB) == job.key
 
@@ -128,6 +146,8 @@ class ActionFeedback(
             .setOnlyAlertOnce(true)
             .setSilent(true)
         status?.let { builder.setSubText(context.getString(it)).setContentText(context.getString(it)) }
+        val question = base?.extras?.getString(NoticeNotification.EXTRA_QUESTION) ?: request.question
+        builder.addExtras(Bundle().apply { putString(NoticeNotification.EXTRA_QUESTION, question) })
         when (mark) {
             is Mark.Job -> builder.addExtras(Bundle().apply { putString(EXTRA_JOB, mark.key) })
             Mark.Outcome -> builder.addExtras(Bundle().apply { putBoolean(EXTRA_OUTCOME, true) })
@@ -162,6 +182,9 @@ class ActionFeedback(
         const val EXTRA_OUTCOME = "dev.passporter.notify.OUTCOME"
 
         private const val TAG = "PassporterNotify"
+
+        /** Outcomes shown even after the notification went: the person must act on them. */
+        private val WORTH_RETURNING = setOf(NotSent.UNCERTAIN, NotSent.UNREACHABLE, NotSent.NOT_PAIRED, NotSent.FAILED, NotSent.NEEDS_APP)
 
         /** The short reason shown for [reason]. */
         fun message(reason: NotSent): Int =

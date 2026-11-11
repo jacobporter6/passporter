@@ -67,4 +67,11 @@ class NoticeActionTest {
             ActionRequest.of(NoticeAction.REPLY, notice()),
         )
     }
+
+    @Test
+    fun allowOnceNeedsTheWholeAskOnShow() {
+        val cut = notice(line = "Run `cargo test && cur…")
+        assertEquals(listOf(NoticeAction.DENY, NoticeAction.DENY_WITH_NOTE), NoticeAction.of(cut))
+        assertEquals(listOf(NoticeAction.DENY, NoticeAction.DENY_WITH_NOTE), NoticeAction.of(notice(line = null)))
+    }
 }

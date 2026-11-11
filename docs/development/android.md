@@ -297,9 +297,12 @@ A notice can be answered without opening the app (package
 | | *Deny with note* | `choose` of `no_feedback`, the text as `feedbackText` | none | `dev.passporter.notify.TEXT` |
 | Finished | *Reply* | `prompt` with the text | `SEMANTIC_ACTION_REPLY` | `dev.passporter.notify.TEXT` |
 
-A notice does not say what kind of dialog it is, so a question or a plan
-approval (which have no `yes`/`no`) offers the same three actions, and
-they end as *Answer this one in the app*. A dialog without a pending id (the bridge could not parse it), or a state
+*Allow once* appears only when the notice shows the whole ask: a line cut
+by the bridge or the app (ending in `…`) could hide the rest of a command,
+so it gets *Deny* and *Deny with note* only. A notice does not say what
+kind of dialog it is, so a question or a plan approval offers the same
+actions: a Yes/No question takes *Allow once* as its Yes, others end as
+*Answer this one in the app*. A dialog without a pending id (the bridge could not parse it), or a state
 this app predates, has no actions: the tap opens the app. *Always allow* and
 other elevated options are never offered. The dialog answers carry no
 semantic action, so nothing in the system triggers them by guessing; none
@@ -322,7 +325,7 @@ be answered twice), and queues it:
 | `NoticeAction.kt` | Which actions a notice offers (pure), and the `ActionRequest` in the intent's data, `passporter://action/<action>/<agent>[/<pending>]` |
 | `NoticeActions.kt`, `NoticeActionReceiver.kt` | The notification actions, and their receiver |
 | `OutboxJob.kt` | The job, and the text rules (`ReplyText`: at most 4 KiB, a note on one line) |
-| `Outbox.kt`, `OutboxData.kt`, `OutboxWorker.kt` | The native outbox: WorkManager jobs, network-bound, with exponential backoff from 30 s and at most 8 attempts (about an hour online); a `Retry-After` longer than the backoff is followed for a dialog answer, up to 15 min (a reply keeps the backoff, so a later reply behind it never overtakes it). The unique work is per question: a dialog takes one answer (a second tap queues nothing), replies to an agent go one after the other |
+| `Outbox.kt`, `OutboxData.kt`, `OutboxWorker.kt` | The native outbox: WorkManager jobs, network-bound, with exponential backoff from 30 s and at most 8 attempts (roughly an hour online); a `Retry-After` longer than the backoff is followed for a dialog answer, up to 15 min (a reply keeps the backoff, so a later reply behind it never overtakes it). The unique work is per question: a dialog takes one answer (a second tap queues nothing), replies to an agent go one after the other |
 | `OutboxSender.kt`, `SendOutcome.kt`, `ActionBody.kt`, `BridgeState.kt`, `Bridge.kt`, `FrozenBodies.kt` | One attempt: reads the agent (and the dialog) with `DeviceAuth`, posts `POST /v1/actions` with `origin: "notification"`, classifies the answer |
 | `ActionFeedback.kt` | The notification while sending, after (removed when sent), or with the reason it was not sent |
 | `Reconciler.kt` | Clears old news when the app comes to the foreground and after a sent answer |
@@ -359,7 +362,11 @@ agent herdr cannot tell about keeps its notification). An answer's
 notification is cleared once its job is no longer queued (a job lost
 while *Sending…*), and so are the frozen bodies of jobs that are gone. A
 final outcome (*Already answered*, *Not sure it arrived*, ...) stays until
-you dismiss or tap it, or news replaces it.
+you dismiss or tap it, or news replaces it; if the notification was gone
+by then (swiped, or tapped into the app), only an outcome you must act on
+(*Not sure it arrived*, *Not sent*, *Not paired*, ...) comes back. A tap
+on a notice that news replaced meanwhile queues nothing: each notification
+names its question (`EXTRA_QUESTION`: the pending id, or `turn`).
 
 Answers are ordinary WorkManager jobs, not expedited ones: an expedited job
 needs a foreground-service notification on Android 11 and older. A reply

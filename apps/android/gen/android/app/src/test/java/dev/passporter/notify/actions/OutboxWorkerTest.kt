@@ -338,4 +338,25 @@ class OutboxWorkerTest {
     fun backoffDoubles() {
         assertEquals(listOf(30L, 60L, 120L, 240L), (0..3).map(Outbox::backoffSecs))
     }
+
+    @Test
+    fun aTapOnANoticeThatNewsReplacedQueuesNothing() {
+        show(notice())
+        val old = actionIntent(0)
+        show(notice(line = "Edit main.rs?", pending = "screen-3-cd"))
+        val news = requireNotNull(shown())
+        NoticeActionReceiver().onReceive(context, old)
+        assertTrue(queued().isEmpty())
+        val shown = requireNotNull(shown())
+        assertEquals(listOf("widget: Edit main.rs?"), messages(shown))
+        assertEquals(3, NotificationCompat.getActionCount(shown))
+        assertEquals(news.extras.getString(NoticeNotification.EXTRA_QUESTION), shown.extras.getString(NoticeNotification.EXTRA_QUESTION))
+    }
+
+    @Test
+    fun anAnswerThatAlreadyLandedIsNotBroughtBackAsAlreadyAnswered() {
+        val job = job(NoticeAction.ALLOW_ONCE)
+        assertEquals(ListenableWorker.Result.success(), worker(FakeBridge.of(dialog = "null"), job).doWork())
+        assertNull(shown())
+    }
 }
