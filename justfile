@@ -132,7 +132,7 @@ android-test:
         exit 1
     fi
     # tauri-build writes the Gradle include files the JVM tests need when it knows the project.
-    TAURI_ANDROID_PROJECT_PATH="$PWD/apps/android/gen/android" \
+    TAURI_ANDROID_PROJECT_PATH="$PWD/apps/android/gen/android" TAURI_ANDROID_PACKAGE_UNESCAPED=dev.passporter.app \
         cargo clippy --package passporter-android --all-targets --locked --target aarch64-linux-android -- -D warnings
     cargo nextest run --package passporter-android --locked
     cd apps/android/gen/android && ./gradlew --console=plain testUniversalDebugUnitTest
