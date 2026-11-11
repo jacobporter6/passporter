@@ -6,6 +6,7 @@ import android.security.keystore.KeyProperties
 import java.security.GeneralSecurityException
 import java.security.KeyPairGenerator
 import java.security.KeyStore
+import java.security.KeyStoreException
 import java.security.PrivateKey
 import java.security.ProviderException
 import java.security.Signature
@@ -75,7 +76,7 @@ internal class KeystoreKeys : DeviceKeys {
 
     override fun sign(alias: String, message: ByteArray): ByteArray {
         val key = keyStore().getKey(alias, null) as? PrivateKey
-            ?: throw ProviderException("no device key")
+            ?: throw KeyStoreException("no device key")
         val der = Signature.getInstance("SHA256withECDSA").run {
             initSign(key)
             update(message)

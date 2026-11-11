@@ -49,15 +49,51 @@ struct Failure {
     code: Option<String>,
 }
 
-/// The plugin's status, or `None` when there is no plugin to ask (Chrome,
-/// or an app whose `WebView` was too old for the shell to grant it).
-pub async fn probe() -> Option<NativeStatus> {
-    invoke_fn()?;
-    match call("status", &Object::new()).await {
-        Ok(status) => Some(status),
-        Err(error) => {
-            leptos::logging::warn!("native device identity unavailable: {error}");
-            None
+/// What asking the native layer for its status came to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Probe {
+    /// No native layer here: Chrome, or an app whose `WebView` was too old
+    /// for the shell to grant it (Tauri refuses the call, with no code).
+    Absent,
+    /// The plugin answered.
+    Status(NativeStatus),
+    /// The plugin is there but failed to answer (a busy Keystore, say).
+    Unknown,
+}
+
+impl Probe {
+    /// Whether a native layer is here, answering or not.
+    #[must_use]
+    pub fn present(&self) -> bool {
+        !matches!(self, Self::Absent)
+    }
+
+    /// Whether it may be paired: `false` only when it said it is not.
+    #[must_use]
+    pub fn maybe_paired(&self) -> bool {
+        match self {
+            Self::Status(status) => status.paired,
+            Self::Unknown => true,
+            Self::Absent => false,
+        }
+    }
+}
+
+/// Asks the plugin for its status.
+pub async fn probe() -> Probe {
+    if invoke_fn().is_none() {
+        return Probe::Absent;
+    }
+    match invoke::<NativeStatus>("status", &Object::new()).await {
+        Ok(status) => Probe::Status(status),
+        Err(failure) => {
+            leptos::logging::warn!("native device identity: {}", failure.message);
+            // The plugin always sends a code; Tauri's own refusals do not.
+            if failure.code.is_some() {
+                Probe::Unknown
+            } else {
+                Probe::Absent
+            }
         }
     }
 }
@@ -92,10 +128,16 @@ fn invoke_fn() -> Option<Function> {
 
 /// Calls the plugin's `command` with `args` and reads its answer as `T`.
 async fn call<T: DeserializeOwned>(command: &str, args: &Object) -> Result<T, DeviceAuthError> {
-    let invoke = invoke_fn().ok_or_else(|| {
-        DeviceAuthError::Api(ApiError::Transport(
-            "the app's native layer is gone".to_owned(),
-        ))
+    invoke(command, args)
+        .await
+        .map_err(|failure| auth_error(failure.code.as_deref(), failure.message))
+}
+
+/// [`call`], with the rejection as it came.
+async fn invoke<T: DeserializeOwned>(command: &str, args: &Object) -> Result<T, Failure> {
+    let invoke = invoke_fn().ok_or_else(|| Failure {
+        message: "the app's native layer is gone".to_owned(),
+        code: None,
     })?;
     let promise: Promise = invoke
         .call2(
@@ -106,28 +148,31 @@ async fn call<T: DeserializeOwned>(command: &str, args: &Object) -> Result<T, De
         .and_then(JsCast::dyn_into)
         .map_err(|e| failure(&e))?;
     let value = JsFuture::from(promise).await.map_err(|e| failure(&e))?;
-    decode(&value)
+    decode(&value).map_err(|message| Failure {
+        message,
+        code: Some("badResponse".to_owned()),
+    })
 }
 
 /// `value` (a plugin answer) as `T`, through its JSON text.
-fn decode<T: DeserializeOwned>(value: &JsValue) -> Result<T, DeviceAuthError> {
+fn decode<T: DeserializeOwned>(value: &JsValue) -> Result<T, String> {
     let text = if value.is_undefined() {
         "null".to_owned()
     } else {
         JSON::stringify(value)
             .map(String::from)
-            .map_err(|e| ApiError::Decode(js_error_message(&e)))?
+            .map_err(|e| js_error_message(&e))?
     };
-    serde_json::from_str(&text).map_err(|e| ApiError::Decode(e.to_string()).into())
+    serde_json::from_str(&text).map_err(|e| e.to_string())
 }
 
-/// A rejection as the error the session code acts on.
-fn failure(error: &JsValue) -> DeviceAuthError {
-    let failure = decode::<Failure>(error).unwrap_or_else(|_| Failure {
+/// A rejection as it came: the plugin's `{message, code}`, or Tauri's bare
+/// message.
+fn failure(error: &JsValue) -> Failure {
+    decode::<Failure>(error).unwrap_or_else(|_| Failure {
         message: js_error_message(error),
         code: None,
-    });
-    auth_error(failure.code.as_deref(), failure.message)
+    })
 }
 
 /// Maps the plugin's error codes (`DeviceAuthException.code` in Kotlin) to
@@ -185,6 +230,24 @@ mod tests {
                 "{final_:?} keeps the pairing"
             );
         }
+    }
+
+    #[test]
+    fn a_failed_probe_is_not_an_absent_layer() {
+        let paired = NativeStatus {
+            paired: true,
+            device_id: None,
+        };
+        assert!(Probe::Status(paired.clone()).maybe_paired());
+        assert!(
+            !Probe::Status(NativeStatus {
+                paired: false,
+                ..paired
+            })
+            .maybe_paired()
+        );
+        assert!(Probe::Unknown.present() && Probe::Unknown.maybe_paired());
+        assert!(!Probe::Absent.present() && !Probe::Absent.maybe_paired());
     }
 
     #[test]

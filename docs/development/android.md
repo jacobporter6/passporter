@@ -244,11 +244,12 @@ may do network or Keystore work):
 ```kotlin
 import dev.passporter.device.DeviceAuth
 import dev.passporter.device.DeviceAuthException
+import dev.passporter.device.Method
 import dev.passporter.device.Scope
 
 val auth = DeviceAuth.get(context)
 // An authenticated request; a 401 is retried once with a fresh token.
-val response = auth.send(Scope.APP, "POST", "/v1/agents/$id/reply", json)
+val response = auth.send(Scope.APP, Method.POST, "/v1/agents/$id/reply", json)
 // Or just a token, e.g. for a header you set yourself:
 val token = auth.token(Scope.CAR)       // token.authorization() == "Bearer …"
 // If the bridge refuses it: auth.invalidate(token), then ask again.

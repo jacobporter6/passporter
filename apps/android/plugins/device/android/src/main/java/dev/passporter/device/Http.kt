@@ -5,6 +5,18 @@ import java.io.InputStream
 import java.net.URL
 import javax.net.ssl.HttpsURLConnection
 
+/**
+ * The methods [DeviceAuth.send] offers: what `HttpsURLConnection` can send.
+ * (It cannot send `PATCH`; the bridge's one `PATCH` route, audio upload, is
+ * the PWA's.)
+ */
+enum class Method(internal val hasBody: Boolean) {
+    GET(false),
+    POST(true),
+    PUT(true),
+    DELETE(false),
+}
+
 /** One HTTP request to the bridge. `toString` leaves the headers out: one may be a token. */
 class HttpRequest(
     val method: String,

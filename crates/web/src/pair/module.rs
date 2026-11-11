@@ -118,7 +118,10 @@ fn host(app: AppState, nav: Nav) -> Result<JsValue, JsValue> {
     )?;
     set(
         "native",
-        Closure::<dyn Fn() -> bool>::new(session::native_identity).into_js_value(),
+        Closure::<dyn Fn() -> js_sys::Promise>::new(|| {
+            future_to_promise(async { Ok(JsValue::from_bool(session::native_identity().await)) })
+        })
+        .into_js_value(),
     )?;
     set(
         "pairNative",

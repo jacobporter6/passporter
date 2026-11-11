@@ -52,10 +52,10 @@ extern "C" {
     #[wasm_bindgen(method, js_name = adoptDevice)]
     fn adopt_device(this: &Host, device_id: &str, private: &CryptoKey) -> Promise;
 
-    /// Whether the page pairs through the Android app's native layer
-    /// ([`super::native`]) rather than with a `WebCrypto` key.
+    /// Resolves to whether the page pairs through the Android app's native
+    /// layer ([`super::native`]) rather than with a `WebCrypto` key.
     #[wasm_bindgen(method)]
-    fn native(this: &Host) -> bool;
+    fn native(this: &Host) -> Promise;
 
     /// Pairs through the native layer with `code` and signs in. Resolves
     /// like [`Host::adopt_device`].
@@ -164,8 +164,11 @@ async fn settle(promise: Option<Promise>) -> Result<(), String> {
 /// Android app the page pairs through the native layer instead.
 async fn pair(code: protocol::PairingCode) -> Result<(), String> {
     let host = host();
-    if host.as_ref().is_some_and(Host::native) {
-        return settle(host.map(|host| host.pair_native(code.as_str()))).await;
+    if let Some(host) = &host {
+        let native = JsFuture::from(host.native()).await;
+        if native.is_ok_and(|native| native.as_bool() == Some(true)) {
+            return settle(Some(host.pair_native(code.as_str()))).await;
+        }
     }
     let new = device::generate().await.map_err(|e| e.to_string())?;
     let paired = pair_device(

@@ -85,6 +85,8 @@ class DevicePlugin(private val activity: Activity) : Plugin(activity) {
     private fun work(invoke: Invoke, allowed: Set<String>, body: (JSObject) -> JSObject?) {
         worker.execute {
             try {
+                // Tauri passes the page's arguments object as is (no keys of
+                // its own), so anything unexpected came from the page.
                 val args = invoke.getArgs()
                 val unknown = args.keys().asSequence().firstOrNull { it !in allowed }
                 if (unknown != null) throw DeviceAuthException.InvalidInput("argument $unknown")
@@ -104,9 +106,9 @@ class DevicePlugin(private val activity: Activity) : Plugin(activity) {
 
         /**
          * Network and Keystore work stays off the thread Tauri calls in on.
-         * One pool for the process, so a recreated activity leaks no thread;
-         * [DeviceAuth] serializes the work itself.
+         * One thread for the process, so a recreated activity leaks none;
+         * [DeviceAuth] serializes the work anyway.
          */
-        val worker: ExecutorService = Executors.newCachedThreadPool()
+        val worker: ExecutorService = Executors.newSingleThreadExecutor()
     }
 }

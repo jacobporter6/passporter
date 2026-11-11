@@ -78,9 +78,9 @@ fn choose<K>(native_paired: Option<bool>, browser: Option<K>) -> Option<Identity
 thread_local! {
     /// The paired device's identity, once loaded or made.
     static DEVICE: RefCell<Option<Device>> = const { RefCell::new(None) };
-    /// Whether the Android app's native identity answers here: new
-    /// pairings then go through it ([`native_identity`]).
-    static NATIVE: Cell<bool> = const { Cell::new(false) };
+    /// Whether the Android app's native identity is here, once [`load`] has
+    /// asked: new pairings then go through it ([`native_identity`]).
+    static NATIVE: Cell<Option<bool>> = const { Cell::new(None) };
     /// Renewal generation: bumping it cancels the scheduled renewal and any
     /// retry loop.
     static GENERATION: Cell<u32> = const { Cell::new(0) };
@@ -165,11 +165,13 @@ fn current_device() -> Option<Device> {
     DEVICE.with_borrow(Clone::clone)
 }
 
-/// Whether pairing goes through the Android app's native layer (decided by
-/// [`load`]).
-#[must_use]
-pub fn native_identity() -> bool {
-    NATIVE.get()
+/// Whether pairing goes through the Android app's native layer: what
+/// [`load`] found, or, if pairing starts before it has asked, a fresh probe.
+pub async fn native_identity() -> bool {
+    match NATIVE.get() {
+        Some(native) => native,
+        None => native::probe().await.present(),
+    }
 }
 
 /// Loads credentials at startup: the pasted token, and in a secure context
@@ -188,12 +190,19 @@ pub async fn load(app: AppState) {
     }
     if secure_context() {
         let native = native::probe().await;
-        NATIVE.set(native.is_some());
-        let browser = device::load().await.unwrap_or_else(|error| {
-            leptos::logging::warn!("{error}");
+        NATIVE.set(Some(native.present()));
+        // A native layer that failed to answer counts as paired: signing in
+        // then says for sure ([`attempt`]), and nothing pairs a second time.
+        let native_paired = native.present().then(|| native.maybe_paired());
+        let browser = if native_paired == Some(true) {
             None
-        });
-        if let Some(device) = choose(native.map(|status| status.paired), browser) {
+        } else {
+            device::load().await.unwrap_or_else(|error| {
+                leptos::logging::warn!("{error}");
+                None
+            })
+        };
+        if let Some(device) = choose(native_paired, browser) {
             DEVICE.set(Some(device));
             set_credential(Credential::Device { name: None });
             renew(app).await;
@@ -305,22 +314,19 @@ async fn attempt(app: AppState, generation: u32) -> Attempt {
         }
         Err(error) => {
             leptos::logging::warn!("signing in failed: {error}");
-            if matches!(device, Identity::Native) && !native_paired().await {
-                // The native layer lost its pairing (its key is gone): show
-                // the app as unpaired, without deleting anything more.
+            let lost = matches!(device, Identity::Native) && !native::probe().await.maybe_paired();
+            if lost && GENERATION.get() == generation {
+                // The native layer lost its pairing (its key is gone): the
+                // app is unpaired, but nothing more is deleted.
                 DEVICE.set(None);
+                spawn_local(push::module::turn_off(app.token.get_untracked()));
+                app.token.set(None);
                 app.token_rejected.set(true);
                 set_credential(Credential::None);
             }
             Attempt::Stop
         }
     }
-}
-
-/// Whether the native layer still reports a pairing (`true` when it cannot
-/// be asked, so a passing glitch never shows the app as unpaired).
-async fn native_paired() -> bool {
-    native::probe().await.is_none_or(|status| status.paired)
 }
 
 /// Renews shortly before a token that lasts `expires_in_secs` expires.
@@ -415,7 +421,7 @@ async fn forget_device() -> Result<(), String> {
     // native one also when the identity in use is a browser key: `choose`
     // picks that only while the native side is unpaired, so this is a
     // no-op there, and it keeps Forget complete.
-    let native = if NATIVE.get() || matches!(device, Some(Identity::Native)) {
+    let native = if NATIVE.get() == Some(true) || matches!(device, Some(Identity::Native)) {
         native::forget().await.map_err(|e| e.to_string())
     } else {
         Ok(())

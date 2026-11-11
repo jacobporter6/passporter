@@ -223,14 +223,15 @@ class DeviceAuthTest {
         auth.pair(code, null)
         val stale = auth.token(Scope.APP)
         bridge.issued++ // the bridge restarted: tok1 is no longer valid
-        val response = auth.send(Scope.APP, "POST", "/v1/agents/a/reply", """{"text":"hi"}""")
+        val response = auth.send(Scope.APP, Method.POST, "/v1/agents/a/reply", """{"text":"hi"}""")
         assertEquals(200, response.status)
         val last = bridge.sent.last()
         assertEquals("https://bridge.example.org/v1/agents/a/reply", last.url)
         assertEquals("application/json", last.headers["Content-Type"])
         assertFalse("the request's toString leaves headers out", last.toString().contains("Bearer"))
         assertNotSame(stale, auth.token(Scope.APP))
-        assertThrows(DeviceAuthException.InvalidInput::class.java) { auth.send(Scope.APP, "GET", "//evil.example/") }
+        assertThrows(DeviceAuthException.InvalidInput::class.java) { auth.send(Scope.APP, Method.GET, "//evil.example/") }
+        assertThrows(DeviceAuthException.InvalidInput::class.java) { auth.send(Scope.APP, Method.GET, "/v1/x", "{}") }
     }
 
     @Test

@@ -4,6 +4,8 @@ import android.content.Context
 import android.os.SystemClock
 import java.io.File
 import java.io.IOException
+import java.security.ProviderException
+import java.security.SignatureException
 import java.util.EnumMap
 
 /** Whether this app is paired, and as which device. */
@@ -44,7 +46,7 @@ class SessionToken internal constructor(
  * ```kotlin
  * val auth = DeviceAuth.get(context)
  * val token = auth.token(Scope.CAR)              // cached until shortly before expiry
- * val reply = auth.send(Scope.APP, "POST", "/v1/agents/$id/reply", json)
+ * val reply = auth.send(Scope.APP, Method.POST, "/v1/agents/$id/reply", json)
  * ```
  */
 class DeviceAuth internal constructor(
@@ -122,14 +124,16 @@ class DeviceAuth internal constructor(
 
     /**
      * An authenticated request to the bridge with a [scope] token: [path] is
-     * absolute (`/v1/...`), [jsonBody] goes as `application/json`. A 401 is
+     * absolute (`/v1/...`), [jsonBody] goes as `application/json` (only with
+     * [Method.POST] or [Method.PUT]). A 401 is
      * retried once with a fresh token. Any answer the bridge gives is
      * returned as is; only failing to get a token throws.
      *
      * @throws DeviceAuthException as [token], [DeviceAuthException.Unreachable],
      *   or [DeviceAuthException.InvalidInput] when [path] is not absolute.
      */
-    fun send(scope: Scope, method: String, path: String, jsonBody: String? = null): HttpResponse {
+    fun send(scope: Scope, method: Method, path: String, jsonBody: String? = null): HttpResponse {
+        if (jsonBody != null && !method.hasBody) throw DeviceAuthException.InvalidInput("body for ${method.name}")
         val bridge = origin() ?: throw DeviceAuthException.NoBridge()
         val url = try {
             bridge.resolve(path)
@@ -143,14 +147,14 @@ class DeviceAuth internal constructor(
         return sendWith(token(scope), method, url, jsonBody)
     }
 
-    private fun sendWith(token: SessionToken, method: String, url: String, jsonBody: String?): HttpResponse {
+    private fun sendWith(token: SessionToken, method: Method, url: String, jsonBody: String?): HttpResponse {
         val headers = buildMap {
             put("Authorization", token.authorization())
             put("Accept", "application/json")
             if (jsonBody != null) put("Content-Type", "application/json")
         }
         return try {
-            transport.send(HttpRequest(method, url, headers, jsonBody))
+            transport.send(HttpRequest(method.name, url, headers, jsonBody))
         } catch (e: IOException) {
             throw DeviceAuthException.Unreachable(e)
         }
@@ -195,7 +199,8 @@ class DeviceAuth internal constructor(
         val grant = client.session(SessionRequest(record.deviceId, challenge, signature, scope))
         if (grant.scope != scope) throw DeviceAuthException.BadResponse("granted ${grant.scope.wire}, asked ${scope.wire}")
         // Counted from before the request, so the cache never outlives the token.
-        val token = SessionToken(grant.token, scope, grant.deviceName, asked + grant.expiresInSecs * 1000)
+        val lifetimeMs = grant.expiresInSecs.coerceAtMost(MAX_LIFETIME_SECS) * 1000
+        val token = SessionToken(grant.token, scope, grant.deviceName, asked + lifetimeMs)
         tokens[scope] = token
         return token
     }
@@ -214,6 +219,9 @@ class DeviceAuth internal constructor(
     private fun sign(alias: String, message: ByteArray): ByteArray = try {
         keys.sign(alias, message)
     } catch (e: Exception) {
+        // Only what a busy Keystore throws; a missing key or a malformed
+        // signature will not get better.
+        if (e !is ProviderException && e !is SignatureException) throw DeviceAuthException.Keystore(e)
         Thread.sleep(SIGN_RETRY_MS)
         keystore { keys.sign(alias, message) }
     }
@@ -234,6 +242,9 @@ class DeviceAuth internal constructor(
          * handed out is never one the PWA would renew at once.
          */
         const val REFRESH_MARGIN_MS = 120_000L
+
+        /** Longer than any session the bridge grants (15 min); keeps the arithmetic sane. */
+        private const val MAX_LIFETIME_SECS = 86_400L
 
         /** The pause before the one retry of a failed signature. */
         private const val SIGN_RETRY_MS = 1_000L

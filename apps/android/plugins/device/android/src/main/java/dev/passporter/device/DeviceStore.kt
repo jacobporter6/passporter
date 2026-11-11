@@ -1,6 +1,7 @@
 package dev.passporter.device
 
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import org.json.JSONException
 import org.json.JSONObject
@@ -41,13 +42,17 @@ internal class DeviceStore(private val file: File) {
     fun save(record: DeviceRecord) {
         file.parentFile?.mkdirs()
         val partial = File(file.path + ".partial")
-        partial.writeText(
-            JSONObject()
-                .put("deviceId", record.deviceId.value)
-                .put("keyAlias", record.keyAlias)
-                .put("origin", record.origin.toString())
-                .toString(),
-        )
+        val text = JSONObject()
+            .put("deviceId", record.deviceId.value)
+            .put("keyAlias", record.keyAlias)
+            .put("origin", record.origin.toString())
+            .toString()
+        FileOutputStream(partial).use { out ->
+            out.write(text.toByteArray(Charsets.UTF_8))
+            // On disk before the rename, so a power cut cannot leave an
+            // empty record (which would be dropped, orphaning the pairing).
+            out.fd.sync()
+        }
         if (!partial.renameTo(file)) throw IOException("could not replace $file")
     }
 
