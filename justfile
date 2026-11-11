@@ -81,6 +81,62 @@ demo: web-build
 android-setup:
     deploy/android/setup.sh
 
+# Android APK (apps/android) into target/android/: `debug` (default) or `release`, signed with the PASSPORTER_ANDROID_* env vars.
+android-build profile="debug" abi="aarch64":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export MISE_ENV=android
+    eval "$(mise env --shell bash)"
+    if ! command -v cargo-tauri >/dev/null || [[ ! -d "${ANDROID_HOME:-}/build-tools/37.0.0" ]]; then
+        echo "android: no Android toolchain; run just android-setup (docs/development/android.md)" >&2
+        exit 1
+    fi
+    case "{{profile}}" in
+        debug) flags=(--debug) ;;
+        release)
+            missing=()
+            for var in PASSPORTER_ANDROID_KEYSTORE PASSPORTER_ANDROID_KEYSTORE_PASSWORD \
+                    PASSPORTER_ANDROID_KEY_ALIAS PASSPORTER_ANDROID_KEY_PASSWORD; do
+                [[ -n "${!var:-}" ]] || missing+=("$var")
+            done
+            if (( ${#missing[@]} )); then
+                echo "android-build release: set ${missing[*]} (docs/development/android.md, Release builds)" >&2
+                exit 1
+            fi
+            if [[ ! -f "$PASSPORTER_ANDROID_KEYSTORE" ]]; then
+                echo "android-build release: no keystore at PASSPORTER_ANDROID_KEYSTORE ($PASSPORTER_ANDROID_KEYSTORE)" >&2
+                exit 1
+            fi
+            flags=() ;;
+        *) echo "android-build: the profile is debug or release, not {{profile}}" >&2; exit 2 ;;
+    esac
+    cargo metadata --locked --format-version 1 >/dev/null
+    out=apps/android/gen/android/app/build/outputs/apk/universal/{{profile}}
+    # A fresh package: AGP rewrites an existing APK in place and leaves gaps in it.
+    rm -rf "$out"
+    (cd apps/android && cargo tauri android build --ci --apk --target {{abi}} "${flags[@]}")
+    mkdir -p target/android
+    apk=target/android/passporter-{{profile}}.apk
+    cp "$out/app-universal-{{profile}}.apk" "$apk"
+    "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify "$apk"
+    echo "$apk ($(du -h "$apk" | cut -f1))"
+
+# Android checks: clippy for the Android target, the shell's Rust tests, Gradle's JVM unit tests.
+android-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export MISE_ENV=android
+    eval "$(mise env --shell bash)"
+    if ! command -v cargo-tauri >/dev/null || [[ ! -d "${ANDROID_HOME:-}/build-tools/37.0.0" ]]; then
+        echo "android: no Android toolchain; run just android-setup (docs/development/android.md)" >&2
+        exit 1
+    fi
+    # tauri-build writes the Gradle include files the JVM tests need when it knows the project.
+    TAURI_ANDROID_PROJECT_PATH="$PWD/apps/android/gen/android" \
+        cargo clippy --package passporter-android --all-targets --locked --target aarch64-linux-android -- -D warnings
+    cargo nextest run --package passporter-android --locked
+    cd apps/android/gen/android && ./gradlew --console=plain testUniversalDebugUnitTest
+
 # Reclaim stale build output across worktrees (see crates/xtask).
 prune *args:
     cargo xtask prune {{args}}

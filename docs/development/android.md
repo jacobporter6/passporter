@@ -1,19 +1,27 @@
 ---
-description: Setting up the toolchain for Passporter's Android app. One script installs a JDK, the Android SDK and NDK, the Rust Android targets and the Tauri CLI under your user, at pinned versions.
+description: Building, testing and installing Passporter's Android app, a Tauri 2 shell around the PWA. One script installs the toolchain under your user at pinned versions; two just recipes build the APK and run its checks.
 sidebar:
   order: 2
 sources:
+  - apps/android/
   - deploy/android/setup.sh
   - mise.android.toml
   - justfile
 ---
 
-# Android toolchain
+# Android app
 
-The Android app (planned, [design §3](../design.md)) is a Tauri 2 shell
-around the PWA. Building it needs a JDK, the Android SDK and NDK, the Rust
-Android targets and the Tauri CLI. One script installs all of them under
-your user, with no sudo and no Android Studio.
+The Android app ([design §3](../design.md), decision D8) is a Tauri 2
+shell in `apps/android`. It does not bundle the PWA: on first launch it
+asks for your bridge's HTTPS address (the one you open in Chrome), then
+loads the PWA from there, so the app shows exactly what the browser shows
+and picks up PWA updates without a new APK. You pair the phone in the PWA
+as usual. Native plugins (notifications, UnifiedPush, the recorder,
+Android Auto) are later additions.
+
+Building it needs a JDK, the Android SDK and NDK, the Rust Android
+targets and the Tauri CLI. One script installs all of them under your
+user, with no sudo and no Android Studio.
 
 ## Set up from scratch
 
@@ -46,6 +54,129 @@ That sets `ANDROID_HOME`, `NDK_HOME` and `JAVA_HOME` and puts `java` and
 (for example Android Studio's `~/Android/Sdk`) inside the repo, so the
 script installs its own SDK rather than changing yours.
 
+## Build
+
+```sh
+just android-build            # debug APK, arm64: target/android/passporter-debug.apk
+just android-build debug x86_64   # for an x86_64 emulator
+just android-build release    # signed release APK (see Release builds)
+```
+
+The recipe loads the Android environment itself (`MISE_ENV=android`), so
+it works from any shell. It builds one ABI (`aarch64` by default, which
+fits current phones; also `armv7`, `i686`, `x86_64`), checks the result
+with `apksigner verify`, and prints the APK's path and size. A debug build
+is signed with Gradle's automatic debug key (`~/.android/debug.keystore`)
+and is about 40 MB, most of it the unstripped Rust library.
+
+## Test
+
+```sh
+just android-test
+```
+
+It runs clippy on the shell for the Android target, the shell's Rust tests
+(also part of `just verify`), and Gradle's JVM unit tests
+(`testUniversalDebugUnitTest`, in `gen/android/app/src/test/`). Nothing
+here needs a device. `just verify` and CI never touch the Android
+toolchain: on the host the crate builds without Tauri.
+
+## Install on a phone
+
+The APK is sideloaded (decision D3). Either:
+
+- **adb**: turn on *Developer options → USB debugging* on the phone, plug
+  it in, and run
+  `$ANDROID_HOME/platform-tools/adb install -r target/android/passporter-debug.apk`.
+- **File transfer**: copy the APK to the phone (USB, a file share), open it
+  in the Files app, and allow *Install unknown apps* for that app when
+  Android asks.
+
+Open Passporter, enter the bridge's address (for example
+`https://bridge.example.ts.net`), then pair on the next screen as in the
+browser. The app remembers the address. To use a different bridge, clear
+the app's storage (*Settings → Apps → Passporter → Storage → Clear
+storage*); that also forgets the pairing.
+
+A debug and a release build use different keys, so Android refuses to
+install one over the other: uninstall first.
+
+## Release builds
+
+A release APK is signed with your own key, which only you hold. Create it
+once, outside the repo (`keytool` comes with the JDK; run it in the
+Android environment, and choose the passwords when it asks):
+
+```sh
+mkdir -p ~/.local/share/passporter
+keytool -genkeypair -v -storetype PKCS12 \
+    -keystore ~/.local/share/passporter/android-release.jks \
+    -alias passporter -keyalg EC -groupname secp256r1 -validity 10000 \
+    -dname "CN=Passporter"
+```
+
+Back it up: an update must be signed with the same key, or Android makes
+you uninstall (and lose the app's data) first. Then build with the four
+variables set, for example from a password manager:
+
+```sh
+export PASSPORTER_ANDROID_KEYSTORE=~/.local/share/passporter/android-release.jks
+export PASSPORTER_ANDROID_KEY_ALIAS=passporter
+export PASSPORTER_ANDROID_KEYSTORE_PASSWORD=...   # from your password manager
+export PASSPORTER_ANDROID_KEY_PASSWORD=...        # the same as the keystore's, for PKCS12
+just android-build release   # target/android/passporter-release.apk
+```
+
+The recipe refuses to start if any of them is unset or the keystore is
+missing. Gradle reads them from the environment only; nothing is written
+to the repo or to Gradle's files.
+
+## Network security
+
+The app only talks HTTPS, and trusts only the certificate authorities that
+ship with Android (`res/xml/network_security_config.xml`): plain HTTP is
+off in every build, and CAs you install yourself in Android's settings are
+ignored. Every recipe in [Deploying](../deploy.md) serves the phone a
+publicly trusted certificate (Tailscale's `*.ts.net`, Let's Encrypt, or a
+public wildcard on your own edge), so this needs nothing on the phone. The
+insecure MVP mode (plain HTTP over WireGuard) does not work in the app;
+use the browser for it.
+
+If your bridge's proxy really serves a certificate from a private CA, build
+an APK that trusts that CA as well: put its certificate (PEM) at
+`apps/android/gen/android/app/src/main/res/raw/bridge_ca.pem` and add
+`<certificates src="@raw/bridge_ca" />` next to the `system` entry in the
+config. That build then trusts the CA for every site, so keep the CA's key
+safe and the change out of commits (the JVM tests reject it on purpose).
+
+## How the shell works
+
+| Path in `apps/android` | What |
+|---|---|
+| `src/lib.rs`, `src/shell.rs` | The Tauri app: the main window, the `connect` command, the navigation guard, the bridge capability. `shell.rs` builds for Android only |
+| `src/origin.rs`, `src/navigation.rs`, `src/store.rs` | The rules, in plain Rust tested on any host: what counts as a bridge origin, which pages the webview may show, where the origin is saved |
+| `connect/` | The bundled Connect page (`frontendDist`) |
+| `tauri.conf.json` | App id `dev.passporter.app`, name, the Connect page's CSP |
+| `gen/android/` | The Gradle project from `cargo tauri android init`, trimmed: manifest, theme, icons, network security config, signing, JVM tests. Build output and the files Tauri regenerates on each build are gitignored |
+
+Only Passporter's own pages reach native IPC, by three fences:
+
+1. **Navigation.** The webview shows the bundled Connect page and the
+   paired origin, and refuses every other navigation (`navigation.rs`).
+   The PWA's CSP (`default-src 'self'`) keeps other origins out of frames
+   and scripts.
+2. **Capability.** At launch, or when you connect, the shell grants a
+   remote capability to exactly `https://<bridge>/*` in the main window.
+   It lists the plugin permissions the PWA may use (none yet).
+3. **App commands.** The app has no ACL manifest, so Tauri refuses its own
+   commands (`connect`) to every remote page; only the bundled Connect
+   page can call them.
+
+The address is saved in the app's private storage (`bridge-origin` in the
+data directory); it is not a secret. The device key and session tokens
+stay in the PWA's own storage, as in the browser. App backups are off
+(`allowBackup="false"`), so the key never leaves the phone.
+
 ## What it installs, and where
 
 | What | Version | Where | Pinned in |
@@ -70,7 +201,8 @@ through rustup rather than `rust-toolchain.toml`, so people who never build
 the app don't download them.
 
 Gradle and the Android Gradle plugin are not installed here: the app's
-Gradle wrapper fetches them into `~/.gradle` on its first build. A debug
+Gradle wrapper fetches them into `~/.gradle` on its first build (Gradle
+9.6.1, checked against its pinned SHA-256; AGP 9.3.1). A debug
 build also creates the debug signing key `~/.android/debug.keystore`.
 
 ## Upgrading

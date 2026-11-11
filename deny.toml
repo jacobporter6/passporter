@@ -9,6 +9,10 @@ ignore = [
   # `paste` is unmaintained but finished: compile-time proc-macro, no runtime code.
   # Pulled in by leptos via either_of / tachys. Maintainer-approved.
   { id = "RUSTSEC-2024-0436", reason = "transitive via leptos; compile-time only, no known vulnerability" },
+  # `proc-macro-error` is unmaintained: a compile-time proc-macro under glib-macros,
+  # which tauri pulls in only for its Linux desktop webview (gtk). The Android app
+  # (apps/android) never builds it.
+  { id = "RUSTSEC-2024-0370", reason = "transitive via tauri's Linux-only gtk stack; not in the Android build" },
 ]
 
 [licenses]
