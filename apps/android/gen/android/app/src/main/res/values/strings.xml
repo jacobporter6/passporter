@@ -1,6 +1,10 @@
 <resources>
     <string name="app_name">Passporter</string>
 
+    <!-- Launcher shortcut (res/xml/shortcuts.xml). -->
+    <string name="shortcut_bridge_short">Bridge</string>
+    <string name="shortcut_bridge_long">Bridge address</string>
+
     <!-- Agent notifications (dev.passporter.notify). -->
     <string name="notify_channel_needs_you">Needs you</string>
     <string name="notify_channel_needs_you_description">An agent is waiting for your answer.</string>

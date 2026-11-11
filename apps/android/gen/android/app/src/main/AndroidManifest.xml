@@ -31,7 +31,21 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Long-press the icon: "Bridge" opens the bundled Bridge page,
+                 through BridgeShortcutActivity, to change the address. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
+        <!-- The Bridge shortcut's own task, so the CLEAR_TASK Android adds
+             to static shortcuts never destroys MainActivity. -->
+        <activity
+            android:name=".BridgeShortcutActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <!-- Answers from notification actions (dev.passporter.notify.actions). -->
         <receiver
             android:name="dev.passporter.notify.actions.NoticeActionReceiver"

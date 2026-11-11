@@ -98,9 +98,12 @@ The APK is sideloaded (decision D3). Either:
 
 Open Passporter, enter the bridge's address (for example
 `https://bridge.example.ts.net`), then pair on the next screen as in the
-browser. The app remembers the address. To use a different bridge, clear
-the app's storage (*Settings → Apps → Passporter → Storage → Clear
-storage*); that also forgets the pairing.
+browser. The app remembers the address. To use a different bridge,
+long-press the app's icon, choose *Bridge*, then *Change address*: the app
+forgets the address and this phone's device key, and restarts on the
+Connect page, where you connect and pair again
+([The Bridge page](#the-bridge-page)). The old bridge still lists the
+device until you revoke it there (`passporter devices revoke`).
 
 A debug and a release build use different keys, so Android refuses to
 install one over the other: uninstall first.
@@ -162,9 +165,11 @@ safe and the change out of commits (`SecurityConfigTest` rejects it on purpose).
 
 | Path in `apps/android` | What |
 |---|---|
-| `src/lib.rs`, `src/shell.rs` | The Tauri app: the main window, the `connect` command, the navigation guard, the bridge capability. `shell.rs` builds for Android only |
-| `src/origin.rs`, `src/navigation.rs`, `src/store.rs` | The rules, in plain Rust tested on any host: what counts as a bridge origin, which pages the webview may show, where the origin is saved |
-| `connect/` | The bundled Connect page (`frontendDist`) |
+| `src/lib.rs`, `src/shell.rs` | The Tauri app: the main window, the app commands (`connect`, `bridge`, `forget_bridge`), the navigation guard, the bridge capability. `shell.rs` builds for Android only |
+| `src/native.rs` | The Tauri plugin `passporter-shell`: registers the app's own Kotlin side (`ShellPlugin`, below) and talks to it. Android only |
+| `src/origin.rs`, `src/navigation.rs`, `src/store.rs`, `src/destination.rs` | The rules, in plain Rust tested on any host: what counts as a bridge origin, which pages the webview may show, where the origin is saved, where a notification tap, the shortcut or a failed load sends the webview |
+| `connect/` | The bundled pages (`frontendDist`): the Connect page (`index.html`) and the Bridge page (`bridge.html`) |
+| `gen/android/app/src/main/java/dev/passporter/app/` | `MainActivity` (wraps each new webview's client); `ShellPlugin` (the shell's Kotlin side: intents, restart), `ShellRequest` (what it asks the shell to show), `ShellWebViewClient` (wraps wry's client: refused links to the browser, failed loads, history), `BridgeShortcutActivity` (the shortcut's trampoline) |
 | `plugins/device/` | The device identity plugin: Keystore key, native bridge client, the PWA's `device` commands ([Device identity](#device-identity)) |
 | `tauri.conf.json` | App id `dev.passporter.app`, name, the Connect page's CSP |
 | `gen/android/` | The Gradle project from `cargo tauri android init`, trimmed: manifest, theme, icons, network security config, signing, JVM tests. Build output and the files Tauri regenerates on each build are gitignored |
@@ -174,10 +179,19 @@ Only Passporter's own pages reach native IPC, by three fences:
 1. **Navigation.** The webview shows the bundled Connect page until you
    connect, then only the paired origin, and refuses every other
    navigation (`navigation.rs`). Back is a history navigation the guard
-   does not see, so the Connect page removes itself from history when it
-   opens the bridge.
+   does not see, so the bundled pages remove themselves from history when
+   they open the bridge. Once paired, only the shell itself opens its
+   Bridge page (`destination.rs`): wry checks the shell's own loads against
+   the guard too, so the shell names the page's exact URL first and the
+   guard lets that one load through once (`navigation::Guard`). No page
+   can navigate there itself (`ShellWebViewClient` refuses it before the
+   guard), and the history never holds a bundled page beside another one,
+   so Back and Forward cannot reach it either. A bridge URL that fails to
+   load does bring it up ([The Bridge page](#the-bridge-page)).
    The PWA's CSP (`default-src 'self'`) keeps other origins out of frames
-   and scripts.
+   and scripts. A refused link you tapped opens in the browser instead
+   ([Links](#links-taps-and-the-bridge-page)); the webview itself still
+   never leaves the bridge.
 2. **Capability.** At launch, or when you connect, the shell grants a
    remote capability to exactly `https://<bridge>/*` in the main window.
    The address must be a plain DNS name or IPv4 address, so the pattern
@@ -185,8 +199,10 @@ Only Passporter's own pages reach native IPC, by three fences:
    It lists the plugin permissions the PWA may use: `device:default`.
    It is granted only on a WebView with `WEB_MESSAGE_LISTENER` (below).
 3. **App commands.** The app has no ACL manifest, so Tauri refuses its own
-   commands (`connect`) to every remote page; only the bundled Connect
-   page can call them.
+   commands (`connect`, `bridge`, `forget_bridge`) to every remote page;
+   only the bundled pages can call them. The `passporter-shell` plugin has no
+   permissions at all, so no page reaches its Kotlin commands (`watch`,
+   `restart`); only Rust calls them.
 
 Everything on the bridge's origin counts as Passporter, so serve nothing
 else on that host name: another app behind the same proxy name would get
@@ -202,8 +218,8 @@ backup and data-extraction rules that exclude everything), so the key
 stays on the phone; a new phone pairs afresh.
 
 Fence 1 does not see POST navigations (Android does not report them); the
-pages' CSP `form-action` (`'self'` on the bridge, `'none'` on the Connect
-page) covers form submissions instead.
+pages' CSP `form-action` (`'self'` on the bridge, `'none'` on the bundled
+pages) covers form submissions instead.
 
 Fence 2 tells frames apart only on a current WebView: Tauri learns each
 frame's own origin through `WEB_MESSAGE_LISTENER` (Android System WebView
@@ -214,7 +230,11 @@ while the Connect page is being replaced could even count as local. So the
 shell asks the device plugin about the feature before granting anything,
 and on an old WebView grants nothing: logcat says why, and the PWA keeps
 its device key in WebCrypto as in Chrome. The app never adds a local
-capability.
+capability. The app commands still answer local pages on an old WebView:
+a message the bridge's page sends while the shell replaces it with the
+Bridge page can count as local. The bridge's own PWA sends none, but a
+bridge page can bring up the Bridge page by loading a URL that fails; the
+worst would be `forget_bridge`.
 
 ## Notifications
 
@@ -241,9 +261,11 @@ line and the *Decide* line, never more (the car reads the same). A tap
 opens the app with the intent `passporter://agent/<id>` (the id is one
 percent-encoded path segment: read it with `NoticeNotification.agentToOpen`).
 
-Known gaps: the shell does not yet navigate to the agent on a tap. Each
-agent's conversation shortcut stays; Android drops the oldest once the app
-reaches its shortcut limit.
+A tap opens that agent's screen ([Links, taps and the Bridge
+page](#links-taps-and-the-bridge-page)); old news is cleared when you open
+the app ([Answering from the shade](#answering-from-the-shade)). Known gap:
+each agent's conversation shortcut stays; Android drops the oldest once
+the app reaches its shortcut limit.
 
 A debug build can post sample messages through the same path, from the dev
 machine with the phone on adb (`-n` targets the receiver, which only adb's
@@ -326,6 +348,68 @@ reads `GET /v1/agents` (only if a notification is showing) and removes a
 dialog's notification once the agent is no longer blocked, a finished
 turn's once it is no longer unread, and any whose agent is gone. Answers
 still in progress are left alone.
+
+## Links, taps and the Bridge page
+
+The shell's Kotlin side (`ShellPlugin`) tells the shell what to show; the
+shell (`destination.rs`) builds every URL from the saved bridge origin, and
+ignores every request until a bridge is paired.
+
+- **A notification tap** opens `MainActivity` with the agent in the intent.
+  Cold (the app was closed), the window starts on `https://<bridge>/agent/<id>`;
+  warm, the shell sends the webview there. An intent Android delivers
+  again when it restores the app from Recents is ignored. The id is
+  checked against the bridge's id rules on both sides (`AgentId`), and the URL against the
+  navigation guard.
+- **A link to another site** that you tap in the PWA (the link confirm's
+  *Open*) opens in your browser. The guard still refuses it in the webview;
+  `ShellWebViewClient` then opens it with an Android `VIEW` intent only for
+  a top-level navigation you started (a tap, not a redirect, a frame or a
+  script on its own) to an `https://` or `http://` address. Every other
+  scheme (`intent:`, `file:`, `content:`, `javascript:`, ...) is refused and
+  goes nowhere. wry does not tell the shell whether a navigation was a tap,
+  which is why this part is Kotlin, wrapping wry's `WebViewClient`
+  (`ShellWebViewClientTest` fails if wry starts overriding a method the
+  wrapper does not pass on).
+
+### The Bridge page
+
+The bundled Bridge page (`connect/bridge.html`) shows the bridge's
+address, a button back to it, and *Change address*. The shell opens it
+
+- when a bridge page fails to load in the main frame: no network, the
+  bridge down, or a 5xx from its proxy. This is the first-launch case,
+  before the PWA's service worker has cached the app (once it has, the PWA
+  opens offline and shows its own offline state). The button reads
+  *Retry*;
+- from the launcher: long-press the icon and choose *Bridge* (a static
+  shortcut, `res/xml/shortcuts.xml`). Android starts a static shortcut
+  with `FLAG_ACTIVITY_CLEAR_TASK`, which would destroy a running
+  `MainActivity` and its webview, so the shortcut opens
+  `BridgeShortcutActivity`, in a task of its own, which passes the request
+  on to `MainActivity`.
+
+The page has a fresh history (no bundled page shares one with another
+page): Back from it leaves the app rather than reloading a bridge page
+that failed, and *Retry* or *Open Passporter* replaces it with the
+bridge. Both go to the bridge's start page, not to the agent a failed tap
+asked for.
+
+*Change address* asks once more, then calls `forget_bridge`: the shell
+deletes the saved address and asks `ShellPlugin`, which forgets the
+native pairing (`DeviceAuth.forget`: the Keystore key, the device id and
+cached tokens) and restarts the app in a new process, on the Connect
+page. The restart is deliberate:
+Tauri cannot revoke the capability it granted to the old origin, so only a
+new process starts without it. The old bridge's data in the webview
+(its service worker cache, IndexedDB) stays under its own origin, which
+the app never opens again; clearing the app's storage removes it. The old
+bridge still lists the device until you revoke it there.
+
+Any app can send `MainActivity` the tap or shortcut intent, because a
+launcher activity is exported. The worst that does is open an agent's
+screen or the Bridge page; changing the address always needs your two
+taps on the page.
 
 ## Device identity
 
