@@ -77,8 +77,15 @@ object ReplyText {
         !char.isWhitespace() && char != '\u200C' && char != '\u200D' && char !in '\uFE00'..'\uFE0F'
 
     /** [raw] cleaned for [action], or why it cannot be sent. */
-    fun clean(raw: CharSequence?, action: NoticeAction): Result {
-        val singleLine = action != NoticeAction.REPLY
+    fun clean(raw: CharSequence?, action: NoticeAction): Result = clean(raw, singleLine = action != NoticeAction.REPLY)
+
+    /**
+     * [raw] cleaned as one line ([singleLine]) or a prompt, at most
+     * [maxBytes] UTF-8 bytes, or why it cannot be sent. Android Auto's
+     * utterance (`dev.passporter.car`) is one line of at most the bridge's
+     * `MAX_UTTERANCE_BYTES`.
+     */
+    fun clean(raw: CharSequence?, singleLine: Boolean, maxBytes: Int = MAX_BYTES): Result {
         val text = buildString {
             raw?.codePoints()?.forEach { codePoint ->
                 when {
@@ -95,7 +102,7 @@ object ReplyText {
         }.trim()
         return when {
             text.none(::isVisible) -> Result.Problem(Unsendable.EMPTY)
-            text.toByteArray(Charsets.UTF_8).size > MAX_BYTES -> Result.Problem(Unsendable.TOO_LONG)
+            text.toByteArray(Charsets.UTF_8).size > maxBytes -> Result.Problem(Unsendable.TOO_LONG)
             else -> Result.Clean(text)
         }
     }

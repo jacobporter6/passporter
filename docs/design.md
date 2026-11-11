@@ -355,9 +355,9 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
   with the phone's distributor while paired and shows a notice as a
   notification with no network call, also with its process cold (T31a,
   T32a); a tap opens that agent (T30c), and it can be answered from the
-  shade (T31b); Android Auto is not built yet. Web Push (PWA)
-  subscriptions keep the content-free ping, and the PWA inside the app
-  makes none.
+  shade (T31b); Android Auto reads announced notices aloud and takes
+  spoken replies (T33). Web Push (PWA) subscriptions keep the
+  content-free ping, and the PWA inside the app makes none.
 - **Only news disrupts.** A message is sent only if its reason still holds
   when its debounce ends (the agent still blocked, or its finished turn
   still unread), and only for a change since the last one; it carries
@@ -372,13 +372,19 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
   Each answer is a durable WorkManager job with its idempotency key and
   `origin: "notification"` (§6.5), and the notification shows how it went
   (sent, already answered, the agent moved on). The app clears
-  notifications whose news is old when it comes to the foreground. A
-  mark-as-read action waits for a bridge API (a turn is unread until herdr
-  sees the pane). See docs/development/android.md.
-- **Android Auto** (planned) uses the messaging category: no custom car UI, just
+  notifications whose news is old when it comes to the foreground. The
+  shade offers no mark-as-read: that waits for a bridge API (a turn is
+  unread until herdr sees the pane); Android Auto's does nothing (below). See docs/development/android.md.
+- **Android Auto** (T33) uses the messaging category: no custom car UI, just
   correctly built notifications plus the `automotive_app_desc` declaration
   (`<uses name="notification"/>`). Android Auto reads "widget: run
-  pnpm test?" aloud and takes a spoken reply. Notes:
+  pnpm test?" aloud and takes a spoken reply. An announced notice carries
+  two invisible actions, reply and mark-as-read, the notification's only
+  semantic actions (the shade's carry none, so the car never reaches
+  them); they act only while Android Auto projects, then also with the
+  phone locked. The bridge's answer sentence is added to the conversation
+  for the car to read back. Mark-as-read does nothing (no bridge API; the
+  notification stays for the car). See docs/development/android.md. Notes:
   - Sideloaded app, so you must enable Android Auto developer settings →
     "Unknown sources". This is accepted (decision D3).
   - Car text is the notice's one line (what a blocked agent asks), or a
@@ -386,7 +392,9 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
     one-line command a permission asks about.
   - **Announcements**: blocked agents always; a finished agent only once
     its TL;DR has a *Decide* line (`[push] car_announce_done`, default
-    `"decide"`; `"always"` or `"never"`).
+    `"decide"`; `"always"` or `"never"`). A notice not announced gets no
+    car actions; Google requires both for Android Auto, so it is expected
+    to stay silent in the car (Android Auto's behaviour: a DHU check).
   - **Car replies** go to `POST /v1/agents/:id/car-reply` with the
     transcribed utterance as heard, the pending id from the notice, and an
     idempotency key; the app adds nothing. The bridge maps it with a tiny
@@ -410,8 +418,9 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
     `car`. The bridge derives every action's origin from the session's
     scope, never the body, and a car session reaches only the car-safe
     endpoints (agent list, pending, TL;DR, car reply, car-origin actions).
-  - Tested with the Android Auto Desktop Head Unit (DHU), then in the car.
-    These tasks need a human to verify them.
+  - Tested with the Android Auto Desktop Head Unit (DHU), then in the car
+    (docs/development/android.md has the DHU guide). These need a human
+    to verify them.
 
 ## 7. UI design principles
 
@@ -475,7 +484,7 @@ third-party push or CDN service; and **malicious content in agent output**
 | **0. Foundations** | Cargo workspace, gate, `crates/herdr` | done |
 | **1. Bridge** | Agents, threads, pending inputs, actions, pairing, TL;DR, transcription, Web Push, spawn, runbooks | done |
 | **2. PWA** | Triage, detail, quick reply, dictation, outbox, TL;DR | done; usable in Chrome on Android |
-| **3. Android** | APK with native notifications + inline reply, UnifiedPush, native recorder, Android Auto | planned |
+| **3. Android** | APK with native notifications + inline reply, UnifiedPush, native recorder, Android Auto | built (shell, device identity, UnifiedPush notices, answers from the shade, native recorder, Android Auto); device and car checks by a human pending |
 | **4. Hardening** | WebAuthn step-up, app lock, SQLite ledger, audit viewer | planned (see docs/security.md, known gaps) |
 | **5. Sessions** | One app over several herdr sessions (below) | planned |
 
