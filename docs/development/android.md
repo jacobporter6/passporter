@@ -17,8 +17,9 @@ asks for your bridge's HTTPS address (the one you open in Chrome), then
 loads the PWA from there, so the app shows exactly what the browser shows
 and picks up PWA updates without a new APK. You pair the phone in the PWA
 as usual; in the app the device key is made and kept by native code (see
-[Device identity](#device-identity)). Other native plugins (notifications,
-UnifiedPush, the recorder, Android Auto) are later additions.
+[Device identity](#device-identity)). Agent news arrives through
+UnifiedPush as native notifications ([Push](#push)); the recorder and
+Android Auto are later additions.
 
 Building it needs a JDK, the Android SDK and NDK, the Rust Android
 targets and the Tauri CLI. One script installs all of them under your
@@ -165,6 +166,7 @@ safe and the change out of commits (`SecurityConfigTest` rejects it on purpose).
 | `src/lib.rs`, `src/shell.rs` | The Tauri app: the main window, the `connect` command, the navigation guard, the bridge capability. `shell.rs` builds for Android only |
 | `src/origin.rs`, `src/navigation.rs`, `src/store.rs` | The rules, in plain Rust tested on any host: what counts as a bridge origin, which pages the webview may show, where the origin is saved |
 | `connect/` | The bundled Connect page (`frontendDist`) |
+| `gen/android/app/src/main/java/dev/passporter/` | App-level Kotlin: `notify` ([Notifications](#notifications)) and `push` ([Push](#push)) |
 | `plugins/device/` | The device identity plugin: Keystore key, native bridge client, the PWA's `device` commands ([Device identity](#device-identity)) |
 | `tauri.conf.json` | App id `dev.passporter.app`, name, the Connect page's CSP |
 | `gen/android/` | The Gradle project from `cargo tauri android init`, trimmed: manifest, theme, icons, network security config, signing, JVM tests. Build output and the files Tauri regenerates on each build are gitignored |
@@ -263,6 +265,70 @@ cut at their bounds). Each broadcast is a new message; add `--es ping
 1234` to two broadcasts to send the same message twice, and the second
 must not buzz. Release builds leave the receiver out.
 
+## Push
+
+The app gets agent news through [UnifiedPush](https://unifiedpush.org):
+a distributor app on the phone (ntfy) holds one connection to its server
+for every app that uses it, and wakes Passporter when a message comes, even
+with the app swiped away and the phone in Doze. Passporter's subscription
+opts into encrypted notices (`"payload": "notice"`,
+[design §6.6](../design.md#66-notifications-and-android-auto)), so a
+message carries everything a notification shows and needs no network to
+show it.
+
+What you set up, once:
+
+1. Install ntfy on the phone (F-Droid or Google Play). To use your own ntfy
+   server, set it as ntfy's default server first (*Settings → Default
+   server*).
+2. Allow that server on the bridge: `[push] ntfy_host = "ntfy.example.org"`
+   (or `"ntfy.sh"`, the public one), and restart the bridge
+   ([Deploy › Push](../deploy.md#push-wake-pings-and-native-notices)).
+3. Open Passporter, paired. It registers with ntfy and posts the endpoint
+   to the bridge; the bridge's log shows `push subscription stored` with
+   ntfy's host. Without ntfy installed, the app says once that
+   notifications need it.
+
+The Kotlin package `dev.passporter.push` (in `gen/android/app/src/main/java/`)
+uses the official connector library, `org.unifiedpush.android:connector`
+(pinned in `app/build.gradle.kts`), which makes the Web Push keys and
+decrypts each message (RFC 8291, `aes128gcm`, with Tink):
+
+| File | What |
+|---|---|
+| `PushRegistration.kt` | From the activity: on every resume and right after pairing, if paired and the bridge has push on (`GET /v1/push/key`), registers with the saved distributor, the phone's default one (Android may show a picker once), or says that none is installed |
+| `PassporterPushService.kt` | The connector's `PushService`, started by the distributor also with the app's process cold: new endpoints and unregistrations go to `PushSync`, messages to `IncomingPush` |
+| `PushSync.kt`, `PushStore.kt`, `PushBridge.kt` | Keeps the bridge's copy in step: posts a new endpoint (`POST /v1/push/subscriptions`, app scope, through `DeviceAuth`), drops the one it replaces, posts again after re-pairing, and when the app is unpaired forgets the registration and leaves the distributor. The state of the last step is a `PushState` (`Subscribed`, `Refused` with the bridge's reason, `BridgeOff`, `RetryLater`, ...), logged under the tag `PassporterPush` |
+| `IncomingPush.kt` | A message the connector decrypted, while paired, goes to `NoticeNotifier.show`. One it could not decrypt with the app's keys is dropped unseen, so only the bridge can make the app post a notice |
+| `Registration.kt` | The endpoint and public keys, and the subscribe body in the bridge's shape |
+
+The private key and auth secret are the connector's: it seals the private
+key with an AES key in the Android Keystore and keeps both in the app's
+private storage, which backups and device transfers leave out. Doing the
+ECDH inside the Keystore instead (`PURPOSE_AGREE_KEY`) needs Android 12 and
+a custom key manager, and would protect little more: reading the wrapped
+key back needs the app's own process, which sees every decrypted notice
+anyway. The app's own
+record (`passporter-push.json` in `noBackupFilesDir`) holds the endpoint,
+the public keys and which device posted them.
+
+`WebPushVectorTest` decrypts RFC 8291's example and a notice message the
+bridge's own encryption produced (`crates/bridge/src/push/fixtures/`,
+pinned by a test in `crates/bridge/src/push/ece.rs`), so the two sides are
+proven to agree.
+
+Inside the app the PWA's notification switch stays off and says why
+(`Unavailable::NativeApp`): the webview has no Push API, and the app's own
+subscription is the one, so a phone never gets the same news twice.
+
+Known gaps: forgetting the pairing from the phone leaves the distributor,
+so nothing reaches the phone, but the bridge keeps the old device's
+subscription (it can no longer sign in to remove it) until you revoke the
+device with `passporter devices revoke`, as you would anyway. Registration
+state reaches only logcat; the PWA cannot show it yet. A debug build can
+fake a message without a distributor through the sample receiver in
+[Notifications](#notifications).
+
 ## Device identity
 
 Inside the APK native code owns the device, so notification replies, push
@@ -300,6 +366,8 @@ val response = auth.send(Scope.APP, Method.POST, "/v1/agents/$id/reply", json)
 // Or just a token, e.g. for a header you set yourself:
 val token = auth.token(Scope.CAR)       // token.authorization() == "Bearer …"
 // If the bridge refuses it: auth.invalidate(token), then ask again.
+// Told after every pairing and forget, on the thread that made it:
+auth.addPairingListener { status -> if (status.paired) register() }
 ```
 
 Failures are `DeviceAuthException` subclasses: `NotPaired`, `Forgotten`

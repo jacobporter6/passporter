@@ -7,11 +7,21 @@ import java.io.IOException
 import java.security.ProviderException
 import java.security.SignatureException
 import java.util.EnumMap
+import java.util.concurrent.CopyOnWriteArrayList
 
 /** Whether this app is paired, and as which device. */
 class DeviceStatus(val deviceId: DeviceId?) {
     /** True once pairing succeeded and the key is still there. */
     val paired: Boolean get() = deviceId != null
+}
+
+/**
+ * Told when this app pairs or forgets its pairing ([DeviceAuth.addPairingListener]),
+ * on the thread that did it, after the change.
+ */
+fun interface PairingListener {
+    /** The pairing is now [status]. */
+    fun onPairingChanged(status: DeviceStatus)
 }
 
 /**
@@ -58,16 +68,37 @@ class DeviceAuth internal constructor(
 ) {
     private val lock = Any()
     private val tokens = EnumMap<Scope, SessionToken>(Scope::class.java)
+    private val listeners = CopyOnWriteArrayList<PairingListener>()
 
     /** Whether this app is paired with the saved bridge. */
     fun status(): DeviceStatus = synchronized(lock) { DeviceStatus(record()?.deviceId) }
+
+    /**
+     * Calls [listener] after every [pair] that succeeds and every [forget]
+     * (not when the bridge revokes the device: that surfaces as
+     * [DeviceAuthException.Forgotten] to whoever asked for a token).
+     */
+    fun addPairingListener(listener: PairingListener) {
+        listeners.add(listener)
+    }
+
+    /** Stops calling [listener]. */
+    fun removePairingListener(listener: PairingListener) {
+        listeners.remove(listener)
+    }
 
     /**
      * Pairs with [code] (from `passporter pair`): makes a new key, registers
      * it, and only then replaces any earlier pairing. On failure the earlier
      * pairing, if any, is kept.
      */
-    fun pair(code: PairingCode, name: DeviceName?): DeviceId = synchronized(lock) {
+    fun pair(code: PairingCode, name: DeviceName?): DeviceId {
+        val id = pairLocked(code, name)
+        changed(DeviceStatus(id))
+        return id
+    }
+
+    private fun pairLocked(code: PairingCode, name: DeviceName?): DeviceId = synchronized(lock) {
         val bridge = origin() ?: throw DeviceAuthException.NoBridge()
         val new = keystore { keys.create() }
         val paired = try {
@@ -116,10 +147,18 @@ class DeviceAuth internal constructor(
     fun secondsLeft(token: SessionToken): Long = ((token.expiresAtMs - now()) / 1000).coerceAtLeast(0)
 
     /** Forgets the pairing: deletes the key, the record and every cached token. */
-    fun forget() = synchronized(lock) {
-        store.load()?.let { discard(it.keyAlias) }
-        store.clear()
-        tokens.clear()
+    fun forget() {
+        synchronized(lock) {
+            store.load()?.let { discard(it.keyAlias) }
+            store.clear()
+            tokens.clear()
+        }
+        changed(DeviceStatus(null))
+    }
+
+    /** Tells the listeners, outside the lock (they may call back in). */
+    private fun changed(status: DeviceStatus) {
+        listeners.forEach { it.onPairingChanged(status) }
     }
 
     /**

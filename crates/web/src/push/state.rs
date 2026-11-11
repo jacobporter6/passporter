@@ -15,6 +15,9 @@ pub enum Unavailable {
     Denied,
     /// The bridge has push turned off (404 from the push endpoints).
     BridgeOff,
+    /// The page runs in the Android app, whose `WebView` has no Push API:
+    /// the app registers itself through `UnifiedPush` instead.
+    NativeApp,
 }
 
 impl Unavailable {
@@ -26,6 +29,7 @@ impl Unavailable {
             Self::Unsupported => "This browser can't receive push notifications.",
             Self::Denied => "Notifications are blocked for this site in your browser settings.",
             Self::BridgeOff => "Push is turned off on the bridge.",
+            Self::NativeApp => "The app gets notifications through ntfy (UnifiedPush) by itself.",
         }
     }
 }
@@ -247,6 +251,7 @@ mod tests {
             PushState::Unavailable(Unavailable::Insecure),
             PushState::Unavailable(Unavailable::Unsupported),
             PushState::Unavailable(Unavailable::Denied),
+            PushState::Unavailable(Unavailable::NativeApp),
         ] {
             assert_eq!(state.toggle(), None, "{state:?}");
         }

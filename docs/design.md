@@ -328,16 +328,17 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
 - **Push transport**: the bridge sends a **content-free wake ping** with
   Web Push (VAPID), through the browser vendor's push service. The PWA wakes
   on it and fetches the actual content over the authenticated API. The
-  planned Android app would use UnifiedPush instead (for example a
-  self-hosted ntfy, allowed with `[push] ntfy_host`). Doze often blocks that
+  Android app uses UnifiedPush instead (for example a self-hosted ntfy,
+  allowed with `[push] ntfy_host`). Doze often blocks that
   fetch for a native app, so its subscription opts into **encrypted
   notices** (`"payload": "notice"`): the same message also carries, per
   agent with news, its name, state, one line (what it asks, or the turn's
   headline), the TL;DR *Decide* line once there is one, and the pending id
   to answer with. Every message is end-to-end encrypted to the phone (RFC
-  8291), so the push service only sees ciphertext. The bridge side of
-  notices is built; the app is not. Web Push (PWA) subscriptions keep the
-  content-free ping.
+  8291), so the push service only sees ciphertext. The app registers
+  with the phone's distributor while paired and shows a notice with no
+  network call, also with its process cold. Web Push (PWA) subscriptions
+  keep the content-free ping, and the PWA inside the app makes none.
 - **Only news disrupts.** A message is sent only if its reason still holds
   when its debounce ends (the agent still blocked, or its finished turn
   still unread), and only for a change since the last one; it carries
