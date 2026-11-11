@@ -119,6 +119,12 @@ pub async fn forget() -> Result<(), DeviceAuthError> {
     call::<()>("forget", &Object::new()).await
 }
 
+/// Whether this page runs in the Android app (Tauri's global is there).
+#[must_use]
+pub fn in_app() -> bool {
+    invoke_fn().is_some()
+}
+
 /// `window.__TAURI__.core.invoke`, if this page runs in the app.
 fn invoke_fn() -> Option<Function> {
     let tauri = Reflect::get(&js_sys::global(), &"__TAURI__".into()).ok()?;

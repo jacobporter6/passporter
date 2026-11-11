@@ -344,18 +344,20 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
 - **Push transport**: the bridge sends a **content-free wake ping** with
   Web Push (VAPID), through the browser vendor's push service. The PWA wakes
   on it and fetches the actual content over the authenticated API. The
-  planned Android app would use UnifiedPush instead (for example a
-  self-hosted ntfy, allowed with `[push] ntfy_host`). Doze often blocks that
+  Android app uses UnifiedPush instead (for example a self-hosted ntfy,
+  allowed with `[push] ntfy_host`). Doze often blocks that
   fetch for a native app, so its subscription opts into **encrypted
   notices** (`"payload": "notice"`): the same message also carries, per
   agent with news, its name, state, one line (what it asks, or the turn's
   headline), the TL;DR *Decide* line once there is one, and the pending id
   to answer with. Every message is end-to-end encrypted to the phone (RFC
-  8291), so the push service only sees ciphertext. The bridge side of
-  notices is built; the app shows a notice as a notification (T31a), a
-  tap opens that agent (T30c), and it can be answered from the shade
-  (T31b); Android Auto is not built yet. Web Push (PWA) subscriptions keep the
-  content-free ping.
+  8291), so the push service only sees ciphertext. The app registers
+  with the phone's distributor while paired and shows a notice as a
+  notification with no network call, also with its process cold (T31a,
+  T32a); a tap opens that agent (T30c), and it can be answered from the
+  shade (T31b); Android Auto is not built yet. Web Push (PWA)
+  subscriptions keep the content-free ping, and the PWA inside the app
+  makes none.
 - **Only news disrupts.** A message is sent only if its reason still holds
   when its debounce ends (the agent still blocked, or its finished turn
   still unread), and only for a change since the last one; it carries
@@ -461,7 +463,7 @@ third-party push or CDN service; and **malicious content in agent output**
 | Web | Leptos (CSR) → WASM, built with trunk; `web-sys`/`gloo` for browser APIs (IndexedDB, MediaRecorder, WebAuthn, Push) | Fine-grained reactivity without a virtual DOM; small bundle. Browser APIs are clunkier from Rust, which costs effort, not quality |
 | Android (shell built; plugins in progress) | Tauri 2 mobile + Kotlin plugins | Rust-native shell around the same Leptos UI; proper Kotlin plugin system |
 | Speech-to-text | whisper.cpp server (CUDA or CPU), local | Private. A GPU makes large models fast |
-| Push | Web Push (VAPID) in the PWA; UnifiedPush (e.g. ntfy) planned for the APK | No content through third parties |
+| Push | Web Push (VAPID) in the PWA; UnifiedPush (e.g. ntfy) in the APK, with notices end-to-end encrypted | No content through third parties |
 | Summaries | `claude -p --model haiku` | Uses the existing login, no stored key |
 | Tests | cargo-nextest; a fake herdr (`FakeHerdr`) for integration tests; headless Chromium over CDP for E2E smoke tests (`just e2e`) | Everything but device and car behavior is verifiable in CI |
 | CI | `just gate` (fmt, clippy pedantic `-D warnings` on host + wasm, nextest, release build, PWA size budget, cargo deny) in GitHub Actions | One gate, locally and in CI |

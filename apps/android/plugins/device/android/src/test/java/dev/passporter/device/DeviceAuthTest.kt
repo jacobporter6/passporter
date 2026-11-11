@@ -193,6 +193,24 @@ class DeviceAuthTest {
     }
 
     @Test
+    fun listenersHearPairingAndForgetting() {
+        val heard = mutableListOf<DeviceId?>()
+        val listener = PairingListener { status ->
+            // Outside the lock: a listener may call back in.
+            assertEquals(status.deviceId, auth.status().deviceId)
+            heard += status.deviceId
+        }
+        auth.addPairingListener(listener)
+        val id = auth.pair(code, null)
+        bridge.refuse += 409
+        assertThrows(DeviceAuthException.TooManyDevices::class.java) { auth.pair(code, null) }
+        auth.forget()
+        auth.removePairingListener(listener)
+        auth.pair(code, null)
+        assertEquals(listOf(id, null), heard)
+    }
+
+    @Test
     fun aMissingKeyOrAnotherBridgeMeansUnpaired() {
         auth.pair(code, null)
         origin = BridgeOrigin.parse("https://other.example.org")

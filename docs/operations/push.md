@@ -7,6 +7,7 @@ sources:
   - crates/bridge/src/push/schedule.rs
   - crates/web/src/push/notice.rs
   - crates/web/public/sw.js
+  - apps/android/gen/android/app/src/main/java/dev/passporter/push/
 ---
 
 # Push notifications
@@ -88,14 +89,19 @@ switch subscribes this device; turning it off unsubscribes it. Revoking a
 device drops its subscriptions. `push-keygen` never overwrites a key: a new
 key means every device subscribes again.
 
-## Planned: the Android app
+## The Android app
 
-The bridge side is built; the app is not. A native subscription (through
-UnifiedPush, for example a self-hosted ntfy allowed with `[push]
-ntfy_host`) can opt into short **encrypted notices** instead of the bare
+The [Android app](../development/android.md#push) registers with a
+UnifiedPush distributor on the phone (ntfy) instead of Web Push, and its
+subscription opts into short **encrypted notices** rather than the bare
 ping, because Android's Doze often blocks the fetch after a wake: per agent
-with news, its name, state, one line, and the TL;DR *Decide* line once there
-is one. They are end-to-end encrypted to the phone like the ping, so the
-push service still sees only ciphertext. Android Auto would announce blocked
-agents, and finished ones only when their TL;DR has a *Decide* line
-(`car_announce_done`). See [design §6.6](../design.md#66-notifications-and-android-auto).
+with news, its name, state, one line, and the TL;DR *Decide* line once
+there is one. They are end-to-end encrypted to the phone like the ping, so
+the push service still sees only ciphertext, and the app shows them with no
+network at all. Allow the distributor's server with `[push] ntfy_host`
+([Deploy › Push](../deploy.md#push-wake-pings-and-native-notices)). Inside
+the app the PWA's switch stays off: the app's own subscription is the one.
+
+Android Auto (planned) announces blocked agents, and finished ones only
+when their TL;DR has a *Decide* line (`car_announce_done`). See
+[design §6.6](../design.md#66-notifications-and-android-auto).
