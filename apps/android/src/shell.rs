@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use tauri::ipc::CapabilityBuilder;
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_device::DeviceExt;
 
 use crate::destination::{self, Request};
 use crate::native::{self, NativeExt};
@@ -52,6 +53,7 @@ struct Shell {
 #[tauri::mobile_entry_point]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_device::init())
         .invoke_handler(tauri::generate_handler![connect, bridge, forget_bridge])
         .setup(|app| {
             setup(app.handle())?;
@@ -159,23 +161,44 @@ fn show(app: &AppHandle, request: &Request, guard: &Guard) {
     }
 }
 
+/// Why the bridge capability was not granted.
+#[derive(Debug, thiserror::Error)]
+enum GrantError {
+    /// The system `WebView` cannot tell frames apart (see [`grant_ipc`]).
+    #[error(
+        "this WebView lacks WEB_MESSAGE_LISTENER, so native features stay off; update Android System WebView"
+    )]
+    WebViewTooOld,
+    /// The device plugin could not answer whether it can.
+    #[error("could not check the WebView: {0}")]
+    Probe(#[from] tauri_plugin_device::Error),
+    /// Tauri refused the capability.
+    #[error(transparent)]
+    Tauri(#[from] tauri::Error),
+}
+
 /// Lets pages on `origin`, in the main window only, use the native plugins
-/// the bridge capability lists (none yet: later tasks add theirs).
+/// the bridge capability lists: the device identity (`device:default`).
 ///
 /// Tauri tells frames apart only on `WebView`s with `WEB_MESSAGE_LISTENER`
 /// (`WebView` 86 and later); on older ones every frame's message carries the
 /// main frame's URL, and only the PWA's CSP keeps foreign frames out.
 /// Messages sent while the Connect page is being replaced can even be
-/// labelled local. Before the first permission is added here, gate the grant
-/// on that feature, and never add a local capability (docs/development/android.md,
-/// "How the shell works").
-fn grant_ipc(app: &AppHandle, origin: &BridgeOrigin) -> tauri::Result<()> {
+/// labelled local. So nothing is granted without that feature (the PWA then
+/// keeps its device key in `WebCrypto`, as in Chrome), and the app never adds
+/// a local capability (docs/development/android.md, "How the shell works").
+fn grant_ipc(app: &AppHandle, origin: &BridgeOrigin) -> Result<(), GrantError> {
+    if !app.device().webview_isolates_frames()? {
+        return Err(GrantError::WebViewTooOld);
+    }
     app.add_capability(
         CapabilityBuilder::new(BRIDGE_CAPABILITY)
             .remote(origin.capability_pattern())
             .local(false)
-            .window(MAIN),
-    )
+            .window(MAIN)
+            .permission("device:default"),
+    )?;
+    Ok(())
 }
 
 /// Pairs the app with the bridge at `address` (what the person typed) and
@@ -214,7 +237,16 @@ fn connect(app: AppHandle, shell: State<'_, Shell>, address: &str) -> Result<Str
         .bridge
         .set(origin)
         .map_err(|_| "already connected".to_owned())?;
-    granted.map_err(|error| format!("could not allow the bridge: {error}"))?;
+    match granted {
+        Ok(()) => {}
+        // Nothing was granted, and the PWA works without native plugins, as
+        // in Chrome. The bridge is chosen by now, so this is not an error:
+        // the next launch tries the grant again.
+        Err(error @ (GrantError::WebViewTooOld | GrantError::Probe(_))) => log_to_logcat(&error),
+        Err(error @ GrantError::Tauri(_)) => {
+            return Err(format!("could not allow the bridge: {error}"));
+        }
+    }
     Ok(url)
 }
 

@@ -16,8 +16,9 @@ shell in `apps/android`. It does not bundle the PWA: on first launch it
 asks for your bridge's HTTPS address (the one you open in Chrome), then
 loads the PWA from there, so the app shows exactly what the browser shows
 and picks up PWA updates without a new APK. You pair the phone in the PWA
-as usual. Native plugins (notifications, UnifiedPush, the recorder,
-Android Auto) are later additions.
+as usual; in the app the device key is made and kept by native code (see
+[Device identity](#device-identity)). Other native plugins (notifications,
+UnifiedPush, the recorder, Android Auto) are later additions.
 
 Building it needs a JDK, the Android SDK and NDK, the Rust Android
 targets and the Tauri CLI. One script installs all of them under your
@@ -75,9 +76,12 @@ and is about 40 MB, most of it the unstripped Rust library.
 just android-test
 ```
 
-It runs clippy on the shell for the Android target, the shell's Rust tests
-(also part of `just verify`), and Gradle's JVM unit tests
-(`testUniversalDebugUnitTest`, in `gen/android/app/src/test/`). Nothing
+It runs clippy on the shell and the plugins for the Android target, their
+Rust tests (also part of `just verify`), and Gradle's JVM unit tests (the
+app's `testUniversalDebugUnitTest`, in `gen/android/app/src/test/`, and each
+plugin's `testDebugUnitTest`, in `plugins/<name>/android/src/test/`). The
+JVM tests need the Kotlin files a build generates, so run `just android-build`
+once in a fresh checkout first. Nothing
 here needs a device. `just verify` and CI never touch the Android
 toolchain: on the host the crate builds without Tauri.
 
@@ -96,10 +100,10 @@ Open Passporter, enter the bridge's address (for example
 `https://bridge.example.ts.net`), then pair on the next screen as in the
 browser. The app remembers the address. To use a different bridge,
 long-press the app's icon, choose *Bridge*, then *Change address*: the app
-forgets the address and restarts on the Connect page, where you connect
-and pair again. It does not unpair the phone from the old bridge: revoke
-it there (`passporter devices revoke`) (see
-[The Bridge page](#the-bridge-page)).
+forgets the address and this phone's device key, and restarts on the
+Connect page, where you connect and pair again
+([The Bridge page](#the-bridge-page)). The old bridge still lists the
+device until you revoke it there (`passporter devices revoke`).
 
 A debug and a release build use different keys, so Android refuses to
 install one over the other: uninstall first.
@@ -166,6 +170,7 @@ safe and the change out of commits (`SecurityConfigTest` rejects it on purpose).
 | `src/origin.rs`, `src/navigation.rs`, `src/store.rs`, `src/destination.rs` | The rules, in plain Rust tested on any host: what counts as a bridge origin, which pages the webview may show, where the origin is saved, where a notification tap, the shortcut or a failed load sends the webview |
 | `connect/` | The bundled pages (`frontendDist`): the Connect page (`index.html`) and the Bridge page (`bridge.html`) |
 | `gen/android/app/src/main/java/dev/passporter/app/` | `MainActivity` (wraps each new webview's client); `ShellPlugin` (the shell's Kotlin side: intents, restart), `ShellRequest` (what it asks the shell to show), `ShellWebViewClient` (wraps wry's client: refused links to the browser, failed loads, history), `BridgeShortcutActivity` (the shortcut's trampoline) |
+| `plugins/device/` | The device identity plugin: Keystore key, native bridge client, the PWA's `device` commands ([Device identity](#device-identity)) |
 | `tauri.conf.json` | App id `dev.passporter.app`, name, the Connect page's CSP |
 | `gen/android/` | The Gradle project from `cargo tauri android init`, trimmed: manifest, theme, icons, network security config, signing, JVM tests. Build output and the files Tauri regenerates on each build are gitignored |
 
@@ -191,7 +196,8 @@ Only Passporter's own pages reach native IPC, by three fences:
    remote capability to exactly `https://<bridge>/*` in the main window.
    The address must be a plain DNS name or IPv4 address, so the pattern
    holds no wildcard syntax; `localhost` names are refused.
-   It lists the plugin permissions the PWA may use (none yet).
+   It lists the plugin permissions the PWA may use: `device:default`.
+   It is granted only on a WebView with `WEB_MESSAGE_LISTENER` (below).
 3. **App commands.** The app has no ACL manifest, so Tauri refuses its own
    commands (`connect`, `bridge`, `forget_bridge`) to every remote page;
    only the bundled pages can call them. The `passporter-shell` plugin has no
@@ -203,8 +209,10 @@ else on that host name: another app behind the same proxy name would get
 the same access.
 
 The address is saved in the app's private storage (`bridge-origin` in the
-data directory); it is not a secret. The device key and session tokens
-stay in the PWA's own storage, as in the browser. Neither backups nor a
+data directory); it is not a secret. Native code reads the same file, so
+the webview and native sign-ins always use the same bridge. The device key
+is in the Android Keystore and its id in `noBackupFilesDir`; session tokens
+stay in memory. Neither backups nor a
 device-to-device transfer copy the app's data (`allowBackup="false"` plus
 backup and data-extraction rules that exclude everything), so the key
 stays on the phone; a new phone pairs afresh.
@@ -216,17 +224,17 @@ pages) covers form submissions instead.
 Fence 2 tells frames apart only on a current WebView: Tauri learns each
 frame's own origin through `WEB_MESSAGE_LISTENER` (Android System WebView
 86 and later). On an older WebView every message is labelled with the URL
-the main page last started loading, so only the PWA's CSP keeps a foreign
-frame from borrowing the bridge capability, and a message sent while the
-Connect page is being replaced can even count as local. (The same holds
-the other way: a message the bridge's page sends while the shell replaces
-it with the Bridge page can count as local, and so reach the app commands.
-The bridge's own PWA sends none, but a bridge page can bring up the
-Bridge page by loading a URL that fails; the worst would be
-`forget_bridge`.) That is harmless while the capability grants nothing
-and no local capability exists; the
-first plugin task gates the grant on the feature and must not add a local
-capability.
+the main page last started loading, so only the PWA's CSP would keep a
+foreign frame from borrowing the bridge capability, and a message sent
+while the Connect page is being replaced could even count as local. So the
+shell asks the device plugin about the feature before granting anything,
+and on an old WebView grants nothing: logcat says why, and the PWA keeps
+its device key in WebCrypto as in Chrome. The app never adds a local
+capability. The app commands still answer local pages on an old WebView:
+a message the bridge's page sends while the shell replaces it with the
+Bridge page can count as local. The bridge's own PWA sends none, but a
+bridge page can bring up the Bridge page by loading a URL that fails; the
+worst would be `forget_bridge`.
 
 ## Notifications
 
@@ -284,8 +292,8 @@ ignores every request until a bridge is paired.
 - **A notification tap** opens `MainActivity` with the agent in the intent.
   Cold (the app was closed), the window starts on `https://<bridge>/agent/<id>`;
   warm, the shell sends the webview there. An intent Android delivers
-  again when it restores the app from Recents is ignored. The id is checked against the
-  bridge's id rules on both sides (`AgentId`), and the URL against the
+  again when it restores the app from Recents is ignored. The id is
+  checked against the bridge's id rules on both sides (`AgentId`), and the URL against the
   navigation guard.
 - **A link to another site** that you tap in the PWA (the link confirm's
   *Open*) opens in your browser. The guard still refuses it in the webview;
@@ -317,22 +325,70 @@ address, a button back to it, and *Change address*. The shell opens it
 
 The page has a fresh history (no bundled page shares one with another
 page): Back from it leaves the app rather than reloading a bridge page
-that failed, and *Retry* or *Open Passporter* replaces it with the bridge. Both go to the bridge's start page, not to
-the agent a failed tap asked for.
+that failed, and *Retry* or *Open Passporter* replaces it with the
+bridge. Both go to the bridge's start page, not to the agent a failed tap
+asked for.
 
 *Change address* asks once more, then calls `forget_bridge`: the shell
-deletes the saved address and asks `ShellPlugin` to restart the app in a
-new process, which opens on the Connect page. The restart is deliberate:
+deletes the saved address and asks `ShellPlugin`, which forgets the
+native pairing (`DeviceAuth.forget`: the Keystore key, the device id and
+cached tokens) and restarts the app in a new process, on the Connect
+page. The restart is deliberate:
 Tauri cannot revoke the capability it granted to the old origin, so only a
 new process starts without it. The old bridge's data in the webview
 (its service worker cache, IndexedDB) stays under its own origin, which
 the app never opens again; clearing the app's storage removes it. The old
-bridge still lists the phone as paired until you revoke it there.
+bridge still lists the device until you revoke it there.
 
 Any app can send `MainActivity` the tap or shortcut intent, because a
 launcher activity is exported. The worst that does is open an agent's
 screen or the Bridge page; changing the address always needs your two
 taps on the page.
+
+## Device identity
+
+Inside the APK native code owns the device, so notification replies, push
+registration and Android Auto can sign in with the app closed
+([design §8](../design.md#8-security)). The plugin in `plugins/device`
+(Kotlin package `dev.passporter.device`):
+
+- makes a non-exportable P-256 key in the Android Keystore at pairing
+  (StrongBox when the phone has one, the TEE otherwise), with no
+  user-authentication requirement so it works with the screen locked
+  (biometric step-up is a later phase);
+- pairs and signs in itself (`/v1/auth/pair`, then challenge → session
+  with a chosen scope, `app` or `car`), over the platform's
+  `HttpsURLConnection` (no HTTP library in the APK), and caches each
+  scope's token in memory until two minutes before it expires;
+- forgets the pairing when the bridge answers `410 Gone` (revoked).
+
+The PWA reaches it through `plugin:device|status`, `pair`, `session` (a
+fresh **app**-scope token; the webview never gets a car token) and
+`forget` (`crates/web/src/pair/native.rs`). Without the plugin (Chrome, an
+old WebView) the PWA uses WebCrypto, unchanged.
+
+Native code calls `DeviceAuth` directly, from a worker thread (every call
+may do network or Keystore work):
+
+```kotlin
+import dev.passporter.device.DeviceAuth
+import dev.passporter.device.DeviceAuthException
+import dev.passporter.device.Method
+import dev.passporter.device.Scope
+
+val auth = DeviceAuth.get(context)
+// An authenticated request; a 401 is retried once with a fresh token.
+val response = auth.send(Scope.APP, Method.POST, "/v1/agents/$id/reply", json)
+// Or just a token, e.g. for a header you set yourself:
+val token = auth.token(Scope.CAR)       // token.authorization() == "Bearer …"
+// If the bridge refuses it: auth.invalidate(token), then ask again.
+```
+
+Failures are `DeviceAuthException` subclasses: `NotPaired`, `Forgotten`
+(revoked; the pairing is gone), `Unreachable` and `ServerError` (retry
+later), `RateLimited`, `Refused`, `Keystore`, and so on. Another plugin uses
+it by depending on the library in its `android/build.gradle.kts`:
+`implementation(project(":tauri-plugin-device"))`.
 
 ## What it installs, and where
 

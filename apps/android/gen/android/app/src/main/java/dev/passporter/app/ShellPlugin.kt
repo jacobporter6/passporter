@@ -14,6 +14,8 @@ import app.tauri.plugin.Channel
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
+import dev.passporter.device.DeviceAuth
+import kotlin.concurrent.thread
 
 /** The arguments of [ShellPlugin.watch]. */
 @InvokeArg
@@ -55,18 +57,30 @@ class ShellPlugin(private val activity: Activity) : Plugin(activity) {
     }
 
     /**
-     * Restarts the app in a new process, which opens on the Connect page now
-     * that the shell has forgotten the bridge. Only a new process drops the
-     * old bridge's IPC grant: Tauri cannot revoke a capability.
+     * Forgets the native pairing ([DeviceAuth.forget]: the Keystore key, the
+     * device id, cached tokens), then restarts the app in a new process,
+     * which opens on the Connect page now that the shell has forgotten the
+     * bridge. Only a new process drops the old bridge's IPC grant: Tauri
+     * cannot revoke a capability.
+     *
+     * The restart happens even if forgetting fails: the shell has already
+     * forgotten the bridge, and [DeviceAuth] ignores a pairing made with
+     * another origin than the saved one.
      */
     @Command
     fun restart(invoke: Invoke) {
-        // TODO(T32c): forget the native pairing here (DeviceAuth.forget) once
-        // the device plugin is on the branch.
-        invoke.resolve()
         val app = activity.applicationContext
-        app.startActivity(Intent.makeRestartActivityTask(ComponentName(app, MainActivity::class.java)))
-        Runtime.getRuntime().exit(0)
+        // Keystore work: never on the UI thread, where Tauri calls in.
+        thread(name = "passporter-restart") {
+            try {
+                DeviceAuth.get(app).forget()
+            } catch (e: Exception) {
+                Log.e(TAG, "could not forget the pairing", e)
+            }
+            invoke.resolve()
+            app.startActivity(Intent.makeRestartActivityTask(ComponentName(app, MainActivity::class.java)))
+            Runtime.getRuntime().exit(0)
+        }
     }
 
     companion object {
