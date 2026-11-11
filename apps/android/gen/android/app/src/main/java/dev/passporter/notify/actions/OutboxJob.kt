@@ -32,13 +32,23 @@ data class OutboxJob(
     }
 }
 
-/** Why typed or spoken text cannot be sent from the shade. */
-enum class TextProblem {
-    /** Nothing visible was entered. */
+/** Why a tap on a notification action queues nothing. */
+enum class Unsendable {
+    /** Nothing visible was typed or said. */
     EMPTY,
 
     /** More than [ReplyText.MAX_BYTES]: the app takes longer texts. */
     TOO_LONG,
+
+    /**
+     * The phone is locked. Android 12 and later ask to unlock before an
+     * action runs; older ones, a watch or another app holding the pending
+     * intent do not, so the receiver checks.
+     */
+    LOCKED,
+
+    /** An answer to the same question is queued already (a second tap). */
+    ALREADY_SENDING,
 }
 
 /**
@@ -69,8 +79,8 @@ object ReplyText {
             }
         }.trim()
         return when {
-            text.isEmpty() -> Result.Problem(TextProblem.EMPTY)
-            text.toByteArray(Charsets.UTF_8).size > MAX_BYTES -> Result.Problem(TextProblem.TOO_LONG)
+            text.isEmpty() -> Result.Problem(Unsendable.EMPTY)
+            text.toByteArray(Charsets.UTF_8).size > MAX_BYTES -> Result.Problem(Unsendable.TOO_LONG)
             else -> Result.Clean(text)
         }
     }
@@ -85,8 +95,8 @@ object ReplyText {
 
         /** Nothing to send. */
         data class Problem(
-            /** Why. */
-            val problem: TextProblem,
+            /** Why: [Unsendable.EMPTY] or [Unsendable.TOO_LONG]. */
+            val problem: Unsendable,
         ) : Result
     }
 }

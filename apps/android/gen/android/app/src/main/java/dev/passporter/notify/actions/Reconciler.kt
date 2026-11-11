@@ -68,8 +68,7 @@ object Reconciler {
 
     /**
      * The news notifications on show. Those showing the progress of an
-     * answer ([ActionFeedback.EXTRA_JOB]) are left alone: the outbox
-     * settles them.
+     * answer ([ActionFeedback.EXTRA_JOB]) are not news: see [answers].
      */
     fun shown(context: Context): List<ShownNotice> =
         context.getSystemService(NotificationManager::class.java).activeNotifications.mapNotNull { posted ->
@@ -82,21 +81,58 @@ object Reconciler {
             ShownNotice(agent, state, posted.postTime)
         }
 
+    /**
+     * The agents whose notification shows the progress of an answer
+     * ([ActionFeedback.EXTRA_JOB]) posted before [before], with the job's
+     * key: a leftover once that job is no longer queued (lost, or long
+     * settled).
+     */
+    fun answers(context: Context, before: Long): Map<AgentId, String> =
+        context.getSystemService(NotificationManager::class.java).activeNotifications.mapNotNull { posted ->
+            val key = posted.notification.extras.getString(ActionFeedback.EXTRA_JOB)
+            val agent = posted.tag?.let(AgentId::parse)
+            if (posted.id != NoticeNotification.ID || key == null || agent == null || posted.postTime >= before) {
+                null
+            } else {
+                agent to key
+            }
+        }.toMap()
+
     /** The unique work name of the check. */
     const val UNIQUE_NAME = "notify-reconcile"
+
+    /** How old an answer's notification must be to count as a leftover: past its tap's queueing. */
+    const val ANSWER_GRACE_MS = 60_000L
 }
 
-/** Runs [Reconciler]'s check. Best effort: any failure just ends it. */
+/**
+ * Runs [Reconciler]'s check. Best effort: any failure just ends it. First,
+ * without the network, it clears what the outbox left behind: an answer's
+ * notification whose job is no longer queued, and frozen bodies of jobs
+ * that are gone. Then it compares the news on show with the agent list.
+ */
 class ReconcileWorker internal constructor(
     context: Context,
     params: WorkerParameters,
     private val bridge: Bridge,
+    private val frozen: FrozenBodies,
+    private val isQueued: (String) -> Boolean,
+    private val now: () -> Long,
 ) : Worker(context, params) {
     /** The constructor WorkManager calls. */
-    constructor(context: Context, params: WorkerParameters) :
-        this(context, params, DeviceBridge(context.applicationContext))
+    constructor(context: Context, params: WorkerParameters) : this(
+        context,
+        params,
+        DeviceBridge(context.applicationContext),
+        PreferenceFrozenBodies(context),
+        { key -> Outbox.isQueued(context, key) },
+        System::currentTimeMillis,
+    )
+
+    private val manager = NotificationManagerCompat.from(applicationContext)
 
     override fun doWork(): Result {
+        clearLeftovers()
         val shown = Reconciler.shown(applicationContext)
         if (shown.isEmpty()) return Result.success()
         val response = try {
@@ -109,11 +145,17 @@ class ReconcileWorker internal constructor(
         // Only what is still on show as it was: news posted while the list
         // was on its way stays.
         val current = Reconciler.shown(applicationContext).toSet()
-        val manager = NotificationManagerCompat.from(applicationContext)
         for (agent in Reconciler.stale(shown.filter { it in current }, agents)) {
             manager.cancel(NoticeNotification.tag(agent), NoticeNotification.ID)
         }
         return Result.success()
+    }
+
+    private fun clearLeftovers() {
+        for ((agent, key) in Reconciler.answers(applicationContext, now() - Reconciler.ANSWER_GRACE_MS)) {
+            if (!isQueued(key)) manager.cancel(NoticeNotification.tag(agent), NoticeNotification.ID)
+        }
+        frozen.keys().filterNot(isQueued).forEach(frozen::remove)
     }
 
     private companion object {

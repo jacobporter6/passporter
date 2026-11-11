@@ -14,9 +14,9 @@ class ReplyTextTest {
 
     @Test
     fun emptyAndTooLongTextIsNotSent() {
-        assertEquals(ReplyText.Result.Problem(TextProblem.EMPTY), clean(null))
-        assertEquals(ReplyText.Result.Problem(TextProblem.EMPTY), clean(" \n\t "))
+        assertEquals(ReplyText.Result.Problem(Unsendable.EMPTY), clean(null))
+        assertEquals(ReplyText.Result.Problem(Unsendable.EMPTY), clean(" \n\t "))
         assertEquals(ReplyText.Result.Clean("é".repeat(ReplyText.MAX_BYTES / 2)), clean("é".repeat(ReplyText.MAX_BYTES / 2)))
-        assertEquals(ReplyText.Result.Problem(TextProblem.TOO_LONG), clean("é".repeat(ReplyText.MAX_BYTES / 2 + 1)))
+        assertEquals(ReplyText.Result.Problem(Unsendable.TOO_LONG), clean("é".repeat(ReplyText.MAX_BYTES / 2 + 1)))
     }
 }

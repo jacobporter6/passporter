@@ -94,12 +94,19 @@ class OutboxSenderTest {
         for (bridge in listOf(
             FakeBridge.of(status = "working"),
             FakeBridge.of(status = "blocked"),
-            // Ready again, but since after the reply: another turn.
-            FakeBridge.of(status = "idle", since = 2001),
+            // Done again, but since after the reply: another turn.
+            FakeBridge.of(status = "done", since = 2001),
         )) {
             assertEquals(SendOutcome.Final(NotSent.MOVED_ON), send(bridge, job(NoticeAction.REPLY, text = "go")))
             assertEquals(emptyList<String>(), bridge.actions)
         }
+    }
+
+    @Test
+    fun aReplyStillGoesAfterThePaneWasSeenOnTheDesktop() {
+        // herdr turns `done` into `idle` when the pane is looked at.
+        val seen = FakeBridge.of(status = "idle", dialog = "null", since = 2001)
+        assertEquals(SendOutcome.Sent, send(seen, job(NoticeAction.REPLY, text = "go")))
     }
 
     @Test
@@ -129,7 +136,9 @@ class OutboxSenderTest {
             HttpResponse(200, "") to SendOutcome.Final(NotSent.UNCERTAIN),
             HttpResponse(403, """{"status":"refused","reason":"step_up_required"}""") to SendOutcome.Final(NotSent.NEEDS_APP),
             HttpResponse(400, """{"status":"refused","reason":"invalid_action"}""") to SendOutcome.Final(NotSent.NEEDS_APP),
-            HttpResponse(422, """{"status":"refused","reason":"unknown_option"}""") to SendOutcome.Final(NotSent.NEEDS_APP),
+            HttpResponse(422, """{"status":"refused","reason":"feedback_not_accepted"}""") to SendOutcome.Final(NotSent.NEEDS_APP),
+            HttpResponse(422, """{"status":"refused","reason":"unknown_option"}""") to SendOutcome.Final(NotSent.ALREADY_ANSWERED),
+            HttpResponse(422, """{"status":"refused","reason":"no_pending_input"}""") to SendOutcome.Final(NotSent.ALREADY_ANSWERED),
             HttpResponse(404, """{"status":"refused","reason":"unknown_agent"}""") to SendOutcome.Final(NotSent.AGENT_GONE),
             HttpResponse(401, "") to SendOutcome.Final(NotSent.NOT_PAIRED),
             HttpResponse(429, "", retryAfterSecs = 12) to SendOutcome.Retry(12),
@@ -151,7 +160,7 @@ class OutboxSenderTest {
             DeviceAuthException.NotPaired() to SendOutcome.Final(NotSent.NOT_PAIRED),
             DeviceAuthException.Forgotten() to SendOutcome.Final(NotSent.NOT_PAIRED),
             DeviceAuthException.NoBridge() to SendOutcome.Final(NotSent.NOT_PAIRED),
-            DeviceAuthException.Refused() to SendOutcome.Final(NotSent.FAILED),
+            DeviceAuthException.Refused() to SendOutcome.Retry(null),
             DeviceAuthException.BadResponse("?") to SendOutcome.Final(NotSent.FAILED),
         )
         for ((failure, expected) in cases) {

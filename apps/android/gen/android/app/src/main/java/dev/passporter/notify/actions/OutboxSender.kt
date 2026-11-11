@@ -3,83 +3,8 @@ package dev.passporter.notify.actions
 import dev.passporter.device.DeviceAuthException
 import dev.passporter.device.HttpResponse
 import dev.passporter.device.Method
-import dev.passporter.notify.PendingId
 import org.json.JSONException
 import org.json.JSONObject
-
-/**
- * An authenticated request to the paired bridge: [dev.passporter.device.DeviceAuth.send]
- * with an app-scope token in the app, a fake in tests. Blocking; throws
- * [DeviceAuthException] when there is no answer or no session.
- */
-fun interface Bridge {
-    /** Sends [method] [path] with [json] as its body, if any. */
-    fun send(method: Method, path: String, json: String?): HttpResponse
-}
-
-/**
- * The frozen `POST /v1/actions` body of each job, by idempotency key. Once
- * a body has been sent, every retry sends it again unchanged: the bridge
- * replays its first result for the key (or refuses another body under it).
- */
-interface FrozenBodies {
-    /** The body frozen for [key], if any. */
-    fun get(key: String): String?
-
-    /** Freezes [body] for [key]. */
-    fun put(key: String, body: String)
-
-    /** Forgets [key]'s body, once its job is settled. */
-    fun remove(key: String)
-}
-
-/** Why an answer was not sent, final for its job. */
-enum class NotSent {
-    /** The dialog was answered (or replaced) before this answer arrived. */
-    ALREADY_ANSWERED,
-
-    /** The agent moved on since the person replied (it worked, or asks something). */
-    MOVED_ON,
-
-    /** The agent is gone. */
-    AGENT_GONE,
-
-    /** The bridge refused it from a notification (step-up, an option the shade cannot pick, invalid text). */
-    NEEDS_APP,
-
-    /** The bridge handed it to herdr, which failed: it may or may not have arrived. Never resent. */
-    UNCERTAIN,
-
-    /** The app is not (or no longer) paired. */
-    NOT_PAIRED,
-
-    /** The bridge stayed unreachable for every retry. */
-    UNREACHABLE,
-
-    /** Too long to send from the shade (never reaches the outbox). */
-    TOO_LONG,
-
-    /** Anything else: an answer this app cannot read, a broken key store. */
-    FAILED,
-}
-
-/** What one attempt of a job came to. */
-sealed interface SendOutcome {
-    /** The bridge sent it to the agent (or had, for a replayed key). */
-    data object Sent : SendOutcome
-
-    /** Final: not sent, and never retried. */
-    data class Final(
-        /** Why. */
-        val reason: NotSent,
-    ) : SendOutcome
-
-    /** Nothing decided: try the same body again later. */
-    data class Retry(
-        /** The bridge's `Retry-After`, if it gave one. */
-        val afterSecs: Long?,
-    ) : SendOutcome
-}
 
 /**
  * Sends one [OutboxJob] to the bridge as a `POST /v1/actions` with
@@ -92,7 +17,9 @@ sealed interface SendOutcome {
  * whose id must still be the notice's (else [NotSent.ALREADY_ANSWERED]). A
  * reply goes only while the agent is still ready and has not changed state
  * since the person replied (else [NotSent.MOVED_ON]); that is the stale
- * guard's "since you decided" for a reply, which names no dialog. The body
+ * guard's "since you decided" for a reply, which names no dialog. `idle`
+ * passes whenever it began: herdr turns `done` into `idle` when the pane is
+ * looked at, which is no reason to drop a reply (docs/security.md, D20). The body
  * is then frozen ([FrozenBodies]) and every retry resends it as is, so a
  * lost answer is replayed by the bridge, never decided twice.
  *
@@ -135,7 +62,8 @@ class OutboxSender(
         val agent = agents.firstOrNull { it.id == request.agent }
             ?: return Prepared.Not(SendOutcome.Final(NotSent.AGENT_GONE))
         val kind = if (request.action == NoticeAction.REPLY) {
-            if (!agent.status.isReady || agent.statusSince > job.createdAt) {
+            val changed = agent.status == AgentStatus.DONE && agent.statusSince > job.createdAt
+            if (!agent.status.isReady || changed) {
                 return Prepared.Not(SendOutcome.Final(NotSent.MOVED_ON))
             }
             ActionBody.Kind.Prompt(requireNotNull(job.text))
@@ -189,6 +117,8 @@ class OutboxSender(
                 // final, as delivery is uncertain.
                 SendOutcome.Final(NotSent.UNCERTAIN)
             }
+            // The dialog went between the read and the action.
+            response.status == 422 && refusal(response.body) in GONE_DIALOG -> SendOutcome.Final(NotSent.ALREADY_ANSWERED)
             response.status == 403 || response.status == 400 || response.status == 422 ->
                 SendOutcome.Final(NotSent.NEEDS_APP)
             response.status == 404 -> SendOutcome.Final(NotSent.AGENT_GONE)
@@ -207,9 +137,13 @@ class OutboxSender(
             else -> SendOutcome.Final(NotSent.FAILED)
         }
 
-    private fun status(body: String): String? =
+    private fun status(body: String): String? = field(body, "status")
+
+    private fun refusal(body: String): String? = field(body, "reason")
+
+    private fun field(body: String, name: String): String? =
         try {
-            JSONObject(body).opt("status") as? String
+            JSONObject(body).opt(name) as? String
         } catch (_: JSONException) {
             null
         }
@@ -217,7 +151,9 @@ class OutboxSender(
     /** A failure to get an answer at all, from [dev.passporter.device.DeviceAuth]. */
     private fun failure(e: DeviceAuthException): SendOutcome =
         when (e) {
-            is DeviceAuthException.Unreachable, is DeviceAuthException.ServerError -> SendOutcome.Retry(null)
+            // Refused: a sign-in the bridge lost (a restart mid-challenge, say).
+            is DeviceAuthException.Unreachable, is DeviceAuthException.ServerError, is DeviceAuthException.Refused ->
+                SendOutcome.Retry(null)
             is DeviceAuthException.RateLimited -> SendOutcome.Retry(e.retryAfterSecs)
             is DeviceAuthException.NotPaired, is DeviceAuthException.Forgotten, is DeviceAuthException.NoBridge ->
                 SendOutcome.Final(NotSent.NOT_PAIRED)
@@ -232,50 +168,8 @@ class OutboxSender(
         const val ALLOW = "yes"
         const val DENY = "no"
         const val DENY_WITH_FEEDBACK = "no_feedback"
+
+        /** Refusals of a `choose` whose dialog is gone (`protocol::RefusalReason`). */
+        val GONE_DIALOG = setOf("no_pending_input", "unknown_option")
     }
-}
-
-/** The body of `POST /v1/actions` for an [OutboxJob] (`protocol::Action`). */
-object ActionBody {
-    /** The verb and payload. */
-    sealed interface Kind {
-        /** `prompt` with `text`. */
-        data class Prompt(
-            /** The prompt. */
-            val text: String,
-        ) : Kind
-
-        /** `choose` of [option] on dialog [pending], with an optional note. */
-        data class Choose(
-            /** The dialog. */
-            val pending: PendingId,
-            /** The option id. */
-            val option: String,
-            /** `feedbackText`, if any. */
-            val feedback: String?,
-        ) : Kind
-    }
-
-    /** The JSON body: fields in the protocol's order, `origin: "notification"`. */
-    fun json(job: OutboxJob, seq: Long, kind: Kind): String {
-        val (name, payload) = when (kind) {
-            is Kind.Prompt -> "prompt" to JSONObject().put("text", kind.text)
-            is Kind.Choose -> "choose" to JSONObject()
-                .put("pendingId", kind.pending.value)
-                .put("optionId", kind.option)
-                .apply { kind.feedback?.let { put("feedbackText", it) } }
-        }
-        return JSONObject()
-            .put("idempotencyKey", job.key)
-            .put("agentId", job.request.agent.value)
-            .put("expectedSeq", seq)
-            .put("createdAt", job.createdAt)
-            .put("kind", name)
-            .put("payload", payload)
-            .put("origin", ORIGIN)
-            .toString()
-    }
-
-    /** Every action from the shade: the bridge's notification policy applies. */
-    const val ORIGIN = "notification"
 }

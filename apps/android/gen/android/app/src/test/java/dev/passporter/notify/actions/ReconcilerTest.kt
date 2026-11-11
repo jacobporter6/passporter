@@ -74,11 +74,17 @@ class ReconcilerTest {
         manager.notify(NoticeNotification.tag(notice.agentId), NoticeNotification.ID, NoticeNotification.build(context, notice, 1))
     }
 
-    private fun run(bridge: Bridge) =
+    private val frozen = MemoryFrozen()
+
+    /**
+     * Runs the check against [bridge], with the outbox's jobs [queued] and
+     * the clock at [now] (by default, every notification is past its grace).
+     */
+    private fun run(bridge: Bridge, queued: Set<String> = setOf(KEY), now: Long = Long.MAX_VALUE / 2) =
         TestListenableWorkerBuilder<ReconcileWorker>(context)
             .setWorkerFactory(object : WorkerFactory() {
                 override fun createWorker(appContext: Context, workerClassName: String, workerParameters: WorkerParameters): ListenableWorker =
-                    ReconcileWorker(appContext, workerParameters, bridge)
+                    ReconcileWorker(appContext, workerParameters, bridge, frozen, { it in queued }, { now })
             })
             .build()
             .doWork()
@@ -113,8 +119,26 @@ class ReconcilerTest {
     @Test
     fun withoutAnAgentListItKeepsEverything() {
         show(notice())
-        assertEquals(ListenableWorker.Result.success(), run { _, _, _ -> throw DeviceAuthException.NotPaired() })
+        assertEquals(ListenableWorker.Result.success(), run(Bridge { _, _, _ -> throw DeviceAuthException.NotPaired() }))
         assertEquals(ListenableWorker.Result.success(), run(FakeBridge { HttpResponse(502, "") }))
         assertEquals(setOf("w1:p1"), tags())
+    }
+
+    @Test
+    fun anAnswerWhoseJobIsGoneIsClearedAndItsFrozenBodyPruned() {
+        show(notice())
+        ActionFeedback(context).sending(job(NoticeAction.ALLOW_ONCE))
+        frozen.put(KEY, "{}")
+        frozen.put("other", "{}")
+        val bridge = FakeBridge { HttpResponse(200, "[]") }
+        run(bridge, queued = setOf(KEY), now = 0)
+        assertEquals("still queued, and inside its grace", setOf("w1:p1"), tags())
+        assertEquals(setOf(KEY), frozen.keys())
+        run(bridge, queued = emptySet(), now = 0)
+        assertEquals("a tap still being queued is left alone", setOf("w1:p1"), tags())
+        run(bridge, queued = emptySet())
+        assertEquals(emptySet<String>(), tags())
+        assertEquals(emptySet<String>(), frozen.keys())
+        assertTrue("no news on show: no request", bridge.requests.isEmpty())
     }
 }

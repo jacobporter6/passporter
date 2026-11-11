@@ -2,6 +2,7 @@ package dev.passporter.notify.actions
 
 import android.Manifest
 import android.app.Application
+import android.app.KeyguardManager
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
@@ -34,6 +35,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
+import java.util.concurrent.Executor
 
 /** The receiver, the worker and the feedback in the notification, together. */
 @RunWith(RobolectricTestRunner::class)
@@ -67,6 +69,7 @@ class OutboxWorkerTest {
             Configuration.Builder().setExecutor(SynchronousExecutor()).setWorkerFactory(factory).build(),
         )
         NoticeNotification.createChannels(context)
+        NoticeActionReceiver.executor = Executor { it.run() }
     }
 
     private fun show(notice: Notice) {
@@ -81,10 +84,14 @@ class OutboxWorkerTest {
 
     private fun subText(notification: Notification) = notification.extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()
 
+    private fun action(index: Int) = requireNotNull(NotificationCompat.getAction(requireNotNull(shown()), index))
+
+    private fun actionIntent(index: Int) = Intent(shadowOf(requireNotNull(action(index).actionIntent)).savedIntent)
+
     /** Taps action [index] of the shown notification, with [typed] text for a `RemoteInput`. */
     private fun tap(index: Int, typed: String? = null) {
-        val action = requireNotNull(NotificationCompat.getAction(requireNotNull(shown()), index))
-        val intent = Intent(shadowOf(requireNotNull(action.actionIntent)).savedIntent)
+        val action = action(index)
+        val intent = actionIntent(index)
         if (typed != null) {
             val results = Bundle().apply { putCharSequence(NoticeActions.KEY_TEXT, typed) }
             RemoteInput.addResultsToIntent(requireNotNull(action.remoteInputs), intent, results)
@@ -108,7 +115,10 @@ class OutboxWorkerTest {
     /** Runs the queued outbox jobs as if a network came up; returns the last one. */
     private fun runQueued(): OutboxJob {
         val driver = requireNotNull(WorkManagerTestInitHelper.getTestDriver(context))
-        queued().filter { it.state == WorkInfo.State.ENQUEUED }.forEach { driver.setAllConstraintsMet(it.id) }
+        queued().filter { it.state == WorkInfo.State.ENQUEUED }.forEach {
+            driver.setInitialDelayMet(it.id)
+            driver.setAllConstraintsMet(it.id)
+        }
         return ran.last()
     }
 
@@ -126,7 +136,7 @@ class OutboxWorkerTest {
         assertTrue(sending.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0)
         val key = requireNotNull(sending.extras.getString(ActionFeedback.EXTRA_JOB))
         assertTrue(key.matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")))
-        assertEquals(info.id, WorkManager.getInstance(context).getWorkInfosForUniqueWork(Outbox.uniqueName(key)).get().single().id)
+        assertEquals(listOf(info.id), WorkManager.getInstance(context).getWorkInfosByTag(Outbox.keyTag(key)).get().map { it.id })
 
         val fake = FakeBridge.of()
         bridge = fake
@@ -184,7 +194,7 @@ class OutboxWorkerTest {
         assertEquals("Already answered", subText(shown))
         assertEquals(listOf("widget: Run `pnpm test`?", "you: Allow once"), messages(shown))
         assertEquals("never resent", 1, stale.actions.size)
-        assertEquals(WorkInfo.State.FAILED, queued().single().state)
+        assertEquals("never fails a reply after it", WorkInfo.State.SUCCEEDED, queued().single().state)
     }
 
     @Test
@@ -209,21 +219,87 @@ class OutboxWorkerTest {
         show(notice())
         ActionFeedback(context).sending(job)
         val last = worker(offline, job, attempts = 0, runs = Outbox.MAX_ATTEMPTS - 1)
-        assertEquals(ListenableWorker.Result.failure(), last.doWork())
+        assertEquals(ListenableWorker.Result.success(), last.doWork())
         assertEquals("Couldn't reach the bridge: open the app", subText(requireNotNull(shown())))
         assertTrue(frozen.bodies.isEmpty())
     }
 
     @Test
-    fun aRetryAfterLongerThanTheBackoffIsFollowed() {
+    fun aRetryAfterLongerThanTheBackoffIsFollowedInTheSameChain() {
+        show(notice())
+        tap(0)
+        val later = Outbox.BACKOFF_SECS + 1
+        var answers = listOf(HttpResponse(429, "", retryAfterSecs = later), HttpResponse(200, """{"status":"sent"}"""))
+        val fake = FakeBridge { sent ->
+            when (sent.path) {
+                "/v1/actions" -> answers.first().also { answers = answers.drop(1) }
+                "/v1/agents" -> HttpResponse(200, agents())
+                else -> HttpResponse(200, PERMISSION)
+            }
+        }
+        bridge = fake
+        val first = runQueued()
+        val chain = queued()
+        assertEquals(setOf(WorkInfo.State.SUCCEEDED, WorkInfo.State.ENQUEUED), chain.map { it.state }.toSet())
+        assertEquals(later * 1000, chain.single { it.state == WorkInfo.State.ENQUEUED }.initialDelayMillis)
+        assertEquals("the body stays frozen for the next run", setOf(first.key), frozen.keys())
+        assertEquals(first.key, runQueued().key)
+        assertEquals(2, fake.actions.size)
+        assertEquals("the same body twice", 1, fake.actions.distinct().size)
+        assertNull("sent", shown())
+    }
+
+    @Test
+    fun aRetryAfterIsCutAndAShorterOneIsLeftToTheBackoff() {
         val job = job(NoticeAction.ALLOW_ONCE)
-        val limited = FakeBridge.of(action = HttpResponse(429, "", retryAfterSecs = Outbox.BACKOFF_SECS + 1))
-        assertEquals(ListenableWorker.Result.success(), worker(limited, job).doWork())
-        val next = WorkManager.getInstance(context).getWorkInfosForUniqueWork(Outbox.uniqueName(KEY)).get().single()
-        assertEquals(WorkInfo.State.ENQUEUED, next.state)
-        assertEquals("the body stays frozen for the next run", 1, frozen.bodies.size)
+        val forever = FakeBridge.of(action = HttpResponse(429, "", retryAfterSecs = 86_400))
+        assertEquals(ListenableWorker.Result.success(), worker(forever, job).doWork())
+        val next = WorkManager.getInstance(context).getWorkInfosForUniqueWork(Outbox.uniqueName(job.request)).get().single()
+        assertEquals(Outbox.MAX_RETRY_AFTER_SECS * 1000, next.initialDelayMillis)
         val shorter = FakeBridge.of(action = HttpResponse(429, "", retryAfterSecs = Outbox.BACKOFF_SECS))
         assertEquals(ListenableWorker.Result.retry(), worker(shorter, job).doWork())
+    }
+
+    @Test
+    fun aLockedPhoneAnswersNothing() {
+        show(notice())
+        shadowOf(context.getSystemService(KeyguardManager::class.java)).setIsDeviceLocked(true)
+        tap(0)
+        assertTrue(queued().isEmpty())
+        val shown = requireNotNull(shown())
+        assertEquals("Unlock your phone to answer", subText(shown))
+        assertEquals("still answerable once unlocked", 3, NotificationCompat.getActionCount(shown))
+    }
+
+    @Test
+    fun aSecondTapOnADialogQueuesNothing() {
+        show(notice())
+        val allow = actionIntent(0)
+        val deny = actionIntent(1)
+        NoticeActionReceiver().onReceive(context, allow)
+        NoticeActionReceiver().onReceive(context, deny)
+        val job = queued().single()
+        bridge = FakeBridge.of()
+        assertEquals(NoticeAction.ALLOW_ONCE, runQueued().request.action)
+        assertEquals(job.id, queued().single().id)
+    }
+
+    @Test
+    fun repliesToOneAgentGoOneAfterTheOther() {
+        show(notice(state = NoticeState.FINISHED, pending = null))
+        val reply = actionIntent(0)
+        val inputs = requireNotNull(action(0).remoteInputs)
+        for (text in listOf("first", "second")) {
+            val intent = Intent(reply)
+            val results = Bundle().apply { putCharSequence(NoticeActions.KEY_TEXT, text) }
+            RemoteInput.addResultsToIntent(inputs, intent, results)
+            NoticeActionReceiver().onReceive(context, intent)
+        }
+        assertEquals(setOf(WorkInfo.State.BLOCKED, WorkInfo.State.ENQUEUED), queued().map { it.state }.toSet())
+        bridge = FakeBridge.of(status = "done", dialog = "null", since = 0)
+        runQueued()
+        runQueued()
+        assertEquals(listOf("first", "second"), ran.map { it.text })
     }
 
     @Test

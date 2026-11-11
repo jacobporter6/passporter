@@ -35,4 +35,5 @@
     <string name="notify_not_sent_unreachable">Couldn\'t reach the bridge: open the app</string>
     <string name="notify_not_sent_too_long">Too long for a reply here: open the app</string>
     <string name="notify_not_sent_failed">Not sent: open the app</string>
+    <string name="notify_unlock_to_answer">Unlock your phone to answer</string>
 </resources>

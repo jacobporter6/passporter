@@ -76,4 +76,6 @@ class MemoryFrozen : FrozenBodies {
     override fun remove(key: String) {
         bodies.remove(key)
     }
+
+    override fun keys() = bodies.keys.toSet()
 }

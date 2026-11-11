@@ -8,7 +8,8 @@ import androidx.work.WorkerParameters
 /**
  * Runs one attempt of an [OutboxJob] ([OutboxSender]) and shows how it
  * went ([ActionFeedback]). A retry follows WorkManager's exponential
- * backoff, or the bridge's `Retry-After` when that is longer; after
+ * backoff, or the bridge's `Retry-After` when that is longer (up to
+ * [Outbox.MAX_RETRY_AFTER_SECS]); after
  * [Outbox.MAX_ATTEMPTS] the job gives up as [NotSent.UNREACHABLE].
  */
 class OutboxWorker internal constructor(
@@ -22,9 +23,11 @@ class OutboxWorker internal constructor(
         this(context, params, DeviceBridge(context.applicationContext), PreferenceFrozenBodies(context))
 
     override fun doWork(): Result {
+        // Every outcome is a success for WorkManager: a failed link would
+        // fail the replies appended after it unrun (Outbox).
         val job = OutboxData.read(inputData) ?: run {
             Log.w(TAG, "dropped an unreadable outbox job")
-            return Result.failure()
+            return Result.success()
         }
         val attempt = OutboxData.attempts(inputData) + runAttemptCount
         val feedback = ActionFeedback(applicationContext)
@@ -37,7 +40,7 @@ class OutboxWorker internal constructor(
             is SendOutcome.Final -> {
                 Log.i(TAG, "answer not sent: ${outcome.reason}")
                 feedback.notSent(job, outcome.reason)
-                Result.failure()
+                Result.success()
             }
             is SendOutcome.Retry -> retry(job, attempt, outcome.afterSecs, feedback)
         }
@@ -47,7 +50,7 @@ class OutboxWorker internal constructor(
         if (attempt + 1 >= Outbox.MAX_ATTEMPTS) {
             frozen.remove(job.key)
             feedback.notSent(job, NotSent.UNREACHABLE)
-            return Result.failure()
+            return Result.success()
         }
         if (afterSecs != null && afterSecs > Outbox.backoffSecs(runAttemptCount)) {
             // This run ends; the next one, appended to it, waits as asked.

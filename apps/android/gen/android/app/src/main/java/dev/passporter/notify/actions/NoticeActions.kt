@@ -10,8 +10,8 @@ import dev.passporter.notify.Notice
 
 /**
  * The notification actions of a [Notice] ([NoticeAction.of]), as Android
- * wants them for a messaging notification, so Android Auto (design §6.6)
- * can reuse them:
+ * wants them for a messaging notification (Android Auto, design §6.6,
+ * needs more: a reply on a dialog's notice and a mark-as-read):
  *
  * | Action | Title | Semantic action | `RemoteInput` key |
  * |---|---|---|---|
@@ -23,8 +23,9 @@ import dev.passporter.notify.Notice
  * The dialog answers carry no semantic action on purpose: a system
  * feature that acts on semantics (a car or an assistant reading "reply"
  * or "thumbs up") must never allow or deny by guessing. None shows a user
- * interface, and each needs the phone unlocked: someone holding a locked
- * phone cannot answer an agent.
+ * interface. Each needs the phone unlocked: Android 12 and later ask
+ * before running it, and [NoticeActionReceiver] refuses while the phone is
+ * locked on any version, also when a watch or another app fires it.
  *
  * Every action is a broadcast to [NoticeActionReceiver], explicit and not
  * exported, with the [ActionRequest] as its data. The pending intents are

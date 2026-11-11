@@ -26,7 +26,8 @@ import dev.passporter.notify.NoticeState
  *
  * A job's notification carries its key ([EXTRA_JOB]). If news replaced it
  * in the meantime (a new dialog, a new turn), the news stays as it is:
- * whatever happened to the older answer, the news is what matters now.
+ * whatever happened to the older answer, the news is what matters now. A
+ * job's notification left over (its job lost) is cleared by [Reconciler].
  */
 class ActionFeedback(
     context: Context,
@@ -59,17 +60,20 @@ class ActionFeedback(
     }
 
     /**
-     * Text from the shade that cannot be sent ([TextProblem]): the
-     * notification stays as it was, actions included, with the reason
-     * under it (or nothing, for an empty entry), so the spinner stops.
+     * A tap that queued nothing ([Unsendable]): the notification stays as
+     * it was, actions included, with the reason under it (nothing for an
+     * empty entry), so a reply's spinner stops.
      */
-    fun refused(request: ActionRequest, name: String, problem: TextProblem) {
+    fun refused(request: ActionRequest, name: String, reason: Unsendable) {
         val base = active(request) ?: return
-        val status = when (problem) {
-            TextProblem.EMPTY -> null
-            TextProblem.TOO_LONG -> message(NotSent.TOO_LONG)
+        val status = when (reason) {
+            Unsendable.EMPTY -> null
+            Unsendable.ALREADY_SENDING -> R.string.notify_sending
+            Unsendable.TOO_LONG -> R.string.notify_not_sent_too_long
+            Unsendable.LOCKED -> R.string.notify_unlock_to_answer
         }
-        repost(request, name, base, null, status, key = null, keepActions = true)
+        val key = base.extras.getString(EXTRA_JOB)
+        repost(request, name, base, null, status, key, keepActions = true)
     }
 
     private fun isOwnedBy(job: OutboxJob): Boolean = active(job.request)?.extras?.getString(EXTRA_JOB) == job.key
@@ -146,7 +150,6 @@ class ActionFeedback(
                 NotSent.UNCERTAIN -> R.string.notify_not_sent_uncertain
                 NotSent.NOT_PAIRED -> R.string.notify_not_sent_not_paired
                 NotSent.UNREACHABLE -> R.string.notify_not_sent_unreachable
-                NotSent.TOO_LONG -> R.string.notify_not_sent_too_long
                 NotSent.FAILED -> R.string.notify_not_sent_failed
             }
     }
