@@ -9,6 +9,8 @@
 //! (`crates/bridge/src/server/headers.rs`) and the Connect page's
 //! `form-action 'none'`.
 
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+
 use url::Url;
 
 use crate::origin::BridgeOrigin;
@@ -21,6 +23,7 @@ pub const LOCAL_HOST: &str = "tauri.localhost";
 ///
 /// Once paired, the bundled pages are refused too: nothing on the bridge's
 /// pages can send the webview back to a page that may call app commands.
+/// Only the shell opens its Bridge page then, through [`Guard`].
 /// History navigations (Back) skip this check, so the Connect page leaves
 /// history when it opens the bridge (`connect.js`).
 #[must_use]
@@ -28,6 +31,71 @@ pub fn allows(url: &Url, bridge: Option<&BridgeOrigin>) -> bool {
     match bridge {
         None => is_local(url),
         Some(bridge) => bridge.contains(url),
+    }
+}
+
+/// The navigation guard as the shell runs it: [`allows`] against the
+/// paired bridge, plus one exception for the shell's own loads.
+///
+/// wry puts the shell's own loads (`navigate`, the first page) through the
+/// guard too, so before the shell opens its Bridge page while paired it
+/// names that exact URL ([`Guard::expect`]) and the guard lets that one
+/// load through once. The Kotlin side refuses every navigation a page
+/// starts to the Bridge page (`ShellWebViewClient`), so only the shell's
+/// own load can use the allowance.
+#[derive(Debug)]
+pub struct Guard {
+    bridge: Arc<OnceLock<BridgeOrigin>>,
+    expected: Mutex<Option<Url>>,
+}
+
+impl Guard {
+    /// The guard for the bridge in `bridge`, set once paired.
+    #[must_use]
+    pub fn new(bridge: Arc<OnceLock<BridgeOrigin>>) -> Self {
+        Self {
+            bridge,
+            expected: Mutex::new(None),
+        }
+    }
+
+    /// The paired bridge, if any.
+    #[must_use]
+    pub fn bridge(&self) -> Option<&BridgeOrigin> {
+        self.bridge.get()
+    }
+
+    /// Whether the webview may load `url`. A load the shell expects passes
+    /// once, then the allowance is used up.
+    pub fn allows(&self, url: &Url) -> bool {
+        if allows(url, self.bridge()) {
+            return true;
+        }
+        let mut expected = self.expected();
+        if expected.as_ref() == Some(url) {
+            *expected = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Readies the guard for the shell's own load of `url`, replacing any
+    /// earlier allowance not yet used. Nothing to do for a URL [`allows`]
+    /// lets through anyway.
+    pub fn expect(&self, url: &Url) {
+        if !allows(url, self.bridge()) {
+            *self.expected() = Some(url.clone());
+        }
+    }
+
+    /// Drops the allowance, for a load the shell could not start.
+    pub fn unexpect(&self) {
+        *self.expected() = None;
+    }
+
+    fn expected(&self) -> MutexGuard<'_, Option<Url>> {
+        self.expected.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -67,6 +135,63 @@ mod tests {
             &url("blob:https://bridge.example.org/1b4f"),
             Some(&bridge)
         ));
+    }
+
+    fn paired_guard() -> Guard {
+        let bridge = Arc::new(OnceLock::new());
+        let _ = bridge.set(BridgeOrigin::parse("https://bridge.example.org").expect("origin"));
+        Guard::new(bridge)
+    }
+
+    #[test]
+    fn an_expected_navigation_passes_once_and_exactly() {
+        let guard = paired_guard();
+        let page = url("https://tauri.localhost/bridge.html?unreachable");
+        assert!(!guard.allows(&page), "nothing is expected at first");
+        guard.expect(&page);
+        for other in [
+            "https://tauri.localhost/bridge.html",
+            "https://tauri.localhost/index.html",
+            "https://tauri.localhost/bridge.html?unreachable#x",
+            "https://example.com/",
+        ] {
+            assert!(!guard.allows(&url(other)), "{other}");
+        }
+        assert!(guard.allows(&page));
+        assert!(!guard.allows(&page), "used up");
+        guard.expect(&url("https://tauri.localhost/bridge.html"));
+        guard.expect(&page);
+        assert!(
+            !guard.allows(&url("https://tauri.localhost/bridge.html")),
+            "replaced"
+        );
+        assert!(guard.allows(&page));
+    }
+
+    #[test]
+    fn an_allowance_can_be_dropped() {
+        let guard = paired_guard();
+        let page = url("https://tauri.localhost/bridge.html");
+        guard.expect(&page);
+        guard.unexpect();
+        assert!(!guard.allows(&page));
+    }
+
+    #[test]
+    fn the_guard_still_allows_the_bridge_and_nothing_else() {
+        let guard = paired_guard();
+        let agent = url("https://bridge.example.org/agent/w1:p1");
+        guard.expect(&agent);
+        assert!(guard.allows(&agent));
+        assert!(guard.allows(&agent), "the bridge needs no allowance");
+        guard.expect(&url("https://tauri.localhost/bridge.html"));
+        assert!(
+            guard.allows(&agent),
+            "an allowance does not narrow the bridge"
+        );
+        let unpaired = Guard::new(Arc::new(OnceLock::new()));
+        assert!(unpaired.allows(&url("https://tauri.localhost/index.html")));
+        assert!(!unpaired.allows(&agent));
     }
 
     #[test]

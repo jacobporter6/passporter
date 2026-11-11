@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="dark" />
+    <title>Bridge · Passporter</title>
+    <link rel="stylesheet" href="connect.css" />
+    <script src="bridge.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <!-- The shell opens this page when the bridge does not answer
+           (bridge.html?unreachable) or from the launcher's Bridge shortcut. -->
+      <h1 id="title">Your bridge</h1>
+      <p id="unreachable" hidden>
+        Passporter could not reach your bridge. Check that the bridge is
+        running and that this phone can reach it (for example, that
+        Tailscale is on), then try again.
+      </p>
+      <p>Bridge address: <code id="address">…</code></p>
+      <p id="error" role="alert"></p>
+      <div id="actions" class="actions">
+        <button id="open" type="button">Open Passporter</button>
+        <button id="change" type="button" class="secondary">Change address</button>
+      </div>
+      <div id="confirm" class="actions" hidden>
+        <p>
+          This app forgets <code id="confirm-address">this bridge</code>'s
+          address and this phone's device key, then restarts. You enter the
+          new address and pair again. The old bridge still lists this phone
+          until you revoke it there (<code>passporter devices revoke</code>).
+        </p>
+        <button id="forget" type="button">Forget and restart</button>
+        <button id="cancel" type="button" class="secondary">Cancel</button>
+      </div>
+    </main>
+  </body>
+</html>
