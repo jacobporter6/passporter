@@ -4,13 +4,3 @@ just = "1.59.0"
 cargo-deny = "0.20.2"
 "github:trunk-rs/trunk" = "v0.22.1"
 "github:nextest-rs/nextest" = { version = "cargo-nextest-0.9.151", bin = "cargo-nextest" }
-# Android app only (deploy/android/setup.sh, docs/development/android.md).
-# JDK 21: AGP 9 needs 17+, and Gradle 9.6 runs on up to 26.
-java = "temurin-21.0.13+9.0.LTS"
-"github:tauri-apps/tauri" = { version = "tauri-cli-v2.12.4", bin = "cargo-tauri" }
-
-# Where deploy/android/setup.sh puts the Android SDK. NDK_HOME's version
-# must match NDK_VERSION in that script. mise sets JAVA_HOME from `java`.
-[env]
-ANDROID_HOME = "{{env.HOME}}/.local/share/android-sdk"
-NDK_HOME = "{{env.ANDROID_HOME}}/ndk/29.0.14206865"

@@ -6,19 +6,19 @@
 #
 # What it installs, and where:
 #   1. a JDK and the Tauri CLI (cargo-tauri), via mise, at the versions pinned
-#      in mise.toml (`java`, `github:tauri-apps/tauri`);
+#      in mise.android.toml (mise loads it when MISE_ENV=android);
 #   2. the Android command-line tools into $ANDROID_HOME/cmdline-tools/latest
-#      (ANDROID_HOME is ~/.local/share/android-sdk, set by mise.toml [env]),
+#      (ANDROID_HOME is ~/.local/share/android-sdk, set by mise.android.toml),
 #      checked against the SHA-256 pinned below;
-#   3. the SDK packages pinned below, via sdkmanager, accepting Google's
-#      Android SDK licences non-interactively;
+#   3. the SDK packages pinned below, via sdkmanager, accepting non-interactively
+#      the licences of those packages (Google's Android SDK licence);
 #   4. the Rust Android targets for the toolchain pinned in rust-toolchain.toml.
 #
 # Safe to re-run: each step checks what is there first, so a second run
 # downloads and changes nothing. docs/development/android.md says how to undo it.
 set -euo pipefail
 
-# ---- Pinned versions (the JDK and the Tauri CLI are pinned in mise.toml) ----
+# --- Pinned versions (the JDK and the Tauri CLI are in mise.android.toml) ---
 # Command-line tools 21.0 (build 15641748). The SHA-1 in Google's repository
 # manifest (dl.google.com/android/repository/repository2-3.xml) matches this
 # file. Not 22.0 or later: their sdkmanager hands off to a separate "Android
@@ -28,7 +28,9 @@ CMDLINE_TOOLS_SHA256="a66d5ef0238fc0162e9c1446602ce0dd41702d4dd7a94d2ce42d12b7f8
 # Tauri CLI 2.12.4's Android template compiles against SDK 37 (packaged as
 # android-37.0). NDK r29 stable: Tauri's own default (29.0.13846066) is the
 # r29 beta 3, and Tauri uses whatever NDK_HOME names.
-# Keep NDK_VERSION in step with NDK_HOME in mise.toml.
+# Keep NDK_VERSION in step with NDK_HOME in mise.android.toml.
+# platform-tools (adb) is the one unpinned package: sdkmanager only offers the
+# latest. Builds don't use it; it talks to a device.
 NDK_VERSION="29.0.14206865"
 SDK_PACKAGES=(
     "platform-tools"
@@ -54,26 +56,28 @@ esac
 step() { printf '\n==> %s\n' "$*"; }
 die() { echo "setup.sh: $*" >&2; exit 1; }
 
-for tool in mise rustup curl unzip sha256sum; do
+for tool in git mise rustup curl unzip sha256sum; do
     command -v "$tool" >/dev/null || die "$tool is required but not on PATH"
 done
 
 repo="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
 cd "$repo"
 
-step "JDK and Tauri CLI (mise.toml)"
+export MISE_ENV=android
+step "JDK and Tauri CLI (mise.android.toml)"
 mise install java "github:tauri-apps/tauri"
-# ANDROID_HOME, NDK_HOME, JAVA_HOME and PATH exactly as the repo's mise sets them.
+# ANDROID_HOME, NDK_HOME, JAVA_HOME and PATH exactly as mise sets them.
 eval "$(mise env --shell bash)"
 [[ -n "${ANDROID_HOME:-}" && -n "${NDK_HOME:-}" && -n "${JAVA_HOME:-}" ]] \
-    || die "mise.toml must set ANDROID_HOME and NDK_HOME, and pin java"
+    || die "mise.android.toml must set ANDROID_HOME and NDK_HOME, and pin java"
 [[ "$NDK_HOME" == "$ANDROID_HOME/ndk/$NDK_VERSION" ]] \
-    || die "NDK_HOME in mise.toml ($NDK_HOME) does not match NDK_VERSION $NDK_VERSION here"
+    || die "NDK_HOME in mise.android.toml ($NDK_HOME) does not match NDK_VERSION $NDK_VERSION here"
 
 step "Android command-line tools $CMDLINE_TOOLS_BUILD in $ANDROID_HOME"
 tools_dir="$ANDROID_HOME/cmdline-tools/latest"
 stamp="$tools_dir/.passporter-sha256"
-if [[ -f "$stamp" && "$(<"$stamp")" == "$CMDLINE_TOOLS_SHA256" ]]; then
+sdkmanager="$tools_dir/bin/sdkmanager"
+if [[ -f "$stamp" && "$(<"$stamp")" == "$CMDLINE_TOOLS_SHA256" && -x "$sdkmanager" ]]; then
     echo "already installed"
 else
     work="$(mktemp -d)"
@@ -91,7 +95,6 @@ else
     echo "$CMDLINE_TOOLS_SHA256" >"$stamp"
     echo "installed"
 fi
-sdkmanager="$tools_dir/bin/sdkmanager"
 
 step "SDK packages: ${SDK_PACKAGES[*]}"
 missing=()
@@ -102,15 +105,16 @@ done
 if ((${#missing[@]} == 0)); then
     echo "already installed"
 else
-    # The human who runs this accepts Google's Android SDK licence terms.
-    { yes || true; } | "$sdkmanager" --sdk_root="$ANDROID_HOME" --licenses >/dev/null
-    "$sdkmanager" --sdk_root="$ANDROID_HOME" --install "${missing[@]}"
+    # Answers yes to the licence prompts of these packages only (Google's
+    # Android SDK licence), which the human who runs this accepts.
+    { yes || true; } | "$sdkmanager" --sdk_root="$ANDROID_HOME" --install "${missing[@]}"
 fi
 
 channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
 [[ -n "$channel" ]] || die "no channel in rust-toolchain.toml"
 step "Rust targets for toolchain $channel"
-grep -q "^$channel-" <<<"$(rustup toolchain list)" || rustup toolchain install "$channel" --profile minimal
+toolchains="$(rustup toolchain list)"
+[[ $'\n'"$toolchains" == *$'\n'"$channel-"* ]] || rustup toolchain install "$channel" --profile minimal
 installed="$(rustup target list --installed --toolchain "$channel")"
 missing=()
 for target in "${RUST_TARGETS[@]}"; do
@@ -124,11 +128,11 @@ fi
 
 step "Done"
 cat <<MSG
-Inside this repo, mise sets these for you (mise.toml [env] and the pinned java):
+With MISE_ENV=android, mise sets these inside this repo (mise.android.toml):
   ANDROID_HOME=$ANDROID_HOME
   NDK_HOME=$NDK_HOME
   JAVA_HOME=$JAVA_HOME
-Without mise activation in your shell, load them with:
-  eval "\$(mise env --shell bash)"
+Set MISE_ENV=android in the shell you build the app from, or load them once:
+  eval "\$(MISE_ENV=android mise env --shell bash)"
 Then check with: cargo tauri --version
 MSG
