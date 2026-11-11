@@ -8,6 +8,11 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <!-- Agent news (dev.passporter.notify); asked once a bridge is connected. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android Auto's connection provider, read to tell whether it projects
+         (dev.passporter.car.AndroidAutoProjection). -->
+    <queries>
+        <provider android:authorities="androidx.car.app.connection" />
+    </queries>
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
@@ -50,6 +55,14 @@
         <receiver
             android:name="dev.passporter.notify.actions.NoticeActionReceiver"
             android:exported="false" />
+        <!-- Android Auto's reply and mark-as-read (dev.passporter.car). -->
+        <receiver
+            android:name="dev.passporter.car.CarReplyReceiver"
+            android:exported="false" />
+        <!-- A messaging app for Android Auto: notifications only, no car UI. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
         <!-- UnifiedPush events (dev.passporter.push), from the connector's receiver. -->
         <service
             android:name="dev.passporter.push.PassporterPushService"

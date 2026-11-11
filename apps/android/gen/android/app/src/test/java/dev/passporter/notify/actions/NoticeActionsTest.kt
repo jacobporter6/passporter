@@ -46,11 +46,12 @@ class NoticeActionsTest {
     }
 
     @Test
-    fun aFinishedTurnsReplyIsTheSemanticReplyWithARemoteInput() {
+    fun aFinishedTurnsReplyTakesARemoteInputButLeavesTheSemanticReplyToTheCar() {
         val done = notice(state = NoticeState.FINISHED, pending = null)
         val reply = actions(NoticeNotification.build(context, done, now = 1)).single()
         assertEquals("Reply", "${reply.title}")
-        assertEquals(NotificationCompat.Action.SEMANTIC_ACTION_REPLY, reply.semanticAction)
+        assertEquals(NotificationCompat.Action.SEMANTIC_ACTION_NONE, reply.semanticAction)
+        assertTrue(reply.isAuthenticationRequired)
         assertFalse(reply.showsUserInterface)
         assertEquals(NoticeActions.KEY_TEXT, requireNotNull(reply.remoteInputs).single().resultKey)
         assertFalse(reply.allowGeneratedReplies)

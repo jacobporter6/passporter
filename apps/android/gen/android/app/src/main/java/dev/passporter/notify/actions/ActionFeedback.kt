@@ -76,8 +76,8 @@ class ActionFeedback(
 
     /**
      * A tap that queued nothing ([Unsendable]): the notification stays as
-     * it was, actions included, with the reason under it (nothing for an
-     * empty entry), so a reply's spinner stops.
+     * it was, actions included (Android Auto's too), with the reason under
+     * it (nothing for an empty entry), so a reply's spinner stops.
      */
     fun refused(request: ActionRequest, name: String, reason: Unsendable) = synchronized(NotificationLock) {
         val base = active(request) ?: return
@@ -147,7 +147,16 @@ class ActionFeedback(
             .setSilent(true)
         status?.let { builder.setSubText(context.getString(it)).setContentText(context.getString(it)) }
         val question = base?.extras?.getString(NoticeNotification.EXTRA_QUESTION) ?: request.question
-        builder.addExtras(Bundle().apply { putString(NoticeNotification.EXTRA_QUESTION, question) })
+        builder.addExtras(
+            Bundle().apply {
+                putString(NoticeNotification.EXTRA_QUESTION, question)
+                // Still the same notice: Android Auto's actions name it.
+                base?.extras?.takeIf { it.containsKey(NoticeNotification.EXTRA_STAMP) }
+                    ?.let { putLong(NoticeNotification.EXTRA_STAMP, it.getLong(NoticeNotification.EXTRA_STAMP)) }
+                base?.extras?.getString(NoticeNotification.EXTRA_AGENT_NAME)
+                    ?.let { putString(NoticeNotification.EXTRA_AGENT_NAME, it) }
+            },
+        )
         when (mark) {
             is Mark.Job -> builder.addExtras(Bundle().apply { putString(EXTRA_JOB, mark.key) })
             Mark.Outcome -> builder.addExtras(Bundle().apply { putBoolean(EXTRA_OUTCOME, true) })
@@ -157,6 +166,8 @@ class ActionFeedback(
             for (index in 0 until NotificationCompat.getActionCount(base)) {
                 NotificationCompat.getAction(base, index)?.let(builder::addAction)
             }
+            // Android Auto's, so the car can still take the conversation.
+            NotificationCompat.getInvisibleActions(base).forEach(builder::addInvisibleAction)
         }
         try {
             manager.notify(NoticeNotification.tag(request.agent), NoticeNotification.ID, builder.build())

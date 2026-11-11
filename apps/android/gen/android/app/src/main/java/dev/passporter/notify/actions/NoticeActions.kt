@@ -9,21 +9,22 @@ import dev.passporter.app.R
 import dev.passporter.notify.Notice
 
 /**
- * The notification actions of a [Notice] ([NoticeAction.of]), as Android
- * wants them for a messaging notification (Android Auto, design §6.6,
- * needs more: a reply on a dialog's notice and a mark-as-read):
+ * The shade's notification actions of a [Notice] ([NoticeAction.of]):
  *
  * | Action | Title | Semantic action | `RemoteInput` key |
  * |---|---|---|---|
- * | [NoticeAction.REPLY] | Reply | `SEMANTIC_ACTION_REPLY` | [KEY_TEXT] |
+ * | [NoticeAction.REPLY] | Reply | none | [KEY_TEXT] |
  * | [NoticeAction.ALLOW_ONCE] | Allow once | none | — |
  * | [NoticeAction.DENY] | Deny | none | — |
  * | [NoticeAction.DENY_WITH_NOTE] | Deny with note | none | [KEY_TEXT] |
  *
- * The dialog answers carry no semantic action on purpose: a system
- * feature that acts on semantics (a car or an assistant reading "reply"
- * or "thumbs up") must never allow or deny by guessing. None shows a user
- * interface. Each needs the phone unlocked: Android 12 and later ask
+ * None carries a semantic action, on purpose: a system feature that acts
+ * on semantics (Android Auto, an assistant reading "reply" or "thumbs
+ * up") must never allow or deny by guessing, nor answer through the shade.
+ * The only semantic actions of a notification are Android Auto's reply
+ * and mark-as-read ([dev.passporter.car.CarActions]), invisible, which
+ * send the car's words to the bridge under the car policy. None shows a
+ * user interface. Each needs the phone unlocked: Android 12 and later ask
  * before running it, and [NoticeActionReceiver] refuses while the phone is
  * locked on any version, also when a watch or another app fires it.
  *
@@ -65,13 +66,7 @@ object NoticeActions {
             mutability or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val builder = NotificationCompat.Action.Builder(null, context.getString(title(action)), pendingIntent)
-            .setSemanticAction(
-                if (action == NoticeAction.REPLY) {
-                    NotificationCompat.Action.SEMANTIC_ACTION_REPLY
-                } else {
-                    NotificationCompat.Action.SEMANTIC_ACTION_NONE
-                },
-            )
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_NONE)
             .setShowsUserInterface(false)
             .setAuthenticationRequired(true)
         if (action.takesText) {
