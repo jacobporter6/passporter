@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher's static shortcuts. "Bridge" opens the bundled Bridge page
+     (the address, and "Change address"); the shell ignores it before a
+     bridge is paired. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="bridge"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_bridge_short"
+        android:shortcutLongLabel="@string/shortcut_bridge_long">
+        <intent
+            android:action="dev.passporter.app.MANAGE_BRIDGE"
+            android:targetPackage="dev.passporter.app"
+            android:targetClass="dev.passporter.app.MainActivity" />
+    </shortcut>
+</shortcuts>

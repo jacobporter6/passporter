@@ -97,7 +97,7 @@ Three deliverables:
 |---|---|---|
 | `crates/bridge` | Rust service (axum) on the dev machine. Wraps herdr + Claude transcripts into a small, typed, authenticated API. | systemd user unit (or any supervisor); reachable only through your HTTPS proxy |
 | `crates/web` | Mobile-first PWA, Rust compiled to WASM (Leptos). Works on its own in Chrome; also the UI inside the Android app. | served by the bridge |
-| `apps/android` (planned, not built) | Tauri 2 mobile shell around `crates/web` plus Kotlin plugins: notifications with inline reply, Android Auto messaging, UnifiedPush, recording that survives app kills. | sideloaded APK |
+| `apps/android` (built: shell; plugins in progress) | Tauri 2 mobile shell around `crates/web` plus Kotlin plugins: notifications with inline reply, Android Auto messaging, UnifiedPush, recording that survives app kills. | sideloaded APK |
 
 Shared crates: `crates/protocol` (serde types compiled into both the bridge and
 the WASM frontend, so an API mismatch is a build error), `crates/herdr`

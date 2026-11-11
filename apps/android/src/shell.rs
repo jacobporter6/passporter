@@ -5,14 +5,21 @@
 //! bundled pages or the paired origin ([`crate::navigation`]), and the
 //! bridge capability grants IPC to that exact origin only
 //! ([`BridgeOrigin::capability_pattern`]). The app defines no ACL manifest,
-//! so its own commands (`connect`) answer bundled pages only: Tauri refuses
-//! app commands to any remote page that no capability names.
+//! so its own commands (`connect`, `bridge`, `forget_bridge`) answer bundled
+//! pages only: Tauri refuses app commands to any remote page that no
+//! capability names.
+//!
+//! The Kotlin side ([`crate::native`]) asks for the other screens: an agent
+//! on a notification tap, the bundled Bridge page from the launcher
+//! shortcut or when a bridge page fails to load ([`crate::destination`]).
 
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use tauri::ipc::CapabilityBuilder;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
+use crate::destination::{self, Request};
+use crate::native::{self, NativeExt};
 use crate::navigation;
 use crate::origin::BridgeOrigin;
 use crate::store::Store;
@@ -44,7 +51,7 @@ struct Shell {
 #[tauri::mobile_entry_point]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![connect])
+        .invoke_handler(tauri::generate_handler![connect, bridge, forget_bridge])
         .setup(|app| {
             setup(app.handle())?;
             Ok(())
@@ -54,8 +61,9 @@ pub fn run() {
 }
 
 /// Loads the saved bridge, if any, and opens the main window on it (or on
-/// the Connect page).
+/// the Connect page, or where the intent that started the app asks).
 fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    app.plugin(native::init())?;
     let store = Store::in_dir(&app.path().app_data_dir()?);
     let bridge = Arc::new(OnceLock::new());
     // Anything unreadable (no file yet, a corrupt one, a storage error)
@@ -78,6 +86,19 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             WebviewUrl::App(CONNECT_PAGE.into())
         }
     };
+    let requests = Arc::clone(&bridge);
+    let handle = app.clone();
+    let launch = app
+        .native()
+        .watch(move |request| show(&handle, &request, requests.get()))
+        .unwrap_or_else(|error| {
+            // Taps and the shortcut then do nothing; the app still works.
+            log_to_logcat(&error);
+            None
+        });
+    let start = launch
+        .and_then(|request| destination::destination(&request, bridge.get()))
+        .map_or(start, WebviewUrl::External);
     let guard = Arc::clone(&bridge);
     app.manage(Shell {
         store,
@@ -89,6 +110,20 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .on_navigation(move |url| navigation::allows(url, guard.get()))
         .build()?;
     Ok(())
+}
+
+/// Shows what the Kotlin side asked for, if a bridge is paired.
+fn show(app: &AppHandle, request: &Request, bridge: Option<&BridgeOrigin>) {
+    let Some(url) = destination::destination(request, bridge) else {
+        return;
+    };
+    // No window yet: the request came during setup, before there was
+    // anything to show it in.
+    if let Some(window) = app.get_webview_window(MAIN)
+        && let Err(error) = window.navigate(url)
+    {
+        log_to_logcat(&error);
+    }
 }
 
 /// Lets pages on `origin`, in the main window only, use the native plugins
@@ -115,8 +150,9 @@ fn grant_ipc(app: &AppHandle, origin: &BridgeOrigin) -> tauri::Result<()> {
 /// then replaces itself with that URL (`location.replace`), so Back never
 /// returns to it: history navigations skip the navigation guard.
 ///
-/// The bridge is chosen once: to change it, clear the app's storage. The
-/// address is saved first, so a failure there changes nothing.
+/// The bridge is chosen once per process: to change it, the Bridge page
+/// calls [`forget_bridge`], which restarts the app. The address is saved
+/// first, so a failure there changes nothing.
 #[tauri::command]
 #[expect(
     clippy::needless_pass_by_value,
@@ -130,7 +166,7 @@ fn connect(app: AppHandle, shell: State<'_, Shell>, address: &str) -> Result<Str
         .unwrap_or_else(PoisonError::into_inner);
     if let Some(current) = shell.bridge.get() {
         return Err(format!(
-            "already connected to {current}; clear the app's storage to change it"
+            "already connected to {current}; change it from the Bridge page"
         ));
     }
     shell
@@ -149,11 +185,41 @@ fn connect(app: AppHandle, shell: State<'_, Shell>, address: &str) -> Result<Str
     Ok(url)
 }
 
-/// Logs a launch problem the app recovers from: stderr goes to logcat.
+/// The paired bridge's origin, for the bundled Bridge page; `None` before
+/// connecting.
+#[tauri::command]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Tauri hands command arguments over by value"
+)]
+fn bridge(shell: State<'_, Shell>) -> Option<String> {
+    shell.bridge.get().map(ToString::to_string)
+}
+
+/// Forgets the bridge, then restarts the app, which opens the Connect page.
+/// Answers the bundled Bridge page only.
+///
+/// The restart is the point: Tauri cannot take back the capability granted
+/// to the old origin, and the webview may hold its pages, so only a new
+/// process starts clean. The Kotlin side also forgets the native pairing
+/// before it restarts. The saved address goes first: if anything after it
+/// fails, the next launch opens the Connect page anyway.
+#[tauri::command]
+async fn forget_bridge(app: AppHandle, shell: State<'_, Shell>) -> Result<(), String> {
+    shell
+        .store
+        .forget()
+        .map_err(|error| format!("could not forget the address: {error}"))?;
+    app.native().restart().map_err(|error| {
+        format!("forgot the address, but could not restart: {error}; close and reopen the app")
+    })
+}
+
+/// Logs a problem the app recovers from: stderr goes to logcat.
 #[expect(
     clippy::print_stderr,
     reason = "the shell has no logger; stderr is logcat"
 )]
-fn log_to_logcat(error: &dyn std::error::Error) {
+pub(crate) fn log_to_logcat(error: &dyn std::error::Error) {
     eprintln!("passporter: {error}");
 }

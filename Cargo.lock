@@ -3129,6 +3129,9 @@ dependencies = [
 name = "passporter-android"
 version = "0.1.0"
 dependencies = [
+ "protocol",
+ "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-utils",
