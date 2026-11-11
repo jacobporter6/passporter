@@ -57,6 +57,7 @@ class ShellRequestTest {
         )
         assertEquals("""{"kind":"manageBridge"}""", ShellRequest.ManageBridge.toJson().toString())
         assertEquals("""{"kind":"loadFailed"}""", ShellRequest.LoadFailed.toJson().toString())
+        assertEquals("""{"kind":"webViewRebuilt"}""", ShellRequest.WebViewRebuilt.toJson().toString())
     }
 
     @Test

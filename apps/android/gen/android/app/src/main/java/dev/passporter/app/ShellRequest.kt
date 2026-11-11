@@ -30,6 +30,15 @@ sealed interface ShellRequest {
         override fun toJson(): JSObject = kind("loadFailed")
     }
 
+    /**
+     * wry built a new webview in this process ([WebViewBuilds]) and is
+     * loading its first page again: the bridge, if the shell now refuses
+     * that page.
+     */
+    data object WebViewRebuilt : ShellRequest {
+        override fun toJson(): JSObject = kind("webViewRebuilt")
+    }
+
     companion object {
         /** Intent action of the *Bridge* shortcut (`res/xml/shortcuts.xml`). */
         const val ACTION_MANAGE_BRIDGE = "dev.passporter.app.MANAGE_BRIDGE"
