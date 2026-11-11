@@ -147,7 +147,7 @@ an APK that trusts that CA as well: put its certificate (PEM) at
 `apps/android/gen/android/app/src/main/res/raw/bridge_ca.pem` and add
 `<certificates src="@raw/bridge_ca" />` next to the `system` entry in the
 config. That build then trusts the CA for every site, so keep the CA's key
-safe and the change out of commits (the JVM tests reject it on purpose).
+safe and the change out of commits (`SecurityConfigTest` rejects it on purpose).
 
 ## How the shell works
 
@@ -161,8 +161,9 @@ safe and the change out of commits (the JVM tests reject it on purpose).
 
 Only Passporter's own pages reach native IPC, by three fences:
 
-1. **Navigation.** The webview shows the bundled Connect page and the
-   paired origin, and refuses every other navigation (`navigation.rs`).
+1. **Navigation.** The webview shows the bundled Connect page until you
+   connect, then only the paired origin, and refuses every other
+   navigation (`navigation.rs`).
    The PWA's CSP (`default-src 'self'`) keeps other origins out of frames
    and scripts.
 2. **Capability.** At launch, or when you connect, the shell grants a
@@ -174,8 +175,17 @@ Only Passporter's own pages reach native IPC, by three fences:
 
 The address is saved in the app's private storage (`bridge-origin` in the
 data directory); it is not a secret. The device key and session tokens
-stay in the PWA's own storage, as in the browser. App backups are off
-(`allowBackup="false"`), so the key never leaves the phone.
+stay in the PWA's own storage, as in the browser. Neither backups nor a
+device-to-device transfer copy the app's data (`allowBackup="false"` plus
+backup and data-extraction rules that exclude everything), so the key
+stays on the phone; a new phone pairs afresh.
+
+Fence 1 also covers frames only on a current WebView: Tauri learns each
+frame's own origin through `WEB_MESSAGE_LISTENER` (Android System WebView
+86 and later). On an older WebView every frame's message is labelled with
+the main page's URL, so only the PWA's CSP keeps a foreign frame from
+borrowing the bridge capability. That is harmless while the capability
+grants nothing; the first plugin task gates the grant on the feature.
 
 ## What it installs, and where
 

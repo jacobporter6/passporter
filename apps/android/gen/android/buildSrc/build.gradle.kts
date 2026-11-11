@@ -4,7 +4,7 @@ plugins {
 
 gradlePlugin {
     plugins {
-        create("pluginsForCoolKids") {
+        create("rust") {
             id = "rust"
             implementationClass = "RustPlugin"
         }

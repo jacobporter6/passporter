@@ -8,14 +8,14 @@
 //! so its own commands (`connect`) answer bundled pages only: Tauri refuses
 //! app commands to any remote page that no capability names.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use tauri::ipc::CapabilityBuilder;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::navigation;
 use crate::origin::BridgeOrigin;
-use crate::store::{Store, StoreError};
+use crate::store::Store;
 
 /// The app's single window and webview.
 const MAIN: &str = "main";
@@ -29,6 +29,8 @@ const CONNECT_PAGE: &str = "index.html";
 /// Shared between the `connect` command and the navigation guard.
 struct Shell {
     store: Store,
+    /// Held for the whole of a `connect`, so two never interleave.
+    connecting: Mutex<()>,
     /// Set once: when a saved origin is loaded at launch, or by `connect`.
     bridge: Arc<OnceLock<BridgeOrigin>>,
 }
@@ -56,6 +58,9 @@ pub fn run() {
 fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let store = Store::in_dir(&app.path().app_data_dir()?);
     let bridge = Arc::new(OnceLock::new());
+    // Anything unreadable (no file yet, a corrupt one, a storage error)
+    // opens the Connect page; `connect` then replaces the file, or shows
+    // why it cannot.
     let start = match store.load() {
         Ok(Some(origin)) => {
             grant_ipc(app, &origin)?;
@@ -63,12 +68,14 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             let _ = bridge.set(origin);
             WebviewUrl::External(url)
         }
-        // A corrupt file is replaced by the next `connect`.
-        Ok(None) | Err(StoreError::Corrupt { .. }) => WebviewUrl::App(CONNECT_PAGE.into()),
-        Err(error) => return Err(error.into()),
+        Ok(None) | Err(_) => WebviewUrl::App(CONNECT_PAGE.into()),
     };
     let guard = Arc::clone(&bridge);
-    app.manage(Shell { store, bridge });
+    app.manage(Shell {
+        store,
+        connecting: Mutex::new(()),
+        bridge,
+    });
     WebviewWindowBuilder::new(app, MAIN, start)
         .use_https_scheme(true)
         .on_navigation(move |url| navigation::allows(url, guard.get()))
@@ -78,6 +85,12 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
 
 /// Lets pages on `origin`, in the main window only, use the native plugins
 /// the bridge capability lists (none yet: later tasks add theirs).
+///
+/// Tauri tells frames apart only on `WebView`s with `WEB_MESSAGE_LISTENER`
+/// (`WebView` 86 and later); on older ones every frame's message carries the
+/// main frame's URL, and only the PWA's CSP keeps foreign frames out.
+/// Before the first permission is added here, gate the grant on that
+/// feature (docs/development/android.md, "How the shell works").
 fn grant_ipc(app: &AppHandle, origin: &BridgeOrigin) -> tauri::Result<()> {
     app.add_capability(
         CapabilityBuilder::new(BRIDGE_CAPABILITY)
@@ -90,9 +103,9 @@ fn grant_ipc(app: &AppHandle, origin: &BridgeOrigin) -> tauri::Result<()> {
 /// Pairs the app with the bridge at `address` (what the person typed) and
 /// opens its PWA. Answers the bundled Connect page only.
 ///
-/// The bridge is chosen once: to change it, clear the app's storage. A
-/// synchronous command runs on the main thread, so two calls never
-/// interleave between the check and the `set`.
+/// The bridge is chosen once: to change it, clear the app's storage. The
+/// address is saved last, so a failure leaves nothing that the next launch
+/// would pick up.
 #[tauri::command]
 #[expect(
     clippy::needless_pass_by_value,
@@ -105,16 +118,20 @@ fn connect(
     address: &str,
 ) -> Result<(), String> {
     let origin = BridgeOrigin::parse(address).map_err(|error| error.to_string())?;
+    let _connecting = shell
+        .connecting
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
     if let Some(current) = shell.bridge.get() {
         return Err(format!(
             "already connected to {current}; clear the app's storage to change it"
         ));
     }
+    grant_ipc(&app, &origin).map_err(|error| format!("could not allow {origin}: {error}"))?;
     shell
         .store
         .save(&origin)
         .map_err(|error| format!("could not save the address: {error}"))?;
-    grant_ipc(&app, &origin).map_err(|error| format!("could not allow {origin}: {error}"))?;
     let url = origin.url().clone();
     shell
         .bridge

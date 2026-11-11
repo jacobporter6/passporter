@@ -8,12 +8,13 @@ import org.w3c.dom.Document
 import org.w3c.dom.Element
 
 /**
- * Guards the app's transport policy (docs/development/android.md): no
- * plain HTTP, system CAs only, and the manifest actually uses the config.
+ * Guards the app's transport and backup policy (docs/development/android.md):
+ * no plain HTTP, system CAs only, nothing backed up or transferred, and the
+ * manifest actually uses each config.
  * Gradle runs unit tests from the module directory, so paths are relative
  * to `app/`.
  */
-class NetworkSecurityConfigTest {
+class SecurityConfigTest {
     private val androidNs = "http://schemas.android.com/apk/res/android"
 
     private fun parse(path: String): Document =
@@ -23,6 +24,11 @@ class NetworkSecurityConfigTest {
             .parse(File(path))
 
     private fun Document.elements(tag: String): List<Element> {
+        val nodes = getElementsByTagName(tag)
+        return (0 until nodes.length).map { nodes.item(it) as Element }
+    }
+
+    private fun Element.childElements(tag: String): List<Element> {
         val nodes = getElementsByTagName(tag)
         return (0 until nodes.length).map { nodes.item(it) as Element }
     }
@@ -55,6 +61,31 @@ class NetworkSecurityConfigTest {
             application.getAttributeNS(androidNs, "networkSecurityConfig"),
         )
         assertEquals("", application.getAttributeNS(androidNs, "usesCleartextTraffic"))
+    }
+
+    @Test
+    fun nothingIsBackedUpOrTransferred() {
+        val application = parse("src/main/AndroidManifest.xml").elements("application").single()
         assertEquals("false", application.getAttributeNS(androidNs, "allowBackup"))
+        assertEquals(
+            "@xml/data_extraction_rules",
+            application.getAttributeNS(androidNs, "dataExtractionRules"),
+        )
+        assertEquals("@xml/backup_rules", application.getAttributeNS(androidNs, "fullBackupContent"))
+
+        val everyDomain = listOf("root", "file", "database", "sharedpref", "external")
+        val rules = parse("src/main/res/xml/data_extraction_rules.xml")
+        for (section in listOf("cloud-backup", "device-transfer")) {
+            val element = rules.elements(section).single()
+            assertEquals(section, emptyList<Element>(), element.childElements("include"))
+            assertEquals(
+                section,
+                everyDomain,
+                element.childElements("exclude").map { it.getAttribute("domain") },
+            )
+        }
+        val legacy = parse("src/main/res/xml/backup_rules.xml")
+        assertEquals(emptyList<Element>(), legacy.elements("include"))
+        assertEquals(everyDomain, legacy.elements("exclude").map { it.getAttribute("domain") })
     }
 }

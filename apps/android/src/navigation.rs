@@ -1,5 +1,6 @@
 //! Which pages the app's webview may show. Only Passporter's own UI: the
-//! shell's bundled Connect page and the paired bridge's PWA. Every other
+//! shell's bundled Connect page until a bridge is paired, then only that
+//! bridge's PWA. Every other
 //! navigation is refused, so no other page ever runs where Tauri's IPC is
 //! injected (design §8, "no page but Passporter's own reaches native IPC").
 
@@ -12,9 +13,15 @@ use crate::origin::BridgeOrigin;
 pub const LOCAL_HOST: &str = "tauri.localhost";
 
 /// Whether the webview may navigate to `url`, given the paired bridge.
+///
+/// Once paired, the bundled pages are refused too: nothing on the bridge's
+/// pages can send the webview back to a page that may call app commands.
 #[must_use]
 pub fn allows(url: &Url, bridge: Option<&BridgeOrigin>) -> bool {
-    is_local(url) || bridge.is_some_and(|bridge| bridge.contains(url))
+    match bridge {
+        None => is_local(url),
+        Some(bridge) => bridge.contains(url),
+    }
 }
 
 /// The shell's own bundled pages.
@@ -31,12 +38,14 @@ mod tests {
     }
 
     #[test]
-    fn the_bundled_pages_are_always_allowed() {
+    fn the_bundled_pages_are_allowed_until_paired() {
+        let bridge = BridgeOrigin::parse("https://bridge.example.org").expect("origin");
         for page in [
             "https://tauri.localhost/",
             "https://tauri.localhost/index.html",
         ] {
             assert!(allows(&url(page), None), "{page}");
+            assert!(!allows(&url(page), Some(&bridge)), "{page}");
         }
     }
 

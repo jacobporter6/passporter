@@ -100,10 +100,10 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 }
 
-// NetworkSecurityConfigTest reads these at run time; declare them so Gradle
+// SecurityConfigTest reads these at run time; declare them so Gradle
 // reruns the tests when they change.
 tasks.withType<Test>().configureEach {
-    inputs.files("src/main/AndroidManifest.xml", "src/main/res/xml/network_security_config.xml")
+    inputs.files("src/main/AndroidManifest.xml", "src/main/res/xml")
         .withPropertyName("transportPolicy")
         .withPathSensitivity(PathSensitivity.RELATIVE)
 }
