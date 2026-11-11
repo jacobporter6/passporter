@@ -49,6 +49,14 @@ class LinkPolicyTest {
     }
 
     @Test
+    fun theBridgePageIsTheBundledOne() {
+        assertTrue(LinkPolicy.isBridgePage(Uri.parse("https://tauri.localhost/bridge.html")))
+        assertTrue(LinkPolicy.isBridgePage(Uri.parse("https://tauri.localhost/bridge.html?unreachable")))
+        assertFalse(LinkPolicy.isBridgePage(Uri.parse("https://tauri.localhost/index.html")))
+        assertFalse(LinkPolicy.isBridgePage(Uri.parse("https://bridge.example.org/bridge.html")))
+    }
+
+    @Test
     fun onlyBridgePagesAreRemote() {
         assertTrue(LinkPolicy.isRemote(Uri.parse("https://bridge.example.org/agent/w1:p1")))
         assertFalse(LinkPolicy.isRemote(Uri.parse("https://tauri.localhost/index.html")))

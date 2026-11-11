@@ -33,6 +33,9 @@ class WatchArgs {
  * links in the browser ([ShellWebViewClient]) and restarts the app ([restart]).
  */
 @TauriPlugin
+// One instance per process, holding the activity Tauri created it with: the
+// shell has one activity, its config changes keep the webview, and when it
+// is destroyed Tauri's event loop ends with it (no second webview to wrap).
 class ShellPlugin(private val activity: Activity) : Plugin(activity) {
     private var requests: Channel? = null
     private var launchTaken = false

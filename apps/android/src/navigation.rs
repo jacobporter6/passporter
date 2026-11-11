@@ -9,6 +9,8 @@
 //! (`crates/bridge/src/server/headers.rs`) and the Connect page's
 //! `form-action 'none'`.
 
+use std::sync::{Mutex, PoisonError};
+
 use url::Url;
 
 use crate::origin::BridgeOrigin;
@@ -21,6 +23,7 @@ pub const LOCAL_HOST: &str = "tauri.localhost";
 ///
 /// Once paired, the bundled pages are refused too: nothing on the bridge's
 /// pages can send the webview back to a page that may call app commands.
+/// Only the shell opens its Bridge page then, through [`Expected`].
 /// History navigations (Back) skip this check, so the Connect page leaves
 /// history when it opens the bridge (`connect.js`).
 #[must_use]
@@ -28,6 +31,35 @@ pub fn allows(url: &Url, bridge: Option<&BridgeOrigin>) -> bool {
     match bridge {
         None => is_local(url),
         Some(bridge) => bridge.contains(url),
+    }
+}
+
+/// One navigation the shell itself is about to make that [`allows`]
+/// refuses: its Bridge page while paired (`crate::destination`). wry puts
+/// the shell's own loads through the guard too, so the shell names the
+/// exact URL first and the guard lets that URL through once.
+///
+/// The bridge's pages gain nothing from it: the allowance is for one URL
+/// the shell chose, used up by the first navigation to it.
+#[derive(Debug, Default)]
+pub struct Expected(Mutex<Option<Url>>);
+
+impl Expected {
+    /// Lets the next navigation to exactly `url` through, replacing any
+    /// earlier allowance not yet used.
+    pub fn expect(&self, url: Url) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(url);
+    }
+
+    /// Whether `url` is the expected one; if so the allowance is used up.
+    pub fn take(&self, url: &Url) -> bool {
+        let mut expected = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if expected.as_ref() == Some(url) {
+            *expected = None;
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -67,6 +99,30 @@ mod tests {
             &url("blob:https://bridge.example.org/1b4f"),
             Some(&bridge)
         ));
+    }
+
+    #[test]
+    fn an_expected_navigation_passes_once_and_exactly() {
+        let expected = Expected::default();
+        let page = url("https://tauri.localhost/bridge.html?unreachable");
+        assert!(!expected.take(&page), "nothing is expected at first");
+        expected.expect(page.clone());
+        for other in [
+            "https://tauri.localhost/bridge.html",
+            "https://tauri.localhost/index.html",
+            "https://tauri.localhost/bridge.html?unreachable#x",
+        ] {
+            assert!(!expected.take(&url(other)), "{other}");
+        }
+        assert!(expected.take(&page));
+        assert!(!expected.take(&page), "used up");
+        expected.expect(url("https://tauri.localhost/bridge.html"));
+        expected.expect(page.clone());
+        assert!(
+            !expected.take(&url("https://tauri.localhost/bridge.html")),
+            "replaced"
+        );
+        assert!(expected.take(&page));
     }
 
     #[test]

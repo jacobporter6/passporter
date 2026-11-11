@@ -37,11 +37,15 @@ sealed interface ShellRequest {
         /**
          * What [intent] asks for, or null for any other intent (the launcher's
          * `MAIN`). `MainActivity` is exported, so any app can send these; the
-         * worst they do is open an agent's screen or the Bridge page.
+         * worst they do is open an agent's screen or the Bridge page. An
+         * intent Android delivers again when it restores the app from
+         * Recents is old news, and asks for nothing.
          */
-        fun from(intent: Intent): ShellRequest? =
-            NoticeNotification.agentToOpen(intent)?.let(::OpenAgent)
+        fun from(intent: Intent): ShellRequest? {
+            if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return null
+            return NoticeNotification.agentToOpen(intent)?.let(::OpenAgent)
                 ?: ManageBridge.takeIf { intent.action == ACTION_MANAGE_BRIDGE }
+        }
 
         private fun kind(kind: String): JSObject = JSObject().apply { put("kind", kind) }
     }

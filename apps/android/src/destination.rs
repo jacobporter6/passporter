@@ -3,9 +3,10 @@
 //! failed to load.
 //!
 //! The Kotlin side only names a [`Request`]; every URL is built here, from
-//! the saved bridge origin and nothing else. These navigations are the
-//! shell's own (`navigate`, which the navigation guard does not see), so the
-//! bridge's pages still cannot reach the bundled pages themselves.
+//! the saved bridge origin and nothing else. wry checks the shell's own
+//! loads against the navigation guard too, so the shell lets the Bridge
+//! page through once by its exact URL ([`crate::navigation::Expected`]);
+//! the bridge's pages still cannot navigate to the bundled pages themselves.
 
 use protocol::AgentId;
 use serde::Deserialize;

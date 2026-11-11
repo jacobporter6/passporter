@@ -38,6 +38,13 @@ class ShellRequestTest {
         assertNull(ShellRequest.from(wrongAction))
     }
 
+    @Test
+    fun anIntentRedeliveredFromRecentsAsksForNothing() {
+        val tap = NoticeNotification.openAgent(context, agent("w1:p1"))
+            .addFlags(Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY)
+        assertNull(ShellRequest.from(tap))
+    }
+
     /** The same JSON `destination.rs` `reads_what_the_kotlin_side_sends` reads. */
     @Test
     fun theWireFormIsWhatTheShellReads() {

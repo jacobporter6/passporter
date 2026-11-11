@@ -96,7 +96,9 @@ Open Passporter, enter the bridge's address (for example
 `https://bridge.example.ts.net`), then pair on the next screen as in the
 browser. The app remembers the address. To use a different bridge,
 long-press the app's icon, choose *Bridge*, then *Change address*: the app
-forgets the address and the pairing and restarts on the Connect page (see
+forgets the address and restarts on the Connect page, where you connect
+and pair again. It does not unpair the phone from the old bridge: revoke
+it there (`passporter devices revoke`) (see
 [The Bridge page](#the-bridge-page)).
 
 A debug and a release build use different keys, so Android refuses to
@@ -173,9 +175,12 @@ Only Passporter's own pages reach native IPC, by three fences:
    connect, then only the paired origin, and refuses every other
    navigation (`navigation.rs`). Back is a history navigation the guard
    does not see, so the bundled pages remove themselves from history when
-   they open the bridge. The shell itself may still show its Bridge page
-   (`destination.rs`, through `navigate`, which the guard does not see);
-   the bridge's pages cannot.
+   they open the bridge. Once paired, only the shell itself opens its
+   Bridge page (`destination.rs`): wry checks the shell's own loads against
+   the guard too, so the shell names the page's exact URL first and the
+   guard lets that one load through once (`navigation::Expected`). The
+   bridge's pages cannot navigate there, and the Bridge page clears the
+   history, so Back and Forward cannot return to it either.
    The PWA's CSP (`default-src 'self'`) keeps other origins out of frames
    and scripts. A refused link you tapped opens in the browser instead
    ([Links](#links-taps-and-the-bridge-page)); the webview itself still
@@ -301,13 +306,19 @@ address, a button back to it, and *Change address*. The shell opens it
 - from the launcher: long-press the icon and choose *Bridge* (a static
   shortcut, `res/xml/shortcuts.xml`).
 
+The page starts a fresh history: Back from it leaves the app (rather than
+reloading a bridge page that failed), and *Retry* or *Open Passporter*
+replaces it with the bridge. Both go to the bridge's start page, not to
+the agent a failed tap asked for.
+
 *Change address* asks once more, then calls `forget_bridge`: the shell
 deletes the saved address and asks `ShellPlugin` to restart the app in a
 new process, which opens on the Connect page. The restart is deliberate:
 Tauri cannot revoke the capability it granted to the old origin, so only a
 new process starts without it. The old bridge's data in the webview
 (its service worker cache, IndexedDB) stays under its own origin, which
-the app never opens again; clearing the app's storage removes it.
+the app never opens again; clearing the app's storage removes it. The old
+bridge still lists the phone as paired until you revoke it there.
 
 Any app can send `MainActivity` the tap or shortcut intent, because a
 launcher activity is exported. The worst that does is open an agent's

@@ -44,9 +44,19 @@ class ShellWebViewClient(
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) =
         inner.onPageStarted(view, url, favicon)
 
-    override fun onPageFinished(view: WebView, url: String) = inner.onPageFinished(view, url)
+    override fun onPageFinished(view: WebView, url: String) {
+        inner.onPageFinished(view, url)
+        // The Bridge page starts a fresh history: Back from it leaves the
+        // app instead of reloading a bridge page that failed (and failing
+        // again), and no bridge page can step forward to it later.
+        if (LinkPolicy.isBridgePage(Uri.parse(url))) view.clearHistory()
+    }
 
     override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+        // wry retries one case itself: ERROR_CONNECT on a URL it did not
+        // intercept (a redirect to a custom protocol). The bridge's pages
+        // never redirect there, and if one did the retry fails again and
+        // lands here once more, so the Bridge page still follows.
         inner.onReceivedError(view, request, error)
         if (request.isForMainFrame && LinkPolicy.isRemote(request.url)) onLoadFailed()
     }
@@ -76,6 +86,13 @@ object LinkPolicy {
         val host = host(url)
         return mainFrame && gesture && !redirect && scheme(url) in WEB_SCHEMES && !host.isNullOrEmpty() && host != LOCAL_HOST
     }
+
+    /** The bundled Bridge page's path (`destination.rs` `BRIDGE_PAGE`). */
+    const val BRIDGE_PAGE_PATH = "/bridge.html"
+
+    /** Whether [url] is the bundled Bridge page, with or without a query. */
+    fun isBridgePage(url: Uri): Boolean =
+        scheme(url) == "https" && host(url) == LOCAL_HOST && url.path == BRIDGE_PAGE_PATH
 
     /** Whether [url] is a remote page (the bridge's), not a bundled one. */
     fun isRemote(url: Uri): Boolean = scheme(url) == "https" && host(url) != LOCAL_HOST

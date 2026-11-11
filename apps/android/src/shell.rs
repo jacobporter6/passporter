@@ -16,7 +16,7 @@
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use tauri::ipc::CapabilityBuilder;
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, State, Url, WebviewUrl, WebviewWindowBuilder};
 
 use crate::destination::{self, Request};
 use crate::native::{self, NativeExt};
@@ -40,6 +40,27 @@ struct Shell {
     connecting: Mutex<()>,
     /// Set once: when a saved origin is loaded at launch, or by `connect`.
     bridge: Arc<OnceLock<BridgeOrigin>>,
+}
+
+/// What the navigation guard and [`show`] share.
+struct Guard {
+    bridge: Arc<OnceLock<BridgeOrigin>>,
+    /// The shell's own next navigation that `navigation::allows` refuses.
+    expected: navigation::Expected,
+}
+
+impl Guard {
+    /// Whether the webview may load `url`.
+    fn allows(&self, url: &Url) -> bool {
+        navigation::allows(url, self.bridge.get()) || self.expected.take(url)
+    }
+
+    /// Readies the guard for the shell's own load of `url`.
+    fn expect(&self, url: &Url) {
+        if !navigation::allows(url, self.bridge.get()) {
+            self.expected.expect(url.clone());
+        }
+    }
 }
 
 /// Starts the app. Called by the Android activity through Tauri's entry point.
@@ -86,20 +107,27 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             WebviewUrl::App(CONNECT_PAGE.into())
         }
     };
-    let requests = Arc::clone(&bridge);
+    let guard = Arc::new(Guard {
+        bridge: Arc::clone(&bridge),
+        expected: navigation::Expected::default(),
+    });
+    let requests = Arc::clone(&guard);
     let handle = app.clone();
     let launch = app
         .native()
-        .watch(move |request| show(&handle, &request, requests.get()))
+        .watch(move |request| show(&handle, &request, &requests))
         .unwrap_or_else(|error| {
             // Taps and the shortcut then do nothing; the app still works.
             log_to_logcat(&error);
             None
         });
+    // wry checks the first load against the guard too.
     let start = launch
         .and_then(|request| destination::destination(&request, bridge.get()))
-        .map_or(start, WebviewUrl::External);
-    let guard = Arc::clone(&bridge);
+        .map_or(start, |url| {
+            guard.expect(&url);
+            WebviewUrl::External(url)
+        });
     app.manage(Shell {
         store,
         connecting: Mutex::new(()),
@@ -107,16 +135,17 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     });
     WebviewWindowBuilder::new(app, MAIN, start)
         .use_https_scheme(true)
-        .on_navigation(move |url| navigation::allows(url, guard.get()))
+        .on_navigation(move |url| guard.allows(url))
         .build()?;
     Ok(())
 }
 
 /// Shows what the Kotlin side asked for, if a bridge is paired.
-fn show(app: &AppHandle, request: &Request, bridge: Option<&BridgeOrigin>) {
-    let Some(url) = destination::destination(request, bridge) else {
+fn show(app: &AppHandle, request: &Request, guard: &Guard) {
+    let Some(url) = destination::destination(request, guard.bridge.get()) else {
         return;
     };
+    guard.expect(&url);
     // No window yet: the request came during setup, before there was
     // anything to show it in.
     if let Some(window) = app.get_webview_window(MAIN)
@@ -201,9 +230,11 @@ fn bridge(shell: State<'_, Shell>) -> Option<String> {
 ///
 /// The restart is the point: Tauri cannot take back the capability granted
 /// to the old origin, and the webview may hold its pages, so only a new
-/// process starts clean. The Kotlin side also forgets the native pairing
-/// before it restarts. The saved address goes first: if anything after it
+/// process starts clean. The saved address goes first: if anything after it
 /// fails, the next launch opens the Connect page anyway.
+///
+/// It must stay `async`: Tauri runs async commands off the main thread, and
+/// the blocking call into Kotlin (`restart`) must not run on it.
 #[tauri::command]
 async fn forget_bridge(app: AppHandle, shell: State<'_, Shell>) -> Result<(), String> {
     shell

@@ -57,8 +57,7 @@ impl<R: Runtime> Native<R> {
         Ok(watching.launch)
     }
 
-    /// Restarts the app in a new process, after the Kotlin side forgets the
-    /// native pairing. A capability Tauri granted cannot be taken back, so
+    /// Restarts the app in a new process. A capability Tauri granted cannot be taken back, so
     /// only a new process drops the old bridge's IPC grant. Returns once
     /// the restart is under way; the process ends soon after.
     pub(crate) fn restart(&self) -> Result<(), PluginInvokeError> {
