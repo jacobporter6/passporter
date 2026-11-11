@@ -1,5 +1,5 @@
 {
-  "comment": "One sign-in, end to end: the exact bytes a device signs (protocol::signed_message), a DER signature over them as Android's Keystore returns it, and the r||s form the bridge verifies. Checked by DeviceAuthGoldenTest (Kotlin) and tests/golden.rs (Rust). The signing key was thrown away; only its public point is kept.",
+  "comment": "One sign-in, end to end: the exact bytes a device signs (protocol::signed_message), a DER signature over them as Android's Keystore returns it, and the r||s form the bridge verifies. Checked by P256Test.theGoldenVectorMatchesTheProtocol (Kotlin) and tests/golden.rs (Rust). The signing key was thrown away; only its public point is kept.",
   "deviceId": "dev-0123456789abcdef",
   "challenge": "00070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9",
   "message": "70617373706f727465722d73657373696f6e2d76313a6465762d303132333435363738396162636465663a30303037306531353163323332613331333833663436346435343562363236393730373737653835386339333961613161386166623662646334636264326439",

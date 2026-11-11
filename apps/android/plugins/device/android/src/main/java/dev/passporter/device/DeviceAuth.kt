@@ -191,7 +191,7 @@ class DeviceAuth internal constructor(
         val asked = now()
         val challenge = client.challenge(ChallengeRequest(record.deviceId)).challenge
         val message = P256.signedMessage(record.deviceId, challenge)
-        val signature = keystore { keys.sign(record.keyAlias, message) }
+        val signature = sign(record.keyAlias, message)
         val grant = client.session(SessionRequest(record.deviceId, challenge, signature, scope))
         if (grant.scope != scope) throw DeviceAuthException.BadResponse("granted ${grant.scope.wire}, asked ${scope.wire}")
         // Counted from before the request, so the cache never outlives the token.
@@ -203,6 +203,19 @@ class DeviceAuth internal constructor(
     /** Deletes the key [alias], best effort: a key left behind is unused, not a risk. */
     private fun discard(alias: String) {
         runCatching { keys.delete(alias) }
+    }
+
+    /**
+     * Signs with the Keystore, trying once more after a moment: a busy
+     * Keystore (just after boot, say) usually answers the second time. A
+     * failure after that is reported as final, so callers do not loop on a
+     * key that will never work.
+     */
+    private fun sign(alias: String, message: ByteArray): ByteArray = try {
+        keys.sign(alias, message)
+    } catch (e: Exception) {
+        Thread.sleep(SIGN_RETRY_MS)
+        keystore { keys.sign(alias, message) }
     }
 
     /** Runs Keystore work, reporting its failures as [DeviceAuthException.Keystore]. */
@@ -221,6 +234,9 @@ class DeviceAuth internal constructor(
          * handed out is never one the PWA would renew at once.
          */
         const val REFRESH_MARGIN_MS = 120_000L
+
+        /** The pause before the one retry of a failed signature. */
+        private const val SIGN_RETRY_MS = 1_000L
 
         /** The record's file in `noBackupFilesDir`. */
         private const val RECORD_FILE = "passporter-device.json"

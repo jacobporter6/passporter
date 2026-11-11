@@ -305,9 +305,22 @@ async fn attempt(app: AppState, generation: u32) -> Attempt {
         }
         Err(error) => {
             leptos::logging::warn!("signing in failed: {error}");
+            if matches!(device, Identity::Native) && !native_paired().await {
+                // The native layer lost its pairing (its key is gone): show
+                // the app as unpaired, without deleting anything more.
+                DEVICE.set(None);
+                app.token_rejected.set(true);
+                set_credential(Credential::None);
+            }
             Attempt::Stop
         }
     }
+}
+
+/// Whether the native layer still reports a pairing (`true` when it cannot
+/// be asked, so a passing glitch never shows the app as unpaired).
+async fn native_paired() -> bool {
+    native::probe().await.is_none_or(|status| status.paired)
 }
 
 /// Renews shortly before a token that lasts `expires_in_secs` expires.
@@ -398,7 +411,10 @@ pub async fn save(app: AppState, token: BearerToken) -> Result<(), String> {
 async fn forget_device() -> Result<(), String> {
     GENERATION.set(GENERATION.get().wrapping_add(1));
     let device = DEVICE.take();
-    // Both are tried, so one failing never leaves the other behind.
+    // Both are tried, so one failing never leaves the other behind. The
+    // native one also when the identity in use is a browser key: `choose`
+    // picks that only while the native side is unpaired, so this is a
+    // no-op there, and it keeps Forget complete.
     let native = if NATIVE.get() || matches!(device, Some(Identity::Native)) {
         native::forget().await.map_err(|e| e.to_string())
     } else {

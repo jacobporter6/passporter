@@ -142,10 +142,9 @@ fn auth_error(code: Option<&str>, message: String) -> DeviceAuthError {
         Some("refused") => DeviceAuthError::Refused,
         Some("rateLimited") => DeviceAuthError::RateLimited,
         Some("tooManyDevices") => DeviceAuthError::TooManyDevices,
-        // A busy Keystore (just after boot, say) may work on the next try.
-        Some("unreachable" | "serverError" | "keystore") => {
-            DeviceAuthError::Api(ApiError::Transport(message))
-        }
+        // The plugin already retried the Keystore once: what is left is final.
+        Some("keystore") => DeviceAuthError::Signing(message),
+        Some("unreachable" | "serverError") => DeviceAuthError::Api(ApiError::Transport(message)),
         _ => DeviceAuthError::Api(ApiError::Decode(message)),
     }
 }
@@ -165,7 +164,11 @@ mod tests {
         for (code, want) in cases {
             assert_eq!(auth_error(code, "m".to_owned()), want, "{code:?}");
         }
-        for retryable in ["unreachable", "serverError", "keystore"] {
+        assert_eq!(
+            auth_error(Some("keystore"), "m".to_owned()),
+            DeviceAuthError::Signing("m".to_owned())
+        );
+        for retryable in ["unreachable", "serverError"] {
             assert!(auth_error(Some(retryable), "m".to_owned()).is_retryable());
         }
         for final_ in [
