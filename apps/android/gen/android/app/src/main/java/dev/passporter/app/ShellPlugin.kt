@@ -31,8 +31,8 @@ class WatchArgs {
  *
  * It tells the shell what to show ([ShellRequest]): the intent that started
  * the app (answered by [watch]), each later one ([onNewIntent], which Tauri
- * forwards from `MainActivity`), and failed loads ([wrap]). It restarts the
- * app ([restart]).
+ * forwards from `MainActivity`), failed loads and rebuilt webviews ([wrap]).
+ * It restarts the app ([restart]).
  *
  * Tauri makes one instance per process. wry may build a new webview (and a
  * new activity) in the same process, so what outlives one of them (the
@@ -90,11 +90,17 @@ class ShellPlugin(private val activity: Activity) : Plugin(activity) {
         @Volatile
         private var requests: Channel? = null
 
+        /** The webviews wry has built in this process. */
+        private val webViews = WebViewBuilds(onRebuilt = { send(ShellRequest.WebViewRebuilt) })
+
         /**
          * Wraps [webView]'s client in a [ShellWebViewClient] once wry has set
          * it: call it from `onWebViewCreate`, which runs just before wry sets
          * the client, and it runs on the next turn of the UI loop, before
          * the first page loads (wry posts that load after this).
+         *
+         * Then it tells the shell if this is not the process's first
+         * webview ([WebViewBuilds]).
          */
         fun wrap(activity: Activity, webView: WebView) {
             webView.post {
@@ -105,6 +111,7 @@ class ShellPlugin(private val activity: Activity) : Plugin(activity) {
                     onLoadFailed = { send(ShellRequest.LoadFailed) },
                     openInBrowser = { openInBrowser(activity, it) },
                 )
+                webViews.built()
             }
         }
 
