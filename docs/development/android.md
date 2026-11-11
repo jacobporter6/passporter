@@ -17,8 +17,8 @@ your user, with no sudo and no Android Studio.
 
 ## Set up from scratch
 
-You need `mise`, `rustup`, `curl`, `unzip` and `sha256sum`, and about 3.5 GB
-of disk. From the repo checkout:
+You need `git`, `mise`, `rustup` (1.28 or later), `curl`, `unzip` and
+`sha256sum`, and about 3.5 GB of disk. From the repo checkout:
 
 ```sh
 mise trust          # once, so mise reads the repo's config files
@@ -75,7 +75,8 @@ build also creates the debug signing key `~/.android/debug.keystore`.
 
 ## Upgrading
 
-Change the pins and re-run the script. For a new NDK, change `NDK_VERSION`
+Change the pins and re-run the script. It doesn't remove the old
+versions: delete their directories under `~/.local/share/android-sdk`. For a new NDK, change `NDK_VERSION`
 in `deploy/android/setup.sh` and `NDK_HOME` in `mise.android.toml` together. For
 new command-line tools, take the build number and SHA-1 from Google's
 [repository manifest](https://dl.google.com/android/repository/repository2-3.xml),

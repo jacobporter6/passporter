@@ -67,6 +67,8 @@ export MISE_ENV=android
 step "JDK and Tauri CLI (mise.android.toml)"
 mise install java "github:tauri-apps/tauri"
 # ANDROID_HOME, NDK_HOME, JAVA_HOME and PATH exactly as mise sets them.
+# Unset first, so values from the caller's shell can't pass for mise's.
+unset ANDROID_HOME NDK_HOME JAVA_HOME
 mise_env="$(mise env --shell bash)" || die "mise env failed"
 eval "$mise_env"
 [[ -n "${ANDROID_HOME:-}" && -n "${NDK_HOME:-}" && -n "${JAVA_HOME:-}" ]] \
@@ -106,8 +108,8 @@ done
 if ((${#missing[@]} == 0)); then
     echo "already installed"
 else
-    # Answers yes to the licence prompts of these packages only (Google's
-    # Android SDK licence), which the human who runs this accepts.
+    # Answers yes to sdkmanager's prompts, which are the licences of these
+    # packages (Google's Android SDK licence); the human who runs this accepts.
     { yes || true; } | "$sdkmanager" --sdk_root="$ANDROID_HOME" --install "${missing[@]}"
     for pkg in "${missing[@]}"; do
         [[ -f "$ANDROID_HOME/${pkg//;//}/package.xml" ]] || die "sdkmanager did not install $pkg"
