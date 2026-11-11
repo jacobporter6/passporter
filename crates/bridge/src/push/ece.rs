@@ -181,6 +181,65 @@ pub(crate) mod tests {
         );
     }
 
+    /// The vector the Android app's JVM tests decrypt
+    /// (`WebPushVectorTest.kt`): a notice message sealed with the RFC
+    /// 8291 example's keys, so the bridge's encryption and the app's
+    /// decryption are proven to agree on a real message.
+    const ANDROID_VECTOR: &str = include_str!("fixtures/webpush-notice-vector.json");
+
+    /// The vector's fields, as the Kotlin test reads them.
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Vector {
+        ua_private: String,
+        ua_public: String,
+        as_public: String,
+        ecdh: String,
+        auth: String,
+        salt: String,
+        plaintext: String,
+        body: String,
+    }
+
+    #[test]
+    fn pins_the_vector_the_android_app_decrypts() {
+        let vector: Vector = serde_json::from_str(ANDROID_VECTOR).expect("vector");
+        // The RFC 8291 Appendix A keys, as in the test above.
+        assert_eq!(
+            vector.ua_private,
+            "q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94"
+        );
+        let message = protocol::PushMessage {
+            ping: "0123456789abcdef0123456789abcdef".to_owned(),
+            notices: vec![protocol::Notice {
+                agent_id: "w1:p1".parse().expect("agent id"),
+                name: "widget".to_owned(),
+                state: protocol::NoticeState::Blocked,
+                line: Some("Run `pnpm test`? ✓".to_owned()),
+                decide: None,
+                pending_id: Some(protocol::PendingId::new("screen-2-ab").expect("pending id")),
+                announce: true,
+            }],
+        };
+        let plaintext = serde_json::to_string(&message).expect("json");
+        assert_eq!(
+            vector.plaintext, plaintext,
+            "the message as the bridge sends it"
+        );
+        let body = seal(
+            &Keys {
+                ecdh_secret: &b64(&vector.ecdh),
+                ua_public: &array(&vector.ua_public),
+                as_public: &array(&vector.as_public),
+                auth: &array(&vector.auth),
+                salt: &array(&vector.salt),
+            },
+            plaintext.as_bytes(),
+        )
+        .expect("seals");
+        assert_eq!(vector.body, BASE64URL.encode(&body));
+    }
+
     /// A browser's side of a subscription, for tests: decrypts what
     /// [`encrypt`] produced. Single use (its key is ephemeral).
     pub(crate) struct Receiver {
