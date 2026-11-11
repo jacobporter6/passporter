@@ -1,3 +1,13 @@
 <resources>
     <string name="app_name">Passporter</string>
+
+    <!-- Agent notifications (dev.passporter.notify). -->
+    <string name="notify_channel_needs_you">Needs you</string>
+    <string name="notify_channel_needs_you_description">An agent is waiting for your answer.</string>
+    <string name="notify_channel_finished">Finished</string>
+    <string name="notify_channel_finished_description">An agent finished its turn.</string>
+    <string name="notify_you">You</string>
+    <string name="notify_blocked_fallback">Waiting for you</string>
+    <string name="notify_finished_fallback">Finished its turn</string>
+    <string name="notify_decide">Decide: %1$s</string>
 </resources>

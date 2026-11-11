@@ -79,6 +79,10 @@ android {
     buildFeatures {
         buildConfig = true
     }
+    testOptions {
+        // Robolectric tests (dev.passporter.notify) read the app's resources.
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 kotlin {
@@ -97,12 +101,17 @@ dependencies {
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
+    // Notifications (dev.passporter.notify); the version appcompat resolves anyway.
+    implementation("androidx.core:core:1.13.1")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.17")
 }
 
 // SecurityConfigTest reads these at run time; declare them so Gradle
 // reruns the tests when they change.
 tasks.withType<Test>().configureEach {
+    // Robolectric's Android 15+ sandboxes reach a JDK internal.
+    jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED")
     inputs.files("src/main/AndroidManifest.xml", "src/main/res/xml")
         .withPropertyName("transportPolicy")
         .withPathSensitivity(PathSensitivity.RELATIVE)

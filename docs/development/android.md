@@ -207,6 +207,45 @@ while the capability grants nothing and no local capability exists; the
 first plugin task gates the grant on the feature and must not add a local
 capability.
 
+## Notifications
+
+Agent news arrives as an encrypted notice message
+([design §6.6](../design.md#66-notifications-and-android-auto)). The Kotlin
+package `dev.passporter.notify` (in `gen/android/app/src/main/java/`)
+turns a decrypted message into notifications:
+
+| File | What |
+|---|---|
+| `Notice.kt`, `NoticeParser.kt`, `PlainText.kt` | The message as typed Kotlin, parsed strictly where the bridge is strict (types, ids) and tolerantly where it is tolerant (unknown fields, unknown states); texts cleaned and bounded again |
+| `NotificationPlanner.kt` | Pure: which agents to post with an alert, update silently, or leave alone |
+| `NoticeNotification.kt` | One `MessagingStyle` conversation per agent, with its shortcut and `LocusId`; channels *Needs you* (high, blocked agents) and *Finished* (default) |
+| `NoticeNotifier.kt` | The entry point: `NoticeNotifier(context).show(payload)` |
+| `NotificationPermission.kt` | Asks for `POST_NOTIFICATIONS` (Android 13+) on the first launch after you connect to a bridge |
+
+**Only news disrupts.** A message lists only the agents with news since the
+last one, so an agent it leaves out keeps its notification. A notice the
+shade already shows (same state, line, *Decide* line and dialog) changes
+nothing, so a re-sent message never buzzes; a new name alone updates the
+notification silently. What is shown is read back from the shade, so a
+dismissed notification counts as not shown. The text is the agent's name,
+its one line and the *Decide* line, never more (the car reads the same). A
+tap opens the app with the intent `passporter://agent/<id>`.
+
+A debug build can post sample messages through the same path, from the dev
+machine with the phone on adb (`-n` targets the receiver, which only adb's
+shell may call):
+
+```sh
+adb shell am broadcast -n dev.passporter.app/dev.passporter.notify.SampleNoticeReceiver --es sample blocked
+```
+
+The samples are `blocked` (alerts on *Needs you*), `blocked-again` (the
+same agent at a new dialog: alerts again, in place), `finished` (quieter,
+on *Finished*), `decide` (that turn's *Decide* line: alerts once more) and
+`many` (four agents, one conversation each; one name and line cut at their
+bounds). Sending one twice must not buzz the second time. Release builds
+leave the receiver out.
+
 ## What it installs, and where
 
 | What | Version | Where | Pinned in |
