@@ -1,0 +1,19 @@
+{
+  "active": {
+    "id": "0f6b1a52-3c1e-4d7a-8f2b-5e9c7d4a1b30",
+    "tag": "w1:p1",
+    "elapsedMs": 4200,
+    "peak": 0.5
+  },
+  "takes": [
+    {
+      "id": "9ca09978-ef89-46fd-9a85-118b84bee7b4",
+      "tag": "w1:p1",
+      "durationMs": 61440,
+      "bytes": 122880,
+      "mime": "audio/aac",
+      "endedBy": "interrupted",
+      "endedAt": 1767225600000
+    }
+  ]
+}

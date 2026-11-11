@@ -9,6 +9,8 @@ use core::cell::{Cell, RefCell};
 use core::future::Future;
 use std::rc::Rc;
 
+use protocol::AudioId;
+
 use super::level::{LevelMeter, SilenceConfig, SilenceGate};
 
 /// What a capture reports, in order: `Started`, then levels (or ticks)
@@ -66,6 +68,20 @@ pub trait CaptureSession {
     /// Asks the capture to finish: it delivers any remaining data, then
     /// `Ended`. Calling it again is harmless.
     fn stop(&self);
+
+    /// Ends the capture without keeping anything: the take was cancelled
+    /// before it was ever shown. A capture that keeps nothing of its own
+    /// just stops (its events go nowhere by then).
+    fn cancel(&self) {
+        self.stop();
+    }
+
+    /// The id the capture gave this take, if it keeps its own copy of the
+    /// audio (the app's native recorder): the clip is stored under it, so
+    /// storing the same take twice stores one clip.
+    fn take_id(&self) -> Option<AudioId> {
+        None
+    }
 }
 
 /// Why recording could not start or finish.
@@ -86,6 +102,9 @@ pub enum CaptureError {
     /// A recording is already running.
     #[error("already recording")]
     Busy,
+    /// The app's microphone permission was refused (Android settings).
+    #[error("microphone access was refused; allow it for the app in Android's settings")]
+    AppDenied,
     /// Anything else the browser reported.
     #[error("recording failed: {0}")]
     Failed(String),
@@ -134,6 +153,8 @@ pub struct Recording {
     pub duration_ms: u64,
     /// What ended it.
     pub stopped_by: StopReason,
+    /// The capture's own id for the take ([`CaptureSession::take_id`]).
+    pub id: Option<AudioId>,
 }
 
 /// What the recorder wants after an event.
@@ -214,6 +235,7 @@ impl Recorder {
                     // The bridge refuses a zero duration.
                     duration_ms: whole_ms(self.since_start(at_ms)).max(1),
                     stopped_by: self.stopping.unwrap_or(StopReason::Interrupted),
+                    id: None,
                 })
             }
             CaptureEvent::Failed(message) => {
@@ -436,13 +458,16 @@ impl<C: AudioCapture> Dictaphone<C> {
             };
             match capture.open(sink).await {
                 Ok(session) => {
-                    // A stop asked for while the microphone was opening.
-                    let stop_now = {
+                    // A stop asked for while the microphone was opening;
+                    // if that stop cancelled the take, nothing is kept.
+                    let (stop_now, discard) = {
                         let mut take = take.borrow_mut();
                         take.session = Some(session.clone());
-                        take.recorder.is_stopping()
+                        (take.recorder.is_stopping(), take.discard)
                     };
-                    if stop_now {
+                    if discard {
+                        session.cancel();
+                    } else if stop_now {
                         session.stop();
                     }
                     Ok(())
@@ -555,8 +580,9 @@ fn on_event<S: CaptureSession + Clone>(
                 session.stop();
             }
         }
-        Step::Finished(recording) => {
+        Step::Finished(mut recording) => {
             release(slot, take);
+            recording.id = session.as_ref().and_then(CaptureSession::take_id);
             report(Update::Finished(recording));
         }
         Step::Failed(error) => {
@@ -628,6 +654,10 @@ pub(crate) mod tests {
         pub(crate) tail: Rc<RefCell<Vec<u8>>>,
         /// While false, `open` stays pending (the permission prompt).
         pub(crate) granted: Rc<Cell<bool>>,
+        /// Calls to a session's `cancel`.
+        pub(crate) cancels: Rc<Cell<u32>>,
+        /// The id sessions give their takes, if any.
+        pub(crate) take_id: RefCell<Option<AudioId>>,
     }
 
     impl Default for FakeMic {
@@ -639,6 +669,8 @@ pub(crate) mod tests {
                 clock: Rc::default(),
                 tail: Rc::default(),
                 granted: Rc::new(Cell::new(true)),
+                cancels: Rc::default(),
+                take_id: RefCell::default(),
             }
         }
     }
@@ -668,8 +700,10 @@ pub(crate) mod tests {
     pub(crate) struct FakeSession {
         sink: EventSink,
         stops: Rc<Cell<u32>>,
+        cancels: Rc<Cell<u32>>,
         clock: Rc<Cell<f64>>,
         tail: Rc<RefCell<Vec<u8>>>,
+        take_id: Option<AudioId>,
     }
 
     impl CaptureSession for FakeSession {
@@ -685,6 +719,15 @@ pub(crate) mod tests {
             (self.sink)(CaptureEvent::Ended {
                 at_ms: self.clock.get(),
             });
+        }
+
+        fn cancel(&self) {
+            self.cancels.set(self.cancels.get() + 1);
+            self.stop();
+        }
+
+        fn take_id(&self) -> Option<AudioId> {
+            self.take_id.clone()
         }
     }
 
@@ -702,8 +745,10 @@ pub(crate) mod tests {
                 Ok(FakeSession {
                     sink,
                     stops: self.stops.clone(),
+                    cancels: self.cancels.clone(),
                     clock: self.clock.clone(),
                     tail: self.tail.clone(),
+                    take_id: self.take_id.borrow().clone(),
                 })
             };
             Prompt {
@@ -762,6 +807,8 @@ pub(crate) mod tests {
         assert_eq!(recording.bytes, [1, 2, 3, 4]);
         assert_eq!(recording.duration_ms, 1_200);
         assert_eq!(recording.stopped_by, StopReason::User);
+        assert_eq!(recording.id, None, "a browser take has no id of its own");
+        assert_eq!(mic.cancels.get(), 0);
         // The meter followed the stream.
         let levels = log
             .borrow()
@@ -956,10 +1003,23 @@ pub(crate) mod tests {
         mic.granted.set(true);
         assert!(!phone.is_recording(), "released at once");
         assert_eq!(start.as_mut().poll(&mut cx), Poll::Ready(Ok(())));
-        // The microphone opened and was closed straight away, silently.
+        // The microphone opened and was closed straight away, silently,
+        // keeping nothing.
         assert!(mic.stops.get() >= 1);
+        assert_eq!(mic.cancels.get(), 1);
         assert!(!phone.is_recording());
         assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+    }
+
+    #[test]
+    fn a_take_keeps_the_id_its_capture_gave_it() {
+        let mic = FakeMic::default();
+        let id = AudioId::new("9ca09978-ef89-46fd-9a85-118b84bee7b4").unwrap();
+        *mic.take_id.borrow_mut() = Some(id.clone());
+        let (phone, log) = record(&mic, RecorderConfig::default());
+        mic.emit(CaptureEvent::Data(vec![1]));
+        phone.stop();
+        assert_eq!(finished(&log).expect("finished").id, Some(id));
     }
 
     #[test]

@@ -134,9 +134,9 @@ android-test:
     # tauri-build writes the Gradle include files the JVM tests need when it knows the project.
     TAURI_ANDROID_PROJECT_PATH="$PWD/apps/android/gen/android" TAURI_ANDROID_PACKAGE_UNESCAPED=dev.passporter.app \
         cargo clippy --package passporter-android --all-targets --locked --target aarch64-linux-android -- -D warnings
-    cargo clippy --package tauri-plugin-device --all-targets --locked --target aarch64-linux-android -- -D warnings
+    cargo clippy --package tauri-plugin-device --package tauri-plugin-recorder --all-targets --locked --target aarch64-linux-android -- -D warnings
     cargo nextest run --package passporter-android --package tauri-plugin-device --locked
-    cd apps/android/gen/android && ./gradlew --console=plain testUniversalDebugUnitTest :tauri-plugin-device:testDebugUnitTest
+    cd apps/android/gen/android && ./gradlew --console=plain testUniversalDebugUnitTest :tauri-plugin-device:testDebugUnitTest :tauri-plugin-recorder:testDebugUnitTest
 
 # Reclaim stale build output across worktrees (see crates/xtask).
 prune *args:

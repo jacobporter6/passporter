@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The channel of the ongoing notification while a take records. -->
+    <string name="recorder_channel">Dictation</string>
+    <string name="recorder_channel_description">Shown while Passporter records a dictation.</string>
+    <string name="recorder_recording">Recording dictation</string>
+    <string name="recorder_recording_detail">Open Passporter to send it, or tap Stop to keep it for later.</string>
+    <string name="recorder_stop">Stop</string>
+</resources>

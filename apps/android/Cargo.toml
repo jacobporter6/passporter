@@ -24,6 +24,7 @@ url = "2.5.8"
 [target.'cfg(target_os = "android")'.dependencies]
 tauri = { version = "2.12.5", default-features = false, features = ["wry", "dynamic-acl"] }
 tauri-plugin-device = { path = "plugins/device" }
+tauri-plugin-recorder = { path = "plugins/recorder" }
 
 [build-dependencies]
 tauri-build = { version = "2.7.4", features = [] }
