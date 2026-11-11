@@ -170,9 +170,13 @@ fn connect(app: AppHandle, shell: State<'_, Shell>, address: &str) -> Result<Str
         .map_err(|_| "already connected".to_owned())?;
     match granted {
         Ok(()) => {}
-        // The PWA works without native plugins, as in Chrome.
-        Err(error @ GrantError::WebViewTooOld) => log_to_logcat(&error),
-        Err(error) => return Err(format!("could not allow the bridge: {error}")),
+        // Nothing was granted, and the PWA works without native plugins, as
+        // in Chrome. The bridge is chosen by now, so this is not an error:
+        // the next launch tries the grant again.
+        Err(error @ (GrantError::WebViewTooOld | GrantError::Probe(_))) => log_to_logcat(&error),
+        Err(error @ GrantError::Tauri(_)) => {
+            return Err(format!("could not allow the bridge: {error}"));
+        }
     }
     Ok(url)
 }

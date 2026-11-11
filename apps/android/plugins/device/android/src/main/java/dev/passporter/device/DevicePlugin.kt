@@ -24,9 +24,6 @@ import java.util.concurrent.Executors
 class DevicePlugin(private val activity: Activity) : Plugin(activity) {
     private val auth: DeviceAuth by lazy { DeviceAuth.get(activity) }
 
-    /** Network and Keystore work stays off the thread Tauri calls in on. */
-    private val worker: ExecutorService = Executors.newSingleThreadExecutor()
-
     /** `{webMessageListener}`: whether the WebView labels each frame's messages with its own origin. */
     @Command
     fun webviewFeatures(invoke: Invoke) {
@@ -104,5 +101,12 @@ class DevicePlugin(private val activity: Activity) : Plugin(activity) {
 
     private companion object {
         const val TAG = "PassporterDevice"
+
+        /**
+         * Network and Keystore work stays off the thread Tauri calls in on.
+         * One pool for the process, so a recreated activity leaks no thread;
+         * [DeviceAuth] serializes the work itself.
+         */
+        val worker: ExecutorService = Executors.newCachedThreadPool()
     }
 }

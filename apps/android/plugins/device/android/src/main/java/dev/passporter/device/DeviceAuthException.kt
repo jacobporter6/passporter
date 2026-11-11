@@ -54,6 +54,10 @@ sealed class DeviceAuthException(
     class Keystore(cause: Throwable) :
         DeviceAuthException("keystore", "the device key failed: ${cause.message ?: cause.javaClass.simpleName}", cause)
 
+    /** App-private storage could not be written (the pairing record). */
+    class Storage(cause: Throwable) :
+        DeviceAuthException("storage", "could not save the pairing: ${cause.message ?: cause.javaClass.simpleName}", cause)
+
     /** The caller passed something that is not valid (a malformed code or name). */
     class InvalidInput(field: String) : DeviceAuthException("invalidInput", "invalid $field")
 }

@@ -230,5 +230,17 @@ class DeviceAuthTest {
         assertEquals("application/json", last.headers["Content-Type"])
         assertFalse("the request's toString leaves headers out", last.toString().contains("Bearer"))
         assertNotSame(stale, auth.token(Scope.APP))
+        assertThrows(DeviceAuthException.InvalidInput::class.java) { auth.send(Scope.APP, "GET", "//evil.example/") }
+    }
+
+    @Test
+    fun aFailedSaveAfterPairingIsAStorageError() {
+        dir.setWritable(false)
+        try {
+            assertThrows(DeviceAuthException.Storage::class.java) { auth.pair(code, null) }
+            assertTrue("the unused key is deleted", keys.pairs.isEmpty())
+        } finally {
+            dir.setWritable(true)
+        }
     }
 }

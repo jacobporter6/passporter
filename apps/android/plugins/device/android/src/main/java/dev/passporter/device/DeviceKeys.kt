@@ -3,6 +3,7 @@ package dev.passporter.device
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import java.security.GeneralSecurityException
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.PrivateKey
@@ -44,9 +45,11 @@ internal class KeystoreKeys : DeviceKeys {
         val publicKey = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             try {
                 generate(alias, strongBox = true)
-            } catch (e: ProviderException) {
+            } catch (e: Exception) {
                 // StrongBoxUnavailableException, or a StrongBox that cannot
-                // make this key: the TEE is the fallback.
+                // make this key (phones report that as ProviderException or
+                // a GeneralSecurityException): the TEE is the fallback.
+                if (e !is ProviderException && e !is GeneralSecurityException) throw e
                 delete(alias)
                 generate(alias, strongBox = false)
             }

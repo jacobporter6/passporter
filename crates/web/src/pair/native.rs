@@ -135,13 +135,17 @@ fn failure(error: &JsValue) -> DeviceAuthError {
 /// pairing is gone, and whether to retry.
 fn auth_error(code: Option<&str>, message: String) -> DeviceAuthError {
     match code {
-        // The plugin has already forgotten the pairing on a 410.
-        Some("forgotten" | "notPaired") => DeviceAuthError::Forgotten,
+        // The plugin has already forgotten the pairing on a 410. Only a 410
+        // means that: `notPaired` (say, the saved bridge address could not
+        // be read) must not wipe a pairing the bridge still accepts.
+        Some("forgotten") => DeviceAuthError::Forgotten,
         Some("refused") => DeviceAuthError::Refused,
         Some("rateLimited") => DeviceAuthError::RateLimited,
         Some("tooManyDevices") => DeviceAuthError::TooManyDevices,
-        Some("keystore") => DeviceAuthError::Signing(message),
-        Some("unreachable" | "serverError") => DeviceAuthError::Api(ApiError::Transport(message)),
+        // A busy Keystore (just after boot, say) may work on the next try.
+        Some("unreachable" | "serverError" | "keystore") => {
+            DeviceAuthError::Api(ApiError::Transport(message))
+        }
         _ => DeviceAuthError::Api(ApiError::Decode(message)),
     }
 }
@@ -154,20 +158,29 @@ mod tests {
     fn plugin_codes_keep_their_meaning() {
         let cases = [
             (Some("forgotten"), DeviceAuthError::Forgotten),
-            (Some("notPaired"), DeviceAuthError::Forgotten),
             (Some("refused"), DeviceAuthError::Refused),
             (Some("rateLimited"), DeviceAuthError::RateLimited),
             (Some("tooManyDevices"), DeviceAuthError::TooManyDevices),
-            (Some("keystore"), DeviceAuthError::Signing("m".to_owned())),
         ];
         for (code, want) in cases {
             assert_eq!(auth_error(code, "m".to_owned()), want, "{code:?}");
         }
-        for retryable in ["unreachable", "serverError"] {
+        for retryable in ["unreachable", "serverError", "keystore"] {
             assert!(auth_error(Some(retryable), "m".to_owned()).is_retryable());
         }
-        for final_ in [Some("badResponse"), Some("internal"), None] {
-            assert!(!auth_error(final_, "m".to_owned()).is_retryable());
+        for final_ in [
+            Some("badResponse"),
+            Some("internal"),
+            Some("notPaired"),
+            None,
+        ] {
+            let error = auth_error(final_, "m".to_owned());
+            assert!(!error.is_retryable());
+            assert_ne!(
+                error,
+                DeviceAuthError::Forgotten,
+                "{final_:?} keeps the pairing"
+            );
         }
     }
 

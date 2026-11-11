@@ -78,8 +78,10 @@ class DeviceAuth internal constructor(
         try {
             store.save(DeviceRecord(paired.deviceId, new.alias, bridge))
         } catch (e: IOException) {
+            // The bridge now lists a device this app cannot use: it holds a
+            // slot until it is revoked there. Rare (storage full).
             discard(new.alias)
-            throw DeviceAuthException.Keystore(e)
+            throw DeviceAuthException.Storage(e)
         }
         if (previous != null && previous.keyAlias != new.alias) discard(previous.keyAlias)
         tokens.clear()
@@ -124,28 +126,34 @@ class DeviceAuth internal constructor(
      * retried once with a fresh token. Any answer the bridge gives is
      * returned as is; only failing to get a token throws.
      *
-     * @throws DeviceAuthException as [token], or [DeviceAuthException.Unreachable].
+     * @throws DeviceAuthException as [token], [DeviceAuthException.Unreachable],
+     *   or [DeviceAuthException.InvalidInput] when [path] is not absolute.
      */
     fun send(scope: Scope, method: String, path: String, jsonBody: String? = null): HttpResponse {
         val bridge = origin() ?: throw DeviceAuthException.NoBridge()
-        val url = bridge.resolve(path)
-        var token = token(scope)
-        repeat(2) { attempt ->
-            val headers = buildMap {
-                put("Authorization", token.authorization())
-                put("Accept", "application/json")
-                if (jsonBody != null) put("Content-Type", "application/json")
-            }
-            val response = try {
-                transport.send(HttpRequest(method, url, headers, jsonBody))
-            } catch (e: IOException) {
-                throw DeviceAuthException.Unreachable(e)
-            }
-            if (response.status != 401 || attempt == 1) return response
-            invalidate(token)
-            token = token(scope)
+        val url = try {
+            bridge.resolve(path)
+        } catch (e: IllegalArgumentException) {
+            throw DeviceAuthException.InvalidInput("path")
         }
-        error("unreachable")
+        val first = token(scope)
+        val response = sendWith(first, method, url, jsonBody)
+        if (response.status != 401) return response
+        invalidate(first)
+        return sendWith(token(scope), method, url, jsonBody)
+    }
+
+    private fun sendWith(token: SessionToken, method: String, url: String, jsonBody: String?): HttpResponse {
+        val headers = buildMap {
+            put("Authorization", token.authorization())
+            put("Accept", "application/json")
+            if (jsonBody != null) put("Content-Type", "application/json")
+        }
+        return try {
+            transport.send(HttpRequest(method, url, headers, jsonBody))
+        } catch (e: IOException) {
+            throw DeviceAuthException.Unreachable(e)
+        }
     }
 
     /** The record, if it belongs to the saved bridge and its key still exists. Holds [lock]. */

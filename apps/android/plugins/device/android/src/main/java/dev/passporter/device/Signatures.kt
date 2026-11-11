@@ -6,11 +6,6 @@ import java.security.interfaces.ECPublicKey
 /** Lowercase hex, as device-auth binary values travel. */
 internal object Hex {
     fun encode(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it.toInt() and 0xff) }
-
-    fun decode(text: String): ByteArray {
-        require(text.length % 2 == 0) { "odd hex length" }
-        return ByteArray(text.length / 2) { i -> text.substring(2 * i, 2 * i + 2).toInt(16).toByte() }
-    }
 }
 
 /** P-256 ECDSA encodings: what Android's Keystore gives, and what the bridge wants. */

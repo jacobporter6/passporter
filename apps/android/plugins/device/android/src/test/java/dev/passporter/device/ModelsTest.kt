@@ -68,6 +68,9 @@ class ModelsTest {
         assertEquals(Scope.CAR, SessionGrant.parse("""{"token":"t","expiresInSecs":900,"scope":"car"}""").scope)
         // Older bridges send no name.
         assertNull(SessionGrant.parse("""{"token":"t","expiresInSecs":900}""").deviceName)
+        // A name this side would not show (a joiner, a control character) is dropped, not fatal.
+        assertNull(SessionGrant.parse("""{"token":"t","expiresInSecs":900,"deviceName":"a\u200db"}""").deviceName)
+        assertNull(SessionGrant.parse("""{"token":"t","expiresInSecs":900,"deviceName":"a\u001bb"}""").deviceName)
 
         val bad = listOf(
             """not json""",
@@ -84,6 +87,7 @@ class ModelsTest {
             """{"token":"t","expiresInSecs":-1}""",
             """{"token":"t","expiresInSecs":9.5}""",
             """{"token":"t","expiresInSecs":900,"scope":"admin"}""",
+            """{"token":"t","expiresInSecs":900,"deviceName":7}""",
             """{"expiresInSecs":900}""",
         )
         for (body in badGrants) {

@@ -4,8 +4,10 @@ import org.json.JSONException
 import org.json.JSONObject
 
 // Typed mirrors of the device-auth types in `crates/protocol/src/auth.rs`:
-// the same field names (camelCase on the wire) and the same validation, so
-// nothing malformed is sent and nothing malformed is believed.
+// the same field names (camelCase on the wire), and validation that keeps
+// anything malformed from being sent or acted on. Display-only values (the
+// device name the bridge reports) are dropped rather than refused when they
+// do not pass this side's stricter check.
 
 private val HEX = Regex("[0-9a-f]+")
 
@@ -159,7 +161,9 @@ internal class SessionGrant(
             SessionGrant(
                 string("token").takeIf(::isBearerToken) ?: invalid("token"),
                 seconds("expiresInSecs"),
-                optionalString("deviceName")?.let { name -> DeviceName.parse(name)?.value ?: invalid("deviceName") },
+                // Display only: a name this side would not accept (the
+                // protocol allows joiners, say) is dropped, never fatal.
+                optionalString("deviceName")?.let { DeviceName.parse(it)?.value },
                 optionalString("scope")?.let { Scope.parse(it) ?: invalid("scope") } ?: Scope.APP,
             )
         }

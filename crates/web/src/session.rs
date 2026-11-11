@@ -398,13 +398,18 @@ pub async fn save(app: AppState, token: BearerToken) -> Result<(), String> {
 async fn forget_device() -> Result<(), String> {
     GENERATION.set(GENERATION.get().wrapping_add(1));
     let device = DEVICE.take();
-    if NATIVE.get() || matches!(device, Some(Identity::Native)) {
-        native::forget().await.map_err(|e| e.to_string())?;
-    }
-    if device.is_some() || secure_context() {
-        device::forget().await.map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    // Both are tried, so one failing never leaves the other behind.
+    let native = if NATIVE.get() || matches!(device, Some(Identity::Native)) {
+        native::forget().await.map_err(|e| e.to_string())
+    } else {
+        Ok(())
+    };
+    let browser = if device.is_some() || secure_context() {
+        device::forget().await.map_err(|e| e.to_string())
+    } else {
+        Ok(())
+    };
+    native.and(browser)
 }
 
 /// Forgets every credential (device key and pasted token), here and on disk.
