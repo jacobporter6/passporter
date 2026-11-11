@@ -217,8 +217,9 @@ PendingInput = {
   composer instead). Suggestions are computed on the bridge **when the event
   arrives, before the push goes out**, so they are ready when the notification
   is opened.
-- **Natural-language → option mapping** (used for car and notification
-  replies): a strict, conservative classifier. Clear affirmatives ("yes",
+- **Natural-language → option mapping** (used for car replies; the
+  native notification asks with explicit *Allow once* / *Deny* / *Deny with
+  note* actions instead, §6.6): a strict, conservative classifier. Clear affirmatives ("yes",
   "go ahead", "do it") map to *Allow once* / proceed. Anything else maps to
   *Deny + feedback text*, or is sent as a prompt. "Always allow" is never chosen
   from free text.
@@ -351,8 +352,9 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
   headline), the TL;DR *Decide* line once there is one, and the pending id
   to answer with. Every message is end-to-end encrypted to the phone (RFC
   8291), so the push service only sees ciphertext. The bridge side of
-  notices is built; the app shows a notice as a notification (T31a) and a
-  tap opens that agent (T30c); replies and Android Auto are not built yet. Web Push (PWA) subscriptions keep the
+  notices is built; the app shows a notice as a notification (T31a), a
+  tap opens that agent (T30c), and it can be answered from the shade
+  (T31b); Android Auto is not built yet. Web Push (PWA) subscriptions keep the
   content-free ping.
 - **Only news disrupts.** A message is sent only if its reason still holds
   when its debounce ends (the agent still blocked, or its finished turn
@@ -361,10 +363,16 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
   its finished turn still unread. If a push still finds nothing to report (a
   late race), the PWA never alerts: a showing notification is re-shown
   silently in place, else a silent one is shown and closes itself.
-- **Notifications** (native, planned) use `MessagingStyle`, one conversation per agent.
-  A reply action uses `RemoteInput` (inline text/voice reply in the shade),
-  plus option actions such as *Allow once* / *Deny* for permissions and a
-  mark-as-read action.
+- **Notifications** (native) use `MessagingStyle`, one conversation per agent.
+  A dialog gets *Allow once*, *Deny* and *Deny with note* (`RemoteInput`,
+  the note as feedback, like the PWA's "Deny opens dictation"); a finished
+  turn gets a `RemoteInput` reply (inline text/voice) sent as a prompt.
+  Each answer is a durable WorkManager job with its idempotency key and
+  `origin: "notification"` (§6.5), and the notification shows how it went
+  (sent, already answered, the agent moved on). The app clears
+  notifications whose news is old when it comes to the foreground. A
+  mark-as-read action waits for a bridge API (a turn is unread until herdr
+  sees the pane). See docs/development/android.md.
 - **Android Auto** (planned) uses the messaging category: no custom car UI, just
   correctly built notifications plus the `automotive_app_desc` declaration
   (`<uses name="notification"/>`). Android Auto reads "widget: run

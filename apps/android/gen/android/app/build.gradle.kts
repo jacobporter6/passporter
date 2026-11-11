@@ -103,8 +103,11 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
     // Notifications (dev.passporter.notify); the version appcompat resolves anyway.
     implementation("androidx.core:core:1.13.1")
+    // The native outbox of answers from notifications (dev.passporter.notify.actions).
+    implementation("androidx.work:work-runtime:2.11.2")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("androidx.work:work-testing:2.11.2")
 }
 
 tasks.withType<Test>().configureEach {

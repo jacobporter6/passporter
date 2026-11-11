@@ -60,8 +60,10 @@ class NoticeNotifier(context: Context) {
     /** Shows [message]'s news. */
     fun show(message: NoticeMessage): NoticeOutcome {
         if (!canPost()) return NoticeOutcome.NotAllowed
-        // One message at a time, so a retry racing its original is seen.
-        synchronized(LOCK) {
+        // One message at a time, so a retry racing its original is seen;
+        // and never in the middle of an answer's update of the same
+        // conversation (dev.passporter.notify.actions.ActionFeedback).
+        synchronized(NotificationLock) {
             if (message.ping in pings.all()) return NoticeOutcome.Duplicate
             pings.add(message.ping)
             val notices = NotificationPlanner.plan(message)
@@ -93,6 +95,5 @@ class NoticeNotifier(context: Context) {
 
     private companion object {
         const val TAG = "PassporterNotify"
-        val LOCK = Any()
     }
 }
