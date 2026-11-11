@@ -114,8 +114,13 @@ class PushSync(
                 PushState.NotPaired
             }
             is Pairing.Paired -> {
-                record.subscribed?.takeIf { it.deviceId == pairing.deviceId }?.let { drop(it) }
-                save(PushRecord())
+                val gone = record.subscribed?.takeIf { it.deviceId == pairing.deviceId }
+                val left = record.copy(
+                    registration = null,
+                    subscribed = null,
+                    stale = record.stale + listOfNotNull(gone?.registration?.endpoint),
+                )
+                save(dropStale(left))
                 PushState.NoEndpoint
             }
         }
@@ -134,16 +139,15 @@ class PushSync(
         }
         var record = store.load()
         if (startAfresh(record, device)) return PushState.NoEndpoint
+        record.subscribed?.takeIf { it.registration.endpoint != record.registration?.endpoint }?.let {
+            record = record.copy(subscribed = null, stale = record.stale + it.registration.endpoint)
+        }
+        // Before posting: the bridge may keep it even if its answer is lost.
+        record = dropStale(record.copy(owner = device))
+        if (!save(record)) return PushState.RetryLater
         val registration = record.registration ?: return PushState.NoEndpoint
         val current = Subscribed(registration, device)
         if (record.subscribed == current && confirmed) return PushState.Subscribed
-        record.subscribed?.takeIf { it.registration.endpoint != registration.endpoint }?.let {
-            drop(it)
-            record = record.copy(subscribed = null)
-        }
-        // Before posting: the bridge may keep it even if its answer is lost.
-        record = record.copy(owner = device)
-        if (!save(record)) return PushState.RetryLater
         val response = try {
             bridge.subscribe(registration.subscribeJson())
         } catch (e: DeviceAuthException) {
@@ -161,8 +165,9 @@ class PushSync(
             409 -> PushState.Full
             else -> PushState.RetryLater
         }
-        if (state != PushState.Subscribed) {
-            // A subscription that was not kept must not be taken for one.
+        if (state is PushState.Refused || state == PushState.BridgeOff || state == PushState.Full) {
+            // Refused for sure: not one the bridge holds. (After a 5xx or a
+            // lost answer it may be, so the record keeps what it had.)
             save(record.copy(subscribed = null))
         }
         Log.i(PUSH_TAG, "subscription at ${Registration.host(registration.endpoint)}: status ${response.status}, $state")
@@ -238,8 +243,9 @@ class PushSync(
     private fun reset() {
         vapidKey = null
         confirmed = false
-        save(PushRecord())
+        // First: if the process dies in between, the record still says to.
         unregister()
+        save(PushRecord())
     }
 
     /** What a failed sign-in means: the pairing is gone, or try later. */
@@ -254,14 +260,25 @@ class PushSync(
         }
     }
 
-    /** Asks the bridge to drop [subscribed], best effort: it drops dead endpoints itself too. */
-    private fun drop(subscribed: Subscribed) {
-        try {
-            val status = bridge.unsubscribe(Registration.unsubscribeJson(subscribed.registration.endpoint)).status
-            Log.i(PUSH_TAG, "dropped subscription at ${Registration.host(subscribed.registration.endpoint)}: status $status")
-        } catch (e: DeviceAuthException) {
-            Log.w(PUSH_TAG, "could not drop a subscription: ${e.code}")
-        }
+    /**
+     * Asks the bridge to drop each of [record]'s stale endpoints; the ones
+     * it did not answer for (offline, a 5xx) stay for the next sync, so
+     * none is left holding one of the device's subscription slots.
+     */
+    private fun dropStale(record: PushRecord): PushRecord {
+        if (record.stale.isEmpty()) return record
+        val left = record.stale.distinct().takeLast(MAX_STALE).filterNot(::dropped)
+        return record.copy(stale = left)
+    }
+
+    /** Whether the bridge no longer holds [endpoint] for this device (204, or 404). */
+    private fun dropped(endpoint: String): Boolean = try {
+        val status = bridge.unsubscribe(Registration.unsubscribeJson(endpoint)).status
+        Log.i(PUSH_TAG, "dropping subscription at ${Registration.host(endpoint)}: status $status")
+        status == 204 || status == 404
+    } catch (e: DeviceAuthException) {
+        Log.w(PUSH_TAG, "could not drop a subscription: ${e.code}")
+        false
     }
 
     private fun save(record: PushRecord): Boolean = try {
@@ -275,5 +292,8 @@ class PushSync(
     private companion object {
         /** The bridge caps its own messages at 200 characters. */
         const val MAX_REASON_CHARS = 200
+
+        /** The bridge keeps 8 subscriptions per device: never more to drop. */
+        const val MAX_STALE = 8
     }
 }

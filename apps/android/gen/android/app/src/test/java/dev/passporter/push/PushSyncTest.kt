@@ -54,14 +54,14 @@ class PushSyncTest {
             return vapid
         }
 
-        override fun subscribe(json: String) = answer("POST ${JSONObject(json).getString("endpoint")}")
+        override fun subscribe(json: String) = answer("POST ${JSONObject(json).getString("endpoint")}", 201)
 
-        override fun unsubscribe(json: String) = answer("DELETE ${JSONObject(json).getString("endpoint")}")
+        override fun unsubscribe(json: String) = answer("DELETE ${JSONObject(json).getString("endpoint")}", 204)
 
-        private fun answer(call: String): HttpResponse {
+        private fun answer(call: String, usual: Int): HttpResponse {
             failure?.let { throw it }
             calls += call
-            return HttpResponse(answers.removeFirstOrNull() ?: 201, "")
+            return HttpResponse(answers.removeFirstOrNull() ?: usual, "")
         }
     }
 
@@ -174,6 +174,31 @@ class PushSyncTest {
     }
 
     @Test
+    fun aReplacedEndpointTheBridgeDidNotDropIsDroppedLater() {
+        sync.onNewEndpoint(first)
+        bridge.answers += listOf(503, 201)
+        assertEquals(PushState.Subscribed, sync.onNewEndpoint(second))
+        assertEquals(listOf(first.endpoint), store.load().stale)
+        // The next sync (a new process, say) tries again.
+        assertEquals(PushState.Subscribed, sync.sync())
+        assertEquals(emptyList<String>(), store.load().stale)
+        assertEquals("DELETE ${first.endpoint}", bridge.calls.last())
+        assertEquals(emptyList<String>(), PushStore(File(dir, "push.json")).load().stale)
+    }
+
+    @Test
+    fun aFailedRepostStillKnowsWhatTheBridgeHolds() {
+        sync.onNewEndpoint(first)
+        val restarted = PushSync(PushStore(File(dir, "push.json")), bridge) { unregistered++ }
+        bridge.answers += 503
+        assertEquals(PushState.RetryLater, restarted.sync())
+        assertEquals(Subscribed(first, "dev-1"), PushStore(File(dir, "push.json")).load().subscribed)
+        // So a new endpoint still drops the old one.
+        assertEquals(PushState.Subscribed, restarted.onNewEndpoint(second))
+        assertTrue(bridge.calls.contains("DELETE ${first.endpoint}"))
+    }
+
+    @Test
     fun aKeystoreHiccupChangesNothing() {
         sync.onNewEndpoint(first)
         bridge.keystoreFails = true
@@ -188,7 +213,7 @@ class PushSyncTest {
         sync.onNewEndpoint(first)
         assertEquals(PushState.NoEndpoint, sync.onUnregistered())
         assertEquals(listOf("POST ${first.endpoint}", "DELETE ${first.endpoint}"), bridge.calls)
-        assertEquals(PushRecord(), store.load())
+        assertEquals(PushRecord(owner = "dev-1"), store.load())
         assertEquals(PushState.NoEndpoint, sync.sync())
         assertEquals("the distributor left already", 0, unregistered)
     }

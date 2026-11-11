@@ -30,7 +30,7 @@ class PassporterPushService : PushService() {
         val keys = endpoint.pubKeySet
         val registration = keys?.let { Registration.of(endpoint.url, it.pubKey, it.auth) }
         if (registration == null) {
-            Log.w(PUSH_TAG, "the distributor gave an endpoint without usable Web Push keys; ignored")
+            Log.w(PUSH_TAG, "the distributor gave an endpoint the bridge could not use (not https, or no Web Push keys); ignored")
             return
         }
         val app = applicationContext

@@ -56,7 +56,13 @@ object PushWork {
             PushSync(
                 store = store(app),
                 bridge = DeviceAuthBridge(DeviceAuth.get(app)),
-                unregister = { UnifiedPush.unregister(app, INSTANCE) },
+                unregister = {
+                    // The connector forgets the distributor with its last
+                    // registration; keep the one the person chose.
+                    val distributor = UnifiedPush.getSavedDistributor(app)
+                    UnifiedPush.unregister(app, INSTANCE)
+                    distributor?.let { UnifiedPush.saveDistributor(app, it) }
+                },
             )
         }.also { sync = it }
     }

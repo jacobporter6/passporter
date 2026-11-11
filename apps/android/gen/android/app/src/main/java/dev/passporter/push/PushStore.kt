@@ -3,6 +3,7 @@ package dev.passporter.push
 import androidx.core.util.AtomicFile
 import java.io.File
 import java.io.IOException
+import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 
@@ -31,6 +32,11 @@ data class PushRecord(
      * answer was lost, so a new pairing must replace them all the same.
      */
     val owner: String? = null,
+    /**
+     * Endpoints this app replaced or lost that the bridge may still hold
+     * for [owner]: dropped there at the next chance, then forgotten.
+     */
+    val stale: List<String> = emptyList(),
 )
 
 /**
@@ -75,7 +81,10 @@ class PushStore(file: File) {
                 val posted = registration(sub)
                 if (deviceId != null && posted != null) Subscribed(posted, deviceId) else null
             }
-            PushRecord(registration, subscribed, obj.optString(OWNER).takeIf { it.isNotEmpty() })
+            val stale = obj.optJSONArray(STALE)?.let { array ->
+                (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotEmpty) }
+            }.orEmpty()
+            PushRecord(registration, subscribed, obj.optString(OWNER).takeIf { it.isNotEmpty() }, stale)
         } catch (e: JSONException) {
             PushRecord()
         }
@@ -86,6 +95,7 @@ class PushStore(file: File) {
         record.registration?.let { obj.put(REGISTRATION, json(it)) }
         record.subscribed?.let { obj.put(SUBSCRIBED, json(it.registration).put(DEVICE_ID, it.deviceId)) }
         record.owner?.let { obj.put(OWNER, it) }
+        if (record.stale.isNotEmpty()) obj.put(STALE, JSONArray(record.stale))
         file.baseFile.parentFile?.mkdirs()
         val out = file.startWrite()
         try {
@@ -110,6 +120,7 @@ class PushStore(file: File) {
         const val SUBSCRIBED = "subscribed"
         const val DEVICE_ID = "deviceId"
         const val OWNER = "owner"
+        const val STALE = "stale"
         const val ENDPOINT = "endpoint"
         const val P256DH = "p256dh"
         const val AUTH = "auth"
