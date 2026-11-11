@@ -336,7 +336,8 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
   headline), the TL;DR *Decide* line once there is one, and the pending id
   to answer with. Every message is end-to-end encrypted to the phone (RFC
   8291), so the push service only sees ciphertext. The bridge side of
-  notices is built; the app is not. Web Push (PWA) subscriptions keep the
+  notices is built; the app shows a notice as a notification (T31a) and a
+  tap opens that agent (T30c); replies and Android Auto are not built yet. Web Push (PWA) subscriptions keep the
   content-free ping.
 - **Only news disrupts.** A message is sent only if its reason still holds
   when its debounce ends (the agent still blocked, or its finished turn
@@ -435,7 +436,7 @@ third-party push or CDN service; and **malicious content in agent output**
 | Bridge | axum + tokio + tower-http, rusqlite, rustls | Small, typed, one static binary |
 | Validation | serde types in `crates/protocol`, strict deserialization (`deny_unknown_fields` on inbound) | Shared types on both ends; the compiler checks the contract |
 | Web | Leptos (CSR) → WASM, built with trunk; `web-sys`/`gloo` for browser APIs (IndexedDB, MediaRecorder, WebAuthn, Push) | Fine-grained reactivity without a virtual DOM; small bundle. Browser APIs are clunkier from Rust, which costs effort, not quality |
-| Android (planned) | Tauri 2 mobile + Kotlin plugins | Rust-native shell around the same Leptos UI; proper Kotlin plugin system |
+| Android (shell built; plugins in progress) | Tauri 2 mobile + Kotlin plugins | Rust-native shell around the same Leptos UI; proper Kotlin plugin system |
 | Speech-to-text | whisper.cpp server (CUDA or CPU), local | Private. A GPU makes large models fast |
 | Push | Web Push (VAPID) in the PWA; UnifiedPush (e.g. ntfy) planned for the APK | No content through third parties |
 | Summaries | `claude -p --model haiku` | Uses the existing login, no stored key |

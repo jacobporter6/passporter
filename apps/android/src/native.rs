@@ -60,9 +60,10 @@ impl<R: Runtime> Native<R> {
     /// Restarts the app in a new process. A capability Tauri granted cannot be taken back, so
     /// only a new process drops the old bridge's IPC grant. Returns once
     /// the restart is under way; the process ends soon after.
-    pub(crate) fn restart(&self) -> Result<(), PluginInvokeError> {
+    pub(crate) async fn restart(&self) -> Result<(), PluginInvokeError> {
         self.0
-            .run_mobile_plugin::<IgnoredAny>("restart", ())
+            .run_mobile_plugin_async::<IgnoredAny>("restart", ())
+            .await
             .map(|_| ())
     }
 }

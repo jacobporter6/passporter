@@ -16,6 +16,7 @@
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use tauri::ipc::CapabilityBuilder;
+use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 use crate::destination::{self, Request};
@@ -102,7 +103,7 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             })
     });
     // An agent on the bridge is the first page. The Bridge page is shown
-    // once the window is up instead: the first page is also what wry
+    // after the first page loads instead: the first page is also what wry
     // reloads if it ever rebuilds the webview, and the guard refuses a
     // bundled page there once paired.
     let (start, later) = match launch
@@ -123,10 +124,20 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             let guard = Arc::clone(&guard);
             move |url| guard.allows(url)
         })
+        // Once the first page has loaded: wry posts that first load, so a
+        // navigation sent any earlier would be replaced by it.
+        .on_page_load({
+            let later = Mutex::new(later);
+            move |window, payload| {
+                if payload.event() == PageLoadEvent::Finished
+                    && let Some(request) =
+                        later.lock().unwrap_or_else(PoisonError::into_inner).take()
+                {
+                    show(window.app_handle(), &request, &guard);
+                }
+            }
+        })
         .build()?;
-    if let Some(request) = later {
-        show(app, &request, &guard);
-    }
     Ok(())
 }
 
@@ -226,8 +237,8 @@ fn bridge(shell: State<'_, Shell>) -> Option<String> {
 /// process starts clean. The saved address goes first: if anything after it
 /// fails, the next launch opens the Connect page anyway.
 ///
-/// It must stay `async`: Tauri runs async commands off the main thread, and
-/// the blocking call into Kotlin (`restart`) must not run on it.
+/// It is `async` so the call into Kotlin (`restart`) is awaited off the
+/// main thread.
 #[tauri::command]
 async fn forget_bridge(app: AppHandle, shell: State<'_, Shell>) -> Result<(), String> {
     shell
@@ -237,7 +248,7 @@ async fn forget_bridge(app: AppHandle, shell: State<'_, Shell>) -> Result<(), St
     let native = app.native().ok_or_else(|| {
         "forgot the address, but could not restart; close and reopen the app".to_owned()
     })?;
-    native.restart().map_err(|error| {
+    native.restart().await.map_err(|error| {
         format!("forgot the address, but could not restart: {error}; close and reopen the app")
     })
 }

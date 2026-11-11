@@ -52,10 +52,22 @@ class ShellWebViewClient(
 
     override fun onPageFinished(view: WebView, url: String) {
         inner.onPageFinished(view, url)
-        // History never holds a bundled page beside another one, so no
-        // bridge page can go Back or Forward to a page with the app
-        // commands (history skips the guard), and Back from the Bridge page
-        // leaves the app instead of reloading a bridge page that failed.
+        keepBundledPagesApart(view)
+    }
+
+    // wry does not override this one. It runs when a navigation commits,
+    // before the new page's scripts; onPageFinished catches what it misses.
+    override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+        keepBundledPagesApart(view)
+    }
+
+    /**
+     * History never holds a bundled page beside another one, so no bridge
+     * page can go Back or Forward to a page with the app commands (history
+     * skips the guard), and Back from the Bridge page leaves the app instead
+     * of reloading a bridge page that failed.
+     */
+    private fun keepBundledPagesApart(view: WebView) {
         val history = view.copyBackForwardList()
         val urls = (0 until history.size).mapNotNull { history.getItemAtIndex(it)?.url }
         if (LinkPolicy.mixesBundledPages(urls.map(Uri::parse))) view.clearHistory()
