@@ -116,7 +116,14 @@ class ShellPlugin(private val activity: Activity) : Plugin(activity) {
         }
 
         private fun send(request: ShellRequest) {
-            requests?.send(request.toJson())
+            val channel = requests
+            if (channel == null) {
+                // The shell never watched (logcat says why): taps, failed
+                // loads and rebuilt webviews go unanswered.
+                Log.w(TAG, "the shell is not listening; dropped $request")
+                return
+            }
+            channel.send(request.toJson())
         }
 
         private fun openInBrowser(activity: Activity, url: Uri) {

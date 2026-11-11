@@ -111,7 +111,8 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         FirstPage::Connect => WebviewUrl::App(CONNECT_PAGE.into()),
         FirstPage::Bridge(url) => WebviewUrl::External(url.clone()),
     };
-    let first = first.get_or_init(|| first_page).clone();
+    let _ = first.set(first_page.clone());
+    let first = first_page;
     app.manage(Shell {
         store,
         connecting: Mutex::new(()),

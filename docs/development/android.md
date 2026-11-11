@@ -297,8 +297,8 @@ ignores every request until a bridge is paired.
   navigation guard.
 - **A rebuilt webview.** Android re-creates `MainActivity` for a
   configuration change the manifest does not list (a new font or display
-  size, for one; rotation, dark mode and the language are listed, so they
-  keep the webview). wry then builds a new webview and loads the first page
+  size, or a switch between left-to-right and right-to-left languages;
+  rotation and dark mode are listed, so they keep the webview). wry then builds a new webview and loads the first page
   it was given at launch again (`FirstPage` in `destination.rs`). That page
   is the bridge's, except on the launch where you paired: there it is the
   Connect page, which the guard refuses once paired. So `WebViewBuilds`

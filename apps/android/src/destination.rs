@@ -96,16 +96,13 @@ impl FirstPage {
     }
 
     /// Where to send the webview once wry has rebuilt it, or `None` to let
-    /// wry's reload of this page stand: a bridge page, or the Connect page
-    /// until a bridge is paired. Once paired, the guard refuses the Connect
+    /// wry's reload of this page stand: a bridge page (before pairing,
+    /// [`destination`] asks nothing, and the Connect page stays). Once paired, the guard refuses the Connect
     /// page and the webview would stay blank, so the bridge's start page
     /// opens instead (and the Bridge page, if that fails to load).
     #[must_use]
-    pub fn after_rebuild(&self, bridge: Option<&BridgeOrigin>) -> Option<Url> {
-        match (self, bridge) {
-            (Self::Connect, Some(bridge)) => Some(bridge.url().clone()),
-            (Self::Connect, None) | (Self::Bridge(_), _) => None,
-        }
+    pub fn after_rebuild(&self, bridge: &BridgeOrigin) -> Option<Url> {
+        matches!(self, Self::Connect).then(|| bridge.url().clone())
     }
 }
 
@@ -123,7 +120,7 @@ pub fn destination(
         Request::OpenAgent { agent } => agent_page(bridge, agent),
         Request::ManageBridge {} => local_page(BRIDGE_PAGE, None),
         Request::LoadFailed {} => local_page(BRIDGE_PAGE, Some(UNREACHABLE_QUERY)),
-        Request::WebViewRebuilt {} => first.after_rebuild(Some(bridge)),
+        Request::WebViewRebuilt {} => first.after_rebuild(bridge),
     }
 }
 
@@ -296,14 +293,13 @@ mod tests {
         let bridge = bridge();
         let agent = Url::parse("https://bridge.example.org:8443/agent/w1:p1").expect("url");
         for first in [on_bridge(&bridge), FirstPage::Bridge(agent)] {
-            assert_eq!(first.after_rebuild(Some(&bridge)), None, "{first:?}");
+            assert_eq!(first.after_rebuild(&bridge), None, "{first:?}");
             assert_eq!(
                 destination(&Request::WebViewRebuilt {}, Some(&bridge), &first),
                 None,
                 "{first:?}"
             );
         }
-        assert_eq!(FirstPage::Connect.after_rebuild(None), None);
     }
 
     /// Paired on the Connect page, wry's reload of it is refused by the
