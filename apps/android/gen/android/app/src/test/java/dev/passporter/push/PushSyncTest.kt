@@ -32,13 +32,14 @@ class PushSyncTest {
     }
 
     private fun registration(endpoint: String) =
-        checkNotNull(Registration.of(endpoint, RegistrationTest.P256DH, RegistrationTest.AUTH))
+        checkNotNull(Registration.of(endpoint, TestVector.uaPublic, TestVector.auth))
 
     /** The bridge's push routes, as this device sees them. */
     private class FakeBridge : PushBridge {
         var device: String? = "dev-1"
         var keystoreFails = false
         var vapid: VapidKey = VapidKey.Known("B" + "A".repeat(86))
+        var vapidAsked = 0
         val calls = mutableListOf<String>()
         val answers = ArrayDeque<Int>()
         var failure: DeviceAuthException? = null
@@ -48,7 +49,10 @@ class PushSyncTest {
             return device
         }
 
-        override fun vapidKey() = vapid
+        override fun vapidKey(): VapidKey {
+            vapidAsked++
+            return vapid
+        }
 
         override fun subscribe(json: String) = answer("POST ${JSONObject(json).getString("endpoint")}")
 
@@ -83,13 +87,22 @@ class PushSyncTest {
     }
 
     @Test
-    fun aNewPairingPostsTheRegistrationAgain() {
+    fun aNewPairingStartsWithNewKeys() {
         sync.onNewEndpoint(first)
         bridge.device = "dev-2"
-        assertEquals(PushState.Subscribed, sync.sync())
-        // The old device's copy is not this device's to drop.
-        assertEquals(listOf("POST ${first.endpoint}", "POST ${first.endpoint}"), bridge.calls)
-        assertEquals(Subscribed(first, "dev-2"), store.load().subscribed)
+        // The old pairing's bridge holds these keys: they must go.
+        assertEquals(PushState.NoEndpoint, sync.sync())
+        assertEquals(1, unregistered)
+        assertEquals(PushRecord(), store.load())
+        assertEquals(listOf("POST ${first.endpoint}"), bridge.calls)
+        // The next registration, with new keys, is posted as the new device.
+        assertEquals(PushState.Subscribed, sync.onNewEndpoint(second))
+        assertEquals(Subscribed(second, "dev-2"), store.load().subscribed)
+        // The same through readiness, after the next pairing.
+        bridge.device = "dev-3"
+        assertTrue(sync.readiness() is Readiness.Register)
+        assertEquals(2, unregistered)
+        assertEquals(PushRecord(), store.load())
     }
 
     @Test
@@ -144,7 +157,6 @@ class PushSyncTest {
         bridge.keystoreFails = true
         assertEquals(PushState.RetryLater, sync.sync())
         assertEquals(Readiness.Later, sync.readiness())
-        assertNull(sync.checkPaired())
         assertEquals(0, unregistered)
         assertEquals(Subscribed(first, "dev-1"), store.load().subscribed)
     }
@@ -160,12 +172,31 @@ class PushSyncTest {
     }
 
     @Test
-    fun readinessFollowsTheBridge() {
-        assertEquals(Readiness.Register("B" + "A".repeat(86)), sync.readiness())
+    fun aKeystoreHiccupDuringUnregistrationKeepsWhatTheBridgeHolds() {
+        sync.onNewEndpoint(first)
+        bridge.keystoreFails = true
+        assertEquals(PushState.RetryLater, sync.onUnregistered())
+        assertEquals(PushRecord(null, Subscribed(first, "dev-1")), store.load())
+        // The next endpoint replaces it at the bridge.
+        bridge.keystoreFails = false
+        assertEquals(PushState.Subscribed, sync.onNewEndpoint(second))
+        assertEquals(
+            listOf("POST ${first.endpoint}", "DELETE ${first.endpoint}", "POST ${second.endpoint}"),
+            bridge.calls,
+        )
+    }
+
+    @Test
+    fun readinessFollowsTheBridgeAndKeepsItsKey() {
         bridge.vapid = VapidKey.PushOff
         assertEquals(Readiness.BridgeOff, sync.readiness())
         bridge.vapid = VapidKey.Unknown
         assertEquals(Readiness.Later, sync.readiness())
+        bridge.vapid = VapidKey.Known("B" + "A".repeat(86))
+        assertEquals(Readiness.Register("B" + "A".repeat(86)), sync.readiness())
+        // Asked once a key is known: every resume asks readiness.
+        assertEquals(Readiness.Register("B" + "A".repeat(86)), sync.readiness())
+        assertEquals(3, bridge.vapidAsked)
     }
 
     @Test

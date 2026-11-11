@@ -316,10 +316,10 @@ decrypts each message (RFC 8291, `aes128gcm`, with Tink):
 
 | File | What |
 |---|---|
-| `PushRegistration.kt` | From the activity: on every resume and right after pairing, if paired and the bridge has push on (`GET /v1/push/key`), registers with the saved distributor, the phone's default one (Android may show a picker once), or says that none is installed |
-| `PassporterPushService.kt` | The connector's `PushService`, started by the distributor also with the app's process cold: new endpoints and unregistrations go to `PushSync`, messages to `IncomingPush` |
-| `PushSync.kt`, `PushStore.kt`, `PushBridge.kt` | Keeps the bridge's copy in step: posts a new endpoint (`POST /v1/push/subscriptions`, app scope, through `DeviceAuth`), drops the one it replaces, posts again after re-pairing, and when the app is unpaired forgets the registration and leaves the distributor. The state of the last step is a `PushState` (`Subscribed`, `Refused` with the bridge's reason, `BridgeOff`, `RetryLater`, ...), logged under the tag `PassporterPush` |
-| `IncomingPush.kt` | A message the connector decrypted, while paired, goes to `NoticeNotifier.show`. One it could not decrypt with the app's keys is dropped unseen, so only the bridge can make the app post a notice |
+| `PushRegistration.kt` | From the activity: on every resume and right after pairing, if paired and the bridge has push on (`GET /v1/push/key`, asked once per process), registers with the saved distributor, the phone's default one (Android may show a picker, once per pairing), or says that none is installed |
+| `PassporterPushService.kt` | The connector's `PushService`, started by the distributor also with the app's process cold: messages go to `IncomingPush` at once, in the callback (local work only, never queued behind a bridge call); new endpoints and unregistrations go to `PushSync` on its worker thread |
+| `PushSync.kt`, `PushStore.kt`, `PushBridge.kt` | Keeps the bridge's copy in step: posts a new endpoint (`POST /v1/push/subscriptions`, app scope, through `DeviceAuth`), drops the one it replaces, and when the app is unpaired or paired anew (perhaps with another bridge) forgets the registration and leaves the distributor, which deletes the keys; a new pairing registers with new keys. The state of the last step is a `PushState` (`Subscribed`, `Refused` with the bridge's reason, `BridgeOff`, `RetryLater`, ...), logged under the tag `PassporterPush` |
+| `IncomingPush.kt` | A message the connector decrypted, while the app holds a registration, goes to `NoticeNotifier.show`. One it could not decrypt with the app's keys is dropped unseen, so only the bridge can make the app post a notice |
 | `Registration.kt` | The endpoint and public keys, and the subscribe body in the bridge's shape |
 
 The private key and auth secret are the connector's: it seals the private
@@ -345,7 +345,11 @@ Known gaps: forgetting the pairing from the phone leaves the distributor,
 so nothing reaches the phone, but the bridge keeps the old device's
 subscription (it can no longer sign in to remove it) until you revoke the
 device with `passporter devices revoke`, as you would anyway. Registration
-state reaches only logcat; the PWA cannot show it yet. A debug build can
+state reaches only logcat; the PWA cannot show it yet. If the bridge drops
+the subscription on its own (it does for a dead endpoint), the app posts it
+again only with the next endpoint. Removing Passporter inside ntfy lasts
+until the app next opens; to silence it, turn its notifications off in
+Android's settings. A debug build can
 fake a message without a distributor through the sample receiver in
 [Notifications](#notifications).
 

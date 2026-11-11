@@ -59,12 +59,9 @@ class RegistrationTest {
         assertEquals(VapidKey.Unknown, VapidKey.from(502, ""))
     }
 
-    companion object {
+    private companion object {
         const val ENDPOINT = "https://push.example.org/up/abc?up=1"
-
-        /** RFC 8291's example receiver key: a public test value. */
-        const val P256DH =
-            "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4"
-        const val AUTH = "BTBZMqHH6r4Tts7J_aSIgg"
+        val P256DH get() = TestVector.uaPublic
+        val AUTH get() = TestVector.auth
     }
 }

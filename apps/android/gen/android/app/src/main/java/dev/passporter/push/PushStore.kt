@@ -1,7 +1,7 @@
 package dev.passporter.push
 
+import androidx.core.util.AtomicFile
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import org.json.JSONException
 import org.json.JSONObject
@@ -32,11 +32,13 @@ data class PushRecord(
  * keys and the auth secret, which the connector's own store keeps as well;
  * the private key is not here (see [Registration]).
  */
-class PushStore(private val file: File) {
+class PushStore(file: File) {
+    private val file = AtomicFile(file)
+
     /** The record; empty when there is none, or the file does not read back as one. */
     fun load(): PushRecord {
         val text = try {
-            file.readText()
+            file.readFully().toString(Charsets.UTF_8)
         } catch (e: IOException) {
             return PushRecord()
         }
@@ -59,13 +61,15 @@ class PushStore(private val file: File) {
         val obj = JSONObject()
         record.registration?.let { obj.put(REGISTRATION, json(it)) }
         record.subscribed?.let { obj.put(SUBSCRIBED, json(it.registration).put(DEVICE_ID, it.deviceId)) }
-        file.parentFile?.mkdirs()
-        val partial = File(file.path + ".partial")
-        FileOutputStream(partial).use { out ->
+        file.baseFile.parentFile?.mkdirs()
+        val out = file.startWrite()
+        try {
             out.write(obj.toString().toByteArray(Charsets.UTF_8))
-            out.fd.sync()
+            file.finishWrite(out)
+        } catch (e: IOException) {
+            file.failWrite(out)
+            throw e
         }
-        if (!partial.renameTo(file)) throw IOException("could not replace $file")
     }
 
     private fun json(registration: Registration) = JSONObject()

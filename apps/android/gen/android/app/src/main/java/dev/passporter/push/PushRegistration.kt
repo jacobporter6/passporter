@@ -10,29 +10,40 @@ import dev.passporter.app.R
 import dev.passporter.device.DeviceAuth
 import dev.passporter.device.PairingListener
 import org.unifiedpush.android.connector.UnifiedPush
+import org.unifiedpush.android.connector.data.ResolvedDistributor
 
 /**
  * Registers the app with the phone's UnifiedPush distributor (ntfy, say)
  * while it is paired, from the activity (design §6.6):
  *
- * - whenever the activity resumes, and right after pairing, it asks the
- *   bridge for its VAPID key and registers (again: the distributor answers
- *   with the same endpoint, which [PushSync] has posted already);
- * - with no distributor saved, it uses the phone's default one, which may
- *   show Android's picker (once per activity) when there are several;
+ * - whenever the activity resumes, and right after pairing, it asks
+ *   [PushSync] whether to register (paired, and the bridge has push on)
+ *   and registers again: the distributor answers with the same endpoint,
+ *   which [PushSync] has posted already;
+ * - with no distributor saved, it uses the phone's default one; when there
+ *   are several and none is the default, Android's picker opens, at most
+ *   once per activity and pairing;
  * - with none installed, it says so once, in a dialog;
  * - after the pairing is forgotten, [PushSync] unregisters.
+ *
+ * Removing Passporter inside the distributor lasts only until the app
+ * next opens; Android's notification settings for the app are the way to
+ * silence it.
  *
  * Attach it ([attachTo]) while the activity is being constructed or created.
  */
 class PushRegistration private constructor(private val activity: ComponentActivity) {
-    private val app: Context = activity.applicationContext
+    /** Read once the activity is created: in its constructor it has no context yet. */
+    private val app: Context by lazy { activity.applicationContext }
 
-    /** Whether this activity showed the distributor picker already. */
+    /** Whether Android's distributor picker opened already for this activity and pairing. */
+    @Volatile
     private var pickerShown = false
 
-    private val onPairing = PairingListener { status ->
-        if (status.paired) activity.runOnUiThread(::refresh) else PushWork.run { PushWork.sync(app).sync() }
+    private val onPairing = PairingListener {
+        // The status may be stale by now: PushSync reads the pairing again.
+        pickerShown = false
+        activity.runOnUiThread(::refresh)
     }
 
     init {
@@ -43,32 +54,36 @@ class PushRegistration private constructor(private val activity: ComponentActivi
         })
     }
 
-    /** Registers if the app is paired and the bridge has push on. */
+    /** Registers if the app is paired and the bridge has push on; unpaired, leaves. */
     private fun refresh() {
+        val app = app
         PushWork.run {
             when (val readiness = PushWork.sync(app).readiness()) {
                 is Readiness.Register -> register(readiness.vapidKey)
-                else -> Log.i(TAG, "not registering for push: $readiness")
+                else -> Log.i(PUSH_TAG, "not registering for push: $readiness")
             }
         }
     }
 
     /** On the push thread: registers with the saved distributor, or finds one. */
     private fun register(vapidKey: String) {
-        when {
-            UnifiedPush.getSavedDistributor(app) != null -> registerNow(vapidKey)
-            UnifiedPush.getDistributors(app).none { it != app.packageName } ->
-                activity.runOnUiThread(::noDistributor)
-            else -> activity.runOnUiThread { pickDistributor(vapidKey) }
+        if (UnifiedPush.getSavedDistributor(app) != null) return registerNow(vapidKey)
+        when (val resolved = UnifiedPush.resolveDefaultDistributor(app)) {
+            is ResolvedDistributor.Found -> {
+                UnifiedPush.saveDistributor(app, resolved.packageName)
+                registerNow(vapidKey)
+            }
+            ResolvedDistributor.ToSelect -> onActivity { pickDistributor(vapidKey) }
+            ResolvedDistributor.NoneAvailable -> onActivity(::noDistributor)
         }
     }
 
-    /** On the main thread: the phone's default distributor, or Android's picker. */
+    /** On the main thread: Android's picker, once. */
     private fun pickDistributor(vapidKey: String) {
-        if (pickerShown || activity.isFinishing) return
+        if (pickerShown) return
         pickerShown = true
         UnifiedPush.tryUseDefaultDistributor(activity) { chosen ->
-            if (chosen) PushWork.run { registerNow(vapidKey) } else Log.i(TAG, "no distributor chosen")
+            if (chosen) PushWork.run { registerNow(vapidKey) } else Log.i(PUSH_TAG, "no distributor chosen")
         }
     }
 
@@ -77,21 +92,28 @@ class PushRegistration private constructor(private val activity: ComponentActivi
             UnifiedPush.register(app, PushWork.INSTANCE, app.getString(R.string.app_name), vapidKey)
         } catch (e: UnifiedPush.VapidNotValidException) {
             // VapidKey checked its shape already.
-            Log.e(TAG, "the bridge's VAPID key was refused", e)
+            Log.e(PUSH_TAG, "the bridge's VAPID key was refused", e)
         }
     }
 
     /** On the main thread: tells the person, once ever, that push needs a distributor. */
     private fun noDistributor() {
+        Log.i(PUSH_TAG, "no UnifiedPush distributor installed")
         val preferences = app.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        Log.i(TAG, "no UnifiedPush distributor installed")
-        if (preferences.getBoolean(TOLD, false) || activity.isFinishing) return
-        preferences.edit().putBoolean(TOLD, true).apply()
+        if (preferences.getBoolean(TOLD, false)) return
         AlertDialog.Builder(activity)
             .setTitle(R.string.push_no_distributor_title)
             .setMessage(R.string.push_no_distributor_message)
             .setPositiveButton(android.R.string.ok, null)
             .show()
+        preferences.edit().putBoolean(TOLD, true).apply()
+    }
+
+    /** Runs [work] on the main thread if the activity is still there by then. */
+    private fun onActivity(work: () -> Unit) {
+        activity.runOnUiThread {
+            if (!activity.isFinishing && !activity.isDestroyed) work()
+        }
     }
 
     companion object {
@@ -100,7 +122,6 @@ class PushRegistration private constructor(private val activity: ComponentActivi
             PushRegistration(activity)
         }
 
-        private const val TAG = "PassporterPush"
         private const val PREFERENCES = "dev.passporter.push"
         private const val TOLD = "toldNoDistributor"
     }

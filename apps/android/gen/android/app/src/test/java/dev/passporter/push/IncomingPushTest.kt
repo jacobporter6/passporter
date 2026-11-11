@@ -22,8 +22,8 @@ import org.unifiedpush.android.connector.data.PushMessage
 class IncomingPushTest {
     private val context: Application = RuntimeEnvironment.getApplication()
     private val manager = context.getSystemService(NotificationManager::class.java)
-    private var paired: Boolean? = true
-    private val incoming = IncomingPush(NoticeNotifier(context)::show) { paired }
+    private var registered = true
+    private val incoming = IncomingPush(NoticeNotifier(context)::show) { registered }
 
     private val blocked =
         """{"ping":"0123456789abcdef0123456789abcdef","notices":[{"agentId":"w1:p1","name":"widget",
@@ -54,13 +54,11 @@ class IncomingPushTest {
     }
 
     @Test
-    fun unpairedNothingIsShown() {
-        paired = false
-        assertEquals(Incoming.NotPaired, incoming.handle(message(blocked)))
+    fun unregisteredNothingIsShown() {
+        // Unpaired since: the registration is gone.
+        registered = false
+        assertEquals(Incoming.NotRegistered, incoming.handle(message(blocked)))
         assertEquals(0, shown())
-        // Unknown (a busy Keystore): the message was for this phone, show it.
-        paired = null
-        assertEquals(Incoming.Shown(NoticeOutcome.Posted(1)), incoming.handle(message(blocked)))
     }
 
     @Test

@@ -17,7 +17,10 @@ class DeviceStatus(val deviceId: DeviceId?) {
 
 /**
  * Told when this app pairs or forgets its pairing ([DeviceAuth.addPairingListener]),
- * on the thread that did it, after the change.
+ * on the thread that did it, after the change. Two changes on two threads
+ * may be told in either order, so a listener that acts on the pairing
+ * reads it again ([DeviceAuth.status]) rather than trusting the status it
+ * was given.
  */
 fun interface PairingListener {
     /** The pairing is now [status]. */
@@ -163,8 +166,8 @@ class DeviceAuth internal constructor(
 
     /**
      * An authenticated request to the bridge with a [scope] token: [path] is
-     * absolute (`/v1/...`), [jsonBody] goes as `application/json` (only with
-     * [Method.POST] or [Method.PUT]). A 401 is
+     * absolute (`/v1/...`), [jsonBody] goes as `application/json` (not with
+     * [Method.GET]). A 401 is
      * retried once with a fresh token. Any answer the bridge gives is
      * returned as is; only failing to get a token throws.
      *

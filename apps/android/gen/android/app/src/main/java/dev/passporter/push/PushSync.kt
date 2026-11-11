@@ -60,21 +60,24 @@ sealed interface Readiness {
  *
  * - A new endpoint is posted with `"payload": "notice"`; the endpoint it
  *   replaces is dropped first, if this device posted it.
- * - Re-pairing (a new device id) posts the registration again, as the new
- *   device.
- * - Unpaired, the registration is dropped and the distributor told
- *   ([unregister]), so pushes stop reaching the phone. The bridge's copy
+ * - A new pairing (a new device id, perhaps on another bridge) starts
+ *   afresh: the old registration is dropped at the distributor, which
+ *   deletes its keys, so whatever the old pairing's bridge still sends can
+ *   no longer be decrypted; the next registration has new keys.
+ * - Unpaired, the registration is dropped the same way. The bridge's copy
  *   can no longer be removed from here (no session); revoking the old
- *   device on the bridge drops it. Until then what the bridge sends goes
- *   nowhere: the distributor dropped the registration, and its keys are
- *   gone.
+ *   device on the bridge drops it.
  */
 class PushSync(
     private val store: PushStore,
     private val bridge: PushBridge,
-    /** Unregisters from the distributor (`UnifiedPush.unregister`). */
+    /** Unregisters from the distributor (`UnifiedPush.unregister`), deleting the keys. */
     private val unregister: () -> Unit,
 ) {
+    /** The bridge's VAPID key, once learnt; forgotten with the pairing. */
+    @Volatile
+    private var vapidKey: String? = null
+
     /** The distributor gave [registration]: remember it and post it. */
     fun onNewEndpoint(registration: Registration): PushState {
         val record = store.load()
@@ -86,19 +89,33 @@ class PushSync(
 
     /**
      * The distributor dropped this app's registration: removes the bridge's
-     * copy while the app can still sign in, then forgets both.
+     * copy while the app can still sign in, then forgets the registration.
+     * When the pairing cannot be read just now, what the bridge holds is
+     * kept in the record, for the next endpoint to replace.
      */
     fun onUnregistered(): PushState {
         val record = store.load()
-        val device = (pairing() as? Pairing.Paired)?.deviceId
-        record.subscribed?.takeIf { device != null && it.deviceId == device }?.let { drop(it) }
-        save(PushRecord())
-        return if (device == null) PushState.NotPaired else PushState.NoEndpoint
+        return when (val pairing = pairing()) {
+            Pairing.Unknown -> {
+                save(PushRecord(registration = null, subscribed = record.subscribed))
+                PushState.RetryLater
+            }
+            Pairing.Unpaired -> {
+                save(PushRecord())
+                PushState.NotPaired
+            }
+            is Pairing.Paired -> {
+                record.subscribed?.takeIf { it.deviceId == pairing.deviceId }?.let { drop(it) }
+                save(PushRecord())
+                PushState.NoEndpoint
+            }
+        }
     }
 
     /**
      * Brings the bridge in step with the record: posts the registration if
-     * the bridge does not hold it for this device yet; unpaired, drops it.
+     * the bridge does not hold it for this device yet; unpaired, or paired
+     * anew, drops it.
      */
     fun sync(): PushState {
         val device = when (val pairing = pairing()) {
@@ -107,12 +124,11 @@ class PushSync(
             Pairing.Unknown -> return PushState.RetryLater
         }
         val record = store.load()
+        if (startAfresh(record, device)) return PushState.NoEndpoint
         val registration = record.registration ?: return PushState.NoEndpoint
         val current = Subscribed(registration, device)
         if (record.subscribed == current) return PushState.Subscribed
-        record.subscribed
-            ?.takeIf { it.deviceId == device && it.registration.endpoint != registration.endpoint }
-            ?.let { drop(it) }
+        record.subscribed?.takeIf { it.registration.endpoint != registration.endpoint }?.let { drop(it) }
         val response = try {
             bridge.subscribe(registration.subscribeJson())
         } catch (e: DeviceAuthException) {
@@ -129,39 +145,34 @@ class PushSync(
             // A subscription that was not kept must not be taken for one.
             save(PushRecord(registration, null))
         }
-        Log.i(TAG, "subscription at ${Registration.host(registration.endpoint)}: status ${response.status}, $state")
+        Log.i(PUSH_TAG, "subscription at ${Registration.host(registration.endpoint)}: status ${response.status}, $state")
         return state
     }
 
     /**
      * Whether the app should register with the distributor now, and with
-     * which VAPID key. Unpaired, the registration is dropped as in [sync].
+     * which VAPID key. Unpaired or paired anew, the old registration is
+     * dropped first, as in [sync].
      */
-    fun readiness(): Readiness = when (val pairing = pairing()) {
-        Pairing.Unpaired -> {
-            unpaired()
-            Readiness.NotPaired
+    fun readiness(): Readiness {
+        val device = when (val pairing = pairing()) {
+            is Pairing.Paired -> pairing.deviceId
+            Pairing.Unpaired -> {
+                unpaired()
+                return Readiness.NotPaired
+            }
+            Pairing.Unknown -> return Readiness.Later
         }
-        Pairing.Unknown -> Readiness.Later
-        is Pairing.Paired -> when (val key = bridge.vapidKey()) {
-            is VapidKey.Known -> Readiness.Register(key.value)
+        startAfresh(store.load(), device)
+        vapidKey?.let { return Readiness.Register(it) }
+        return when (val key = bridge.vapidKey()) {
+            is VapidKey.Known -> {
+                vapidKey = key.value
+                Readiness.Register(key.value)
+            }
             VapidKey.PushOff -> Readiness.BridgeOff
             VapidKey.Unknown -> Readiness.Later
         }
-    }
-
-    /**
-     * Whether the app is paired, before a message is shown. Unpaired, the
-     * registration is dropped as in [sync]. Null when the Keystore could
-     * not tell.
-     */
-    fun checkPaired(): Boolean? = when (pairing()) {
-        is Pairing.Paired -> true
-        Pairing.Unpaired -> {
-            unpaired()
-            false
-        }
-        Pairing.Unknown -> null
     }
 
     /** Whether, and as which device, the app is paired. */
@@ -176,19 +187,36 @@ class PushSync(
     private fun pairing(): Pairing = try {
         bridge.deviceId()?.let(Pairing::Paired) ?: Pairing.Unpaired
     } catch (e: DeviceAuthException) {
-        Log.w(TAG, "could not read the pairing: ${e.code}")
+        Log.w(PUSH_TAG, "could not read the pairing: ${e.code}")
         Pairing.Unknown
+    }
+
+    /**
+     * If [record] was posted by another device than [device] (the app was
+     * paired anew), leaves the distributor so the keys are replaced; whether
+     * it did.
+     */
+    private fun startAfresh(record: PushRecord, device: String): Boolean {
+        val previous = record.subscribed?.deviceId ?: return false
+        if (previous == device) return false
+        Log.i(PUSH_TAG, "paired anew: registering with new keys")
+        reset()
+        return true
     }
 
     /** Forgets everything and leaves the distributor, if there was anything. */
     private fun unpaired(): PushState {
-        val record = store.load()
-        if (record != PushRecord()) {
-            Log.i(TAG, "not paired: unregistering from the distributor")
-            save(PushRecord())
-            unregister()
+        if (store.load() != PushRecord()) {
+            Log.i(PUSH_TAG, "not paired: unregistering from the distributor")
+            reset()
         }
         return PushState.NotPaired
+    }
+
+    private fun reset() {
+        vapidKey = null
+        save(PushRecord())
+        unregister()
     }
 
     /** What a failed sign-in means: the pairing is gone, or try later. */
@@ -198,7 +226,7 @@ class PushSync(
             unpaired()
         }
         else -> {
-            Log.w(TAG, "could not reach the bridge: ${e.code}")
+            Log.w(PUSH_TAG, "could not reach the bridge: ${e.code}")
             PushState.RetryLater
         }
     }
@@ -207,9 +235,9 @@ class PushSync(
     private fun drop(subscribed: Subscribed) {
         try {
             val status = bridge.unsubscribe(Registration.unsubscribeJson(subscribed.registration.endpoint)).status
-            Log.i(TAG, "dropped subscription at ${Registration.host(subscribed.registration.endpoint)}: status $status")
+            Log.i(PUSH_TAG, "dropped subscription at ${Registration.host(subscribed.registration.endpoint)}: status $status")
         } catch (e: DeviceAuthException) {
-            Log.w(TAG, "could not drop a subscription: ${e.code}")
+            Log.w(PUSH_TAG, "could not drop a subscription: ${e.code}")
         }
     }
 
@@ -217,13 +245,11 @@ class PushSync(
         store.save(record)
         true
     } catch (e: IOException) {
-        Log.e(TAG, "could not save the push record", e)
+        Log.e(PUSH_TAG, "could not save the push record", e)
         false
     }
 
     private companion object {
-        const val TAG = "PassporterPush"
-
         /** The bridge caps its own messages at 200 characters. */
         const val MAX_REASON_CHARS = 200
     }

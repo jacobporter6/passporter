@@ -440,7 +440,7 @@ third-party push or CDN service; and **malicious content in agent output**
 | Web | Leptos (CSR) → WASM, built with trunk; `web-sys`/`gloo` for browser APIs (IndexedDB, MediaRecorder, WebAuthn, Push) | Fine-grained reactivity without a virtual DOM; small bundle. Browser APIs are clunkier from Rust, which costs effort, not quality |
 | Android (shell built; plugins in progress) | Tauri 2 mobile + Kotlin plugins | Rust-native shell around the same Leptos UI; proper Kotlin plugin system |
 | Speech-to-text | whisper.cpp server (CUDA or CPU), local | Private. A GPU makes large models fast |
-| Push | Web Push (VAPID) in the PWA; UnifiedPush (e.g. ntfy) planned for the APK | No content through third parties |
+| Push | Web Push (VAPID) in the PWA; UnifiedPush (e.g. ntfy) in the APK, with notices end-to-end encrypted | No content through third parties |
 | Summaries | `claude -p --model haiku` | Uses the existing login, no stored key |
 | Tests | cargo-nextest; a fake herdr (`FakeHerdr`) for integration tests; headless Chromium over CDP for E2E smoke tests (`just e2e`) | Everything but device and car behavior is verifiable in CI |
 | CI | `just gate` (fmt, clippy pedantic `-D warnings` on host + wasm, nextest, release build, PWA size budget, cargo deny) in GitHub Actions | One gate, locally and in CI |
