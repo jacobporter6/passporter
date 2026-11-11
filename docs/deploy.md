@@ -412,12 +412,25 @@ muted.
 Pings go out over HTTPS to the browsers' push services (FCM, Mozilla, Apple)
 and to nothing on `127.0.0.1`. The PWA subscribes through its service
 worker, which also needs a secure context ([HTTPS](#https)).
-UnifiedPush for the planned Android app is not built yet.
 
-The planned Android app's UnifiedPush endpoint is a self-hosted ntfy server
-(the bridge side is built). Allow it with
-`ntfy_host`: that exact name only, unlike `extra_hosts`, which also admits
-every subdomain. Its endpoint must still be `https` on port 443.
+The [Android app](development/android.md#push) subscribes through
+UnifiedPush instead, with notices. On the phone, install a UnifiedPush
+distributor ([ntfy](https://ntfy.sh), from F-Droid or Google Play) and, if
+you run your own ntfy server, set it as ntfy's default server before you
+open Passporter. Then allow that server on the bridge with `ntfy_host`:
+
+```toml
+[push]
+subject = "mailto:you@example.com"
+ntfy_host = "ntfy.example.org"       # your own ntfy server; or "ntfy.sh", the public one
+```
+
+It is that exact name only, unlike `extra_hosts`, which also admits every
+subdomain, and its endpoints must be `https` on port 443. A self-hosted
+server keeps even the timing of your notifications to yourself; with the
+public `ntfy.sh`, notices are still end-to-end encrypted, so it sees only
+ciphertext, its size and when it was sent. Without `ntfy_host` the bridge
+refuses the app's subscription (`endpoint is not on a known push service`).
 
 Blocked agents are always announced in the car. Finished turns reach the
 phone's notification shade, but under the default `car_announce_done =

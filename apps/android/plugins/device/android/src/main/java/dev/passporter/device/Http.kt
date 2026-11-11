@@ -8,13 +8,14 @@ import javax.net.ssl.HttpsURLConnection
 /**
  * The methods [DeviceAuth.send] offers: what `HttpsURLConnection` can send.
  * (It cannot send `PATCH`; the bridge's one `PATCH` route, audio upload, is
- * the PWA's.)
+ * the PWA's.) `DELETE` may carry a body, which Android's implementation
+ * sends: `DELETE /v1/push/subscriptions` names its endpoint in one.
  */
 enum class Method(internal val hasBody: Boolean) {
     GET(false),
     POST(true),
     PUT(true),
-    DELETE(false),
+    DELETE(true),
 }
 
 /** One HTTP request to the bridge. `toString` leaves the headers out: one may be a token. */

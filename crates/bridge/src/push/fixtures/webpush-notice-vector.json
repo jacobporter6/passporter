@@ -1,0 +1,11 @@
+{
+  "comment": "A notice message as the bridge encrypts it (RFC 8291, aes128gcm), with the RFC 8291 Appendix A example keys: public test values, not secrets. Pinned by crates/bridge/src/push/ece.rs and decrypted by the Android app's WebPushVectorTest.",
+  "uaPrivate": "q1dXpw3UpT5VOmu_cf_v6ih07Aems3njxI-JWgLcM94",
+  "uaPublic": "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+  "asPublic": "BP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A8",
+  "ecdh": "kyrL1jIIOHEzg3sM2ZWRHDRB62YACZhhSlknJ672kSs",
+  "auth": "BTBZMqHH6r4Tts7J_aSIgg",
+  "salt": "DGv6ra1nlYgDCS1FRnbzlw",
+  "plaintext": "{\"ping\":\"0123456789abcdef0123456789abcdef\",\"notices\":[{\"agentId\":\"w1:p1\",\"name\":\"widget\",\"state\":\"blocked\",\"line\":\"Run `pnpm test`? ✓\",\"pendingId\":\"screen-2-ab\",\"announce\":true}]}",
+  "body": "DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_e3ctcDLW4LAOM4rxK7hAJqj29tLlWDsyDoylO0u6lHaOHBzkhA2rfUEO-jBHAlFIaCvZauz6oyKpy8MWMUy2u4iWujpxSAuqQLaQiWzkKpK4iz3sdt65Vt5APaghuUpc75kzNDXks9XlJbYk3mAb0K3Jm-ogRC9DM1HNSeYstd92yM9fDEQrrA1D6Adl1aozW4G4CuhZcslh7HXrJdsu8A2HDBeeQ-D1e7xymp19zjmvLYxqrb69vRY5mpW1HET1iLx6Pq2M"
+}

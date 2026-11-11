@@ -83,6 +83,10 @@ android {
         // Robolectric tests (dev.passporter.notify) read the app's resources.
         unitTests.isIncludeAndroidResources = true
     }
+    sourceSets {
+        // The bridge's Web Push vector (WebPushVectorTest), from where its Rust test pins it.
+        getByName("test").resources.directories.add("../../../../../crates/bridge/src/push/fixtures")
+    }
 }
 
 kotlin {
@@ -103,11 +107,16 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-process:2.10.0")
     // Notifications (dev.passporter.notify); the version appcompat resolves anyway.
     implementation("androidx.core:core:1.13.1")
+    // UnifiedPush (dev.passporter.push): distributor registration, Web Push
+    // keys in the Android Keystore, RFC 8291 decryption.
+    implementation("org.unifiedpush.android:connector:3.3.5")
     // The native outbox of answers from notifications (dev.passporter.notify.actions).
     implementation("androidx.work:work-runtime:2.11.2")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.17")
     testImplementation("androidx.work:work-testing:2.11.2")
+    // WebPushVectorTest calls the connector's Tink decrypter; the version the connector uses.
+    testImplementation("com.google.crypto.tink:tink:1.23.0")
 }
 
 tasks.withType<Test>().configureEach {
