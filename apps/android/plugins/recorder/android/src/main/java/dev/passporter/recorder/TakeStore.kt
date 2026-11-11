@@ -54,7 +54,11 @@ internal class TakeStore(private val dir: File) {
             delete(id)
             return@storage null
         }
-        if (file.length() > scan.validBytes) RandomAccessFile(file, "rw").use { it.setLength(scan.validBytes) }
+        // The audio reaches the disk before the journal vouches for its size.
+        RandomAccessFile(file, "rw").use {
+            if (it.length() > scan.validBytes) it.setLength(scan.validBytes)
+            it.fd.sync()
+        }
         val take = Take(id, tag, scan.durationMs.coerceAtLeast(1), scan.validBytes, reason, endedAtMs)
         write(id, entry.put("state", FINISHED).put("durationMs", take.durationMs).put("bytes", take.bytes)
             .put("endedBy", reason.wire).put("endedAt", endedAtMs))
@@ -79,7 +83,9 @@ internal class TakeStore(private val dir: File) {
             val take = try {
                 load(id, nowMs)
             } catch (e: RecorderException.Storage) {
-                null
+                // Storage failing now (a full disk) says nothing about the
+                // take: leave its files for the next start.
+                continue
             }
             when {
                 take == null -> delete(id)

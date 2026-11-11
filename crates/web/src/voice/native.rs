@@ -183,6 +183,9 @@ thread_local! {
     static LIVE: RefCell<Vec<AudioId>> = const { RefCell::new(Vec::new()) };
     /// Starts on their way: the take they start is not known yet.
     static STARTING: Cell<u32> = const { Cell::new(0) };
+    /// Takes stored here whose native release failed: [`adopt`] only
+    /// releases them again, never stores them (their clip may be used).
+    static UNRELEASED: RefCell<Vec<AudioId>> = const { RefCell::new(Vec::new()) };
     /// When the page last came back into view (ms since the epoch).
     static SHOWN_AT: Cell<f64> = const { Cell::new(0.0) };
     /// The listener that keeps [`SHOWN_AT`], once a take has started.
@@ -308,22 +311,26 @@ async fn stop(id: &AudioId) -> Result<NativeTake, Failure> {
 /// to [`adopt`]. Until this, [`adopt`] leaves the take alone, so a take on
 /// its way is never stored a second time.
 pub async fn settle(id: &AudioId, stored: bool) {
-    if stored {
-        release(id).await;
+    if stored && !release(id).await {
+        UNRELEASED.with_borrow_mut(|ids| ids.push(id.clone()));
     }
     LIVE.with_borrow_mut(|live| live.retain(|live| live != id));
 }
 
-/// Deletes the native copy of take `id`, once its clip is stored. Best
-/// effort: a take left behind is released by the next [`adopt`] (which
-/// finds its clip), or swept by the plugin after seven days.
-async fn release(id: &AudioId) {
+/// Deletes the native copy of take `id`, once its clip is stored; whether
+/// that worked. A take left behind is released by the next [`adopt`], or
+/// swept by the plugin after seven days.
+async fn release(id: &AudioId) -> bool {
     let released = match args(&IdArgs { id }) {
         Ok(args) => call::<()>("release", &args).await,
         Err(failure) => Err(failure),
     };
-    if let Err(failure) = released {
-        web_sys::console::warn_1(&format!("native recorder: release: {}", failure.message).into());
+    match released {
+        Ok(()) => true,
+        Err(failure) => {
+            warn(&format!("release: {}", failure.message));
+            false
+        }
     }
 }
 
@@ -408,16 +415,17 @@ pub fn level(active: &ActiveTake, start_ms: f64) -> CaptureEvent {
 ///
 /// - the cap, seen on a visible page: a `Tick` at the cap, so it reports
 ///   the length cap (and a take that sends, sends);
-/// - the cap while the page was `hidden`, or the notification's Stop:
+/// - the cap out of the user's sight (`unseen`, see [`ended_unseen`]), or
+///   the notification's Stop:
 ///   `Hidden`, so the take waits on a card, never sent unseen;
 /// - a call, a failure: nothing, so it reports an interruption (a card).
 #[must_use]
-pub fn closing(take: &NativeTake, start_ms: f64, max_ms: u64, hidden: bool) -> Vec<CaptureEvent> {
+pub fn closing(take: &NativeTake, start_ms: f64, max_ms: u64, unseen: bool) -> Vec<CaptureEvent> {
     #[allow(clippy::cast_precision_loss)] // ms of a take: far below 2^52
     let at = |ms: u64| start_ms + ms as f64;
     let mut events = Vec::with_capacity(2);
     match take.ended_by {
-        EndedBy::Cap if !hidden => events.push(CaptureEvent::Tick {
+        EndedBy::Cap if !unseen => events.push(CaptureEvent::Tick {
             at_ms: at(max_ms.max(take.duration_ms)),
         }),
         EndedBy::Cap | EndedBy::User => events.push(CaptureEvent::Hidden),
@@ -496,8 +504,11 @@ pub async fn adopt<S: ClipStore, T: AudioTransport>(courier: &Courier<S, T>) {
     }
     for take in plan.adopt {
         // Stored already (a release that did not get through): only release.
-        if matches!(courier.load(&take.id).await, Ok(Some(_))) {
-            release(&take.id).await;
+        let unreleased = UNRELEASED.with_borrow(|ids| ids.contains(&take.id));
+        if unreleased || matches!(courier.load(&take.id).await, Ok(Some(_))) {
+            if release(&take.id).await {
+                UNRELEASED.with_borrow_mut(|ids| ids.retain(|id| id != &take.id));
+            }
             continue;
         }
         let audio = match read_all(&take).await {
@@ -509,14 +520,18 @@ pub async fn adopt<S: ClipStore, T: AudioTransport>(courier: &Courier<S, T>) {
         };
         let Some((agent, recording, recorded_at)) = adopted(&take, audio) else {
             warn("a recording for no agent was dropped");
-            release(&take.id).await;
+            let _ = release(&take.id).await;
             continue;
         };
         match courier
             .keep(agent, take.id.clone(), recording, recorded_at)
             .await
         {
-            Ok(_) => release(&take.id).await,
+            Ok(_) => {
+                if !release(&take.id).await {
+                    UNRELEASED.with_borrow_mut(|ids| ids.push(take.id.clone()));
+                }
+            }
             Err(error) => warn(&error.to_string()),
         }
     }
