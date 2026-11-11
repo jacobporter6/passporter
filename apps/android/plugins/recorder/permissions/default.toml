@@ -1,0 +1,18 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = """
+What the paired bridge's PWA may ask of the native recorder: start a take
+(the app asks for the microphone first), stop or cancel it, the recorder's
+status (a running take, and finished takes waiting to be stored, including
+one cut short when the app was killed), read a finished take's audio, and
+release it once the PWA has stored it.
+"""
+permissions = [
+  "allow-start",
+  "allow-stop",
+  "allow-cancel",
+  "allow-status",
+  "allow-read",
+  "allow-release",
+]

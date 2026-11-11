@@ -1,0 +1,22 @@
+[package]
+# Tauri derives the plugin's ACL name (`recorder`) from the crate name, and
+# its build helper requires `links` to match.
+name = "tauri-plugin-recorder"
+description = "Passporter's Android dictation recorder: a foreground service that records to app-private files, so a take survives the webview or the app being killed."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+links = "tauri-plugin-recorder"
+
+# Like the shell: Tauri only for Android. On the host the crate is empty,
+# so `just verify` needs no Android toolchain.
+[target.'cfg(target_os = "android")'.dependencies]
+tauri = { version = "2.12.5", default-features = false, features = ["wry"] }
+
+[build-dependencies]
+tauri-plugin = { version = "2.7.2", features = ["build"] }
+
+[lints]
+workspace = true

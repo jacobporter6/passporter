@@ -18,7 +18,8 @@ loads the PWA from there, so the app shows exactly what the browser shows
 and picks up PWA updates without a new APK. You pair the phone in the PWA
 as usual; in the app the device key is made and kept by native code (see
 [Device identity](#device-identity)). Other native plugins (notifications,
-UnifiedPush, the recorder, Android Auto) are later additions.
+UnifiedPush, Android Auto) are later additions; the dictation recorder
+is native already ([Dictation](#dictation)).
 
 Building it needs a JDK, the Android SDK and NDK, the Rust Android
 targets and the Tauri CLI. One script installs all of them under your
@@ -171,6 +172,7 @@ safe and the change out of commits (`SecurityConfigTest` rejects it on purpose).
 | `connect/` | The bundled pages (`frontendDist`): the Connect page (`index.html`) and the Bridge page (`bridge.html`) |
 | `gen/android/app/src/main/java/dev/passporter/app/` | `MainActivity` (wraps each new webview's client); `ShellPlugin` (the shell's Kotlin side: intents, restart), `ShellRequest` (what it asks the shell to show), `ShellWebViewClient` (wraps wry's client: refused links to the browser, failed loads, history), `WebViewBuilds` (tells the shell when wry rebuilds the webview), `BridgeShortcutActivity` (the shortcut's trampoline) |
 | `plugins/device/` | The device identity plugin: Keystore key, native bridge client, the PWA's `device` commands ([Device identity](#device-identity)) |
+| `plugins/recorder/` | The dictation recorder plugin: a foreground service that records takes to app-private files, the PWA's `recorder` commands ([Dictation](#dictation)) |
 | `tauri.conf.json` | App id `dev.passporter.app`, name, the Connect page's CSP |
 | `gen/android/` | The Gradle project from `cargo tauri android init`, trimmed: manifest, theme, icons, network security config, signing, JVM tests. Build output and the files Tauri regenerates on each build are gitignored |
 
@@ -196,7 +198,8 @@ Only Passporter's own pages reach native IPC, by three fences:
    remote capability to exactly `https://<bridge>/*` in the main window.
    The address must be a plain DNS name or IPv4 address, so the pattern
    holds no wildcard syntax; `localhost` names are refused.
-   It lists the plugin permissions the PWA may use: `device:default`.
+   It lists the plugin permissions the PWA may use: `device:default` and
+   `recorder:default`.
    It is granted only on a WebView with `WEB_MESSAGE_LISTENER` (below).
 3. **App commands.** The app has no ACL manifest, so Tauri refuses its own
    commands (`connect`, `bridge`, `forget_bridge`) to every remote page;
@@ -401,6 +404,73 @@ Failures are `DeviceAuthException` subclasses: `NotPaired`, `Forgotten`
 later), `RateLimited`, `Refused`, `Keystore`, and so on. Another plugin uses
 it by depending on the library in its `android/build.gradle.kts`:
 `implementation(project(":tauri-plugin-device"))`.
+
+## Dictation
+
+In the browser a take lives in the page: `MediaRecorder` holds it in
+memory and the PWA stops it when the page is hidden ([design
+§6.3](../design.md#63-dictation-first-class)). In the app the plugin in
+`plugins/recorder` (Kotlin package `dev.passporter.recorder`) records
+instead, so a long dictation survives the screen turning off, the webview
+reloading and the app being killed.
+
+| File | What |
+|---|---|
+| `Recorder.kt` | One take at a time: start, stop, cancel, status, read, release. A take ends when the PWA stops it, from the notification's Stop, at the length cap the PWA asked for (just under five minutes), when a call or another app takes the audio focus, or when the microphone fails; every way but a cancel keeps what was recorded |
+| `RecorderService.kt` | The foreground service (type `microphone`) a take runs in, with an ongoing notification (time recorded, Stop; a tap opens the app). It goes when the take ends |
+| `TakeStore.kt`, `Adts.kt` | Takes on disk, in `noBackupFilesDir/recordings`: `<id>.aac` and its journal `<id>.json` |
+| `AudioInput.kt`, `AudioFocus.kt` | `MediaRecorder` (AAC-LC, mono, 16 kHz, 32 kbit/s, in ADTS frames) and audio focus, behind interfaces the tests fake |
+| `RecorderPlugin.kt` | The PWA's commands, with strict arguments; asks for the microphone at the first `start` |
+
+**What the PWA does.** `crates/web/src/voice/native.rs` feature-detects
+the plugin (it answers `status`) and records through it; otherwise
+(Chrome, an old WebView) dictation uses `MediaRecorder`, unchanged. The
+PWA starts a take tagged with the agent's id, polls its level for the
+meter, and on stop reads the audio over IPC (base64, 256 KiB at a time)
+into the same clip a browser take makes. The clip is stored in IndexedDB
+under the take's own id, and only then released natively, so the take is
+always in at least one durable place; upload, transcription, the
+transcript card and the offline retries are the PWA's as before.
+
+**Why the PWA uploads, not native code.** The bridge's upload needs the
+clip's size before the first byte (`POST /v1/audio`), so nothing can go
+up until the take ends, and what comes back (the transcript) is only
+useful in the PWA: sent as a prompt or shown on a card. A native upload
+would duplicate the courier (renames, re-uploads, transcript polling)
+for little gain, and `HttpsURLConnection` cannot send the `PATCH` the
+chunks use. If the app dies after a take ends, the next launch stores
+and uploads it in seconds.
+
+**What survives what.**
+
+- *Screen off, another app, the notification shade:* the take goes on in
+  the foreground service; the PWA's meter catches up when it is visible
+  again.
+- *Task swiped away:* the service and the take go on (the notification
+  stays, with Stop). Reopening the app reloads the PWA, which stops a
+  take no page of its own started and puts it on its agent's card.
+- *Process killed* (low memory, force stop): `MediaRecorder` writes each
+  AAC frame to the file as it is encoded, so the file holds everything up
+  to the encoder's last fraction of a second. The journal still says
+  `recording`; at the next start the recorder cuts any torn last frame
+  off, takes the length from the frames, and lists the take as
+  `interrupted`. What is lost: the frames still in the encoder, and the
+  rest of the dictation, since nothing records once the process is gone.
+- *A call:* the call takes the audio focus, which ends the take, keeping
+  what was said (a brief sound such as a notification only ducks it).
+
+A take that ended with no page waiting for it is stored when an agent
+screen next opens, and waits on its agent's card for review, never sent
+unseen. Takes nobody released are deleted after seven days, as the PWA's
+own clips are.
+
+**Permissions.** `RECORD_AUDIO` is asked at the first `start` (the
+permission alias `microphone`); a refusal reads "Allow it for Passporter
+in Android's settings" in the PWA. The plugin's manifest adds
+`FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_MICROPHONE` and the service.
+Without `POST_NOTIFICATIONS` (Android 13+, asked once a bridge is
+connected) the service still records; Android then lists it only in the
+quick settings' active-apps list.
 
 ## What it installs, and where
 

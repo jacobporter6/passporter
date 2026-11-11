@@ -24,9 +24,11 @@ use protocol::{AgentId, AudioId, Timestamp};
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen_futures::spawn_local;
 
-use super::browser::{FetchAudio, IdbClips, MediaCapture};
+use super::browser::{FetchAudio, IdbClips};
+use super::capture::Capture;
 use super::clip::{PendingClip, Stage};
 use super::courier::{Courier, DeliverError, Delivery};
+use super::native::{self, Backend};
 use super::panel::{Act, Panel};
 use super::phase::{Arrival, NOTHING_HEARD, Phase, SCREEN_OFF, Strip};
 use super::recorder::{
@@ -103,9 +105,14 @@ thread_local! {
     static SWEPT: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Hands over the page's [`Host`]. Called once, right after loading.
+/// Hands over the page's [`Host`]. Called once, right after loading. Also
+/// finds out which recorder this page has ([`native::backend`]), so the
+/// first tap knows.
 pub fn init(host: Host) {
     HOST.set(Some(host));
+    spawn_local(async {
+        native::backend().await;
+    });
 }
 
 fn host() -> Option<Host> {
@@ -161,7 +168,7 @@ pub fn dictation(agent: &AgentId) -> Rc<Dictation> {
                     agent: agent.clone(),
                     key: agent.to_string(),
                     phase: RefCell::new(Phase::Idle),
-                    phone: Dictaphone::new(MediaCapture::default(), RecorderConfig::default()),
+                    phone: phone(agent),
                     gesture: Cell::new(MicGesture::default()),
                     delivering: Cell::new(None),
                     generation: Cell::new(0),
@@ -175,6 +182,15 @@ pub fn dictation(agent: &AgentId) -> Rc<Dictation> {
     })
 }
 
+/// `agent`'s recorder, on whichever microphone this page has.
+fn phone(agent: &AgentId) -> Dictaphone<Capture> {
+    let config = RecorderConfig::default();
+    // The cap is under five minutes: exact in a u64.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let max_ms = config.max_ms as u64;
+    Dictaphone::new(Capture::new(agent.to_string(), max_ms), config)
+}
+
 /// One agent's dictation: the recorder and the clip on its way to a
 /// transcript.
 pub struct Dictation {
@@ -186,7 +202,7 @@ pub struct Dictation {
     /// `agent`, as the page knows it.
     key: String,
     phase: RefCell<Phase>,
-    phone: Dictaphone<MediaCapture>,
+    phone: Dictaphone<Capture>,
     gesture: Cell<MicGesture>,
     /// The generation of the running delivery loop, if any.
     delivering: Cell<Option<u32>>,
@@ -426,8 +442,11 @@ impl Dictation {
     }
 
     /// Stores the recording, then delivers it; a review card shows `note`.
+    /// A take the native recorder made is stored under its id, and only then
+    /// released there.
     async fn keep(self: &Rc<Self>, recording: Recording, note: Option<&'static str>) {
-        let Some(id) = new_audio_id() else {
+        let native = recording.id.is_some();
+        let Some(id) = recording.id.clone().or_else(new_audio_id) else {
             self.set_phase(Phase::Failed {
                 id: None,
                 message: "This browser can't make a recording id.".to_owned(),
@@ -441,6 +460,10 @@ impl Dictation {
             Ok(clip) => {
                 if let Some(host) = host() {
                     host.saved();
+                }
+                if native {
+                    let id = clip.meta.audio_id.clone();
+                    spawn_local(async move { native::release(&id).await });
                 }
                 self.deliver(clip, self.send.get(), note).await;
             }
@@ -470,7 +493,9 @@ impl Dictation {
     /// Picks up where a previous screen or page load left off: the oldest
     /// stored clip for this agent, if the strip is free. The first call in
     /// a page session also deletes clips (of any agent) past the bridge's
-    /// retention.
+    /// retention. In the app, takes the native recorder kept for no page
+    /// (the app was killed, or the take ended while the page was gone) are
+    /// stored first ([`native::adopt`]), so they show here too.
     pub fn resume(self: &Rc<Self>) {
         if !self.is_free() {
             return;
@@ -481,6 +506,9 @@ impl Dictation {
         let this = self.clone();
         spawn_local(async move {
             let courier = courier();
+            if native::backend().await == Backend::Native {
+                native::adopt(&courier).await;
+            }
             let waiting = match courier.waiting(&this.agent, sweep_before).await {
                 Ok(waiting) => waiting,
                 Err(error) => {
@@ -752,6 +780,9 @@ pub fn capture_message(error: &CaptureError) -> String {
     match error {
         CaptureError::Denied => {
             "The microphone is blocked. Allow it in the browser's site settings.".to_owned()
+        }
+        CaptureError::AppDenied => {
+            "The microphone is blocked. Allow it for Passporter in Android's settings.".to_owned()
         }
         CaptureError::NoDevice => "No microphone found.".to_owned(),
         CaptureError::Unsupported => "This browser can't record audio here.".to_owned(),

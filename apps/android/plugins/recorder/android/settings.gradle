@@ -1,0 +1,4 @@
+// Only for opening this library on its own; the app's build includes it
+// through tauri.settings.gradle instead.
+include ':tauri-android'
+project(':tauri-android').projectDir = new File('./.tauri/tauri-api')
