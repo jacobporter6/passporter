@@ -1,6 +1,11 @@
 //! Remembers the paired bridge's origin across launches, as one line of
-//! text in the app's private data directory. It is not a secret: device
-//! keys and session tokens stay in the PWA's own storage.
+//! text in the app's private data directory. It is not a secret.
+//!
+//! This file is also how native code finds the bridge: the device plugin's
+//! Kotlin (`BridgeOrigin.saved`, in `plugins/device`) reads the same file
+//! from `Context.getDataDir()` (Tauri's app data directory on Android), so
+//! the webview and native sign-ins always talk to the same bridge, with or
+//! without the app running. Its test pins [`FILE_NAME`].
 
 use std::fs;
 use std::io;
