@@ -25,9 +25,10 @@ mise trust          # once, so mise reads the repo's config files
 just android-setup  # or: deploy/android/setup.sh
 ```
 
-The script accepts the licences of the packages it installs (Google's
-[Android SDK licence](https://developer.android.com/studio/terms)) on your
-behalf, and prints the text; read it first. It is safe to re-run: each step
+The script accepts the licences of the packages it installs on your
+behalf, without asking, so read Google's
+[Android SDK licence](https://developer.android.com/studio/terms) before
+you run it. It is safe to re-run: each step
 checks what is already there, and a second run changes nothing.
 
 The Android tools live in `mise.android.toml`, which mise reads only when
@@ -64,9 +65,9 @@ and `mise.android.toml`; the script stops if they disagree. `platform-tools`
 is the one package not pinned, because sdkmanager only offers the latest;
 builds don't use it, only talking to a device does. The command-line tools
 are held at 21.0: from 22.0 their `sdkmanager` downloads a separate,
-unpinned "Android CLI" that collects usage metrics. The Rust targets go through rustup rather
-than `rust-toolchain.toml`, so people who never build the app don't
-download them.
+unpinned "Android CLI" that collects usage metrics. The Rust targets go
+through rustup rather than `rust-toolchain.toml`, so people who never build
+the app don't download them.
 
 Gradle and the Android Gradle plugin are not installed here: the app's
 Gradle wrapper fetches them into `~/.gradle` on its first build. A debug
@@ -84,8 +85,10 @@ check the download against the SHA-1, and pin its SHA-256.
 
 ```sh
 rm -rf ~/.local/share/android-sdk
-MISE_ENV=android mise uninstall java github:tauri-apps/tauri
-rustup target remove aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+MISE_ENV=android mise uninstall java@temurin-21.0.13+9.0.LTS github:tauri-apps/tauri@tauri-cli-v2.12.4
+# from the repo checkout, so rustup picks the toolchain in rust-toolchain.toml
+rustup target remove \
+    aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
 ```
 
 Builds may also have left `~/.gradle` (Gradle caches) and `~/.android`

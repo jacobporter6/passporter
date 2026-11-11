@@ -67,7 +67,8 @@ export MISE_ENV=android
 step "JDK and Tauri CLI (mise.android.toml)"
 mise install java "github:tauri-apps/tauri"
 # ANDROID_HOME, NDK_HOME, JAVA_HOME and PATH exactly as mise sets them.
-eval "$(mise env --shell bash)"
+mise_env="$(mise env --shell bash)" || die "mise env failed"
+eval "$mise_env"
 [[ -n "${ANDROID_HOME:-}" && -n "${NDK_HOME:-}" && -n "${JAVA_HOME:-}" ]] \
     || die "mise.android.toml must set ANDROID_HOME and NDK_HOME, and pin java"
 [[ "$NDK_HOME" == "$ANDROID_HOME/ndk/$NDK_VERSION" ]] \
@@ -108,14 +109,20 @@ else
     # Answers yes to the licence prompts of these packages only (Google's
     # Android SDK licence), which the human who runs this accepts.
     { yes || true; } | "$sdkmanager" --sdk_root="$ANDROID_HOME" --install "${missing[@]}"
+    for pkg in "${missing[@]}"; do
+        [[ -f "$ANDROID_HOME/${pkg//;//}/package.xml" ]] || die "sdkmanager did not install $pkg"
+    done
 fi
 
 channel="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
 [[ -n "$channel" ]] || die "no channel in rust-toolchain.toml"
 step "Rust targets for toolchain $channel"
-toolchains="$(rustup toolchain list)"
-[[ $'\n'"$toolchains" == *$'\n'"$channel-"* ]] || rustup toolchain install "$channel" --profile minimal
-installed="$(rustup target list --installed --toolchain "$channel")"
+# With no argument, rustup installs the toolchain rust-toolchain.toml names,
+# with its components and targets.
+installed="$(rustup target list --installed --toolchain "$channel" 2>/dev/null)" || {
+    rustup toolchain install
+    installed="$(rustup target list --installed --toolchain "$channel")"
+}
 missing=()
 for target in "${RUST_TARGETS[@]}"; do
     grep -qx "$target" <<<"$installed" || missing+=("$target")
