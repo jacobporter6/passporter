@@ -24,4 +24,5 @@ fun notice(
     )
 
 /** A message of [notices]. */
-fun messageOf(vararg notices: Notice): NoticeMessage = NoticeMessage("ab", notices.toList())
+fun messageOf(vararg notices: Notice, ping: String = "ab"): NoticeMessage =
+    NoticeMessage(ping, notices.toList())

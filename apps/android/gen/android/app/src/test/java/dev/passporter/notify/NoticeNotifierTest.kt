@@ -7,7 +7,6 @@ import android.content.pm.ShortcutManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -21,9 +20,10 @@ class NoticeNotifierTest {
     private val manager = context.getSystemService(NotificationManager::class.java)
     private val notifier = NoticeNotifier(context)
 
-    private val blocked =
-        """{"ping":"ab","notices":[{"agentId":"w1:p1","name":"widget","state":"blocked",
+    private fun blocked(ping: String = "ab") =
+        """{"ping":"$ping","notices":[{"agentId":"w1:p1","name":"widget","state":"blocked",
             "line":"Run `pnpm test`?","pendingId":"screen-2-ab","announce":true}]}"""
+
     private val finished =
         """{"ping":"cd","notices":[{"agentId":"w1:p2","name":"docs","state":"finished"}]}"""
 
@@ -36,8 +36,8 @@ class NoticeNotifierTest {
 
     @Test
     fun eachAgentGetsItsOwnNotification() {
-        notifier.show(blocked)
-        notifier.show(finished)
+        assertEquals(NoticeOutcome.Posted(1), notifier.show(blocked()))
+        assertEquals(NoticeOutcome.Posted(1), notifier.show(finished))
         assertEquals(2, shadowOf(manager).allNotifications.size)
         assertEquals(NoticeNotification.CHANNEL_NEEDS_YOU, posted("w1:p1").channelId)
         assertEquals(NoticeNotification.CHANNEL_FINISHED, posted("w1:p2").channelId)
@@ -46,26 +46,40 @@ class NoticeNotifierTest {
     }
 
     @Test
-    fun aResentMessageDoesNotPostAgain() {
-        notifier.show(blocked)
+    fun aMessageDeliveredTwiceIsShownOnce() {
+        notifier.show(blocked())
         val first = posted("w1:p1")
-        notifier.show(blocked)
+        assertEquals(NoticeOutcome.Duplicate, notifier.show(blocked()))
         assertSame("left as it was, so it cannot buzz", first, posted("w1:p1"))
-        notifier.show(blocked.replace("screen-2-ab", "screen-3-cd"))
-        assertNotSame("a new dialog is news", first, posted("w1:p1"))
+        assertEquals(
+            "remembered across notifiers (a new process)",
+            NoticeOutcome.Duplicate,
+            NoticeNotifier(context).show(blocked()),
+        )
+    }
+
+    @Test
+    fun aNewMessageIsNewsEvenIfItReadsTheSame() {
+        // A second dialog the bridge could not parse looks like the first.
+        notifier.show(blocked("ab"))
+        val first = posted("w1:p1")
+        assertEquals(NoticeOutcome.Posted(1), notifier.show(blocked("ef")))
+        assertNotSame(first, posted("w1:p1"))
     }
 
     @Test
     fun invalidPayloadsPostNothing() {
-        val parse = notifier.show("""{"ping":"ab","notices":[{"agentId":"w1/p1"}]}""")
-        assertTrue(parse is NoticeParse.Invalid)
+        val outcome = notifier.show("""{"ping":"ab","notices":[{"agentId":"w1/p1"}]}""")
+        assertEquals(NoticeOutcome.Invalid(NoticeError.InvalidId("notices[0].agentId")), outcome)
         assertEquals(0, shadowOf(manager).allNotifications.size)
     }
 
     @Test
     fun withoutThePermissionNothingIsPosted() {
         shadowOf(context).denyPermissions(Manifest.permission.POST_NOTIFICATIONS)
-        notifier.show(blocked)
+        assertEquals(NoticeOutcome.NotAllowed, notifier.show(blocked()))
         assertEquals(0, shadowOf(manager).allNotifications.size)
+        shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        assertEquals("not remembered as shown", NoticeOutcome.Posted(1), notifier.show(blocked()))
     }
 }

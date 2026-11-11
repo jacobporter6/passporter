@@ -107,11 +107,11 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.17")
 }
 
-// SecurityConfigTest reads these at run time; declare them so Gradle
-// reruns the tests when they change.
 tasks.withType<Test>().configureEach {
     // Robolectric's Android 15+ sandboxes reach a JDK internal.
     jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED")
+    // SecurityConfigTest reads these at run time; declare them so Gradle
+    // reruns the tests when they change.
     inputs.files("src/main/AndroidManifest.xml", "src/main/res/xml")
         .withPropertyName("transportPolicy")
         .withPathSensitivity(PathSensitivity.RELATIVE)

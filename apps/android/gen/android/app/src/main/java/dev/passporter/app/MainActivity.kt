@@ -5,9 +5,15 @@ import androidx.activity.enableEdgeToEdge
 import dev.passporter.notify.NotificationPermission
 
 class MainActivity : TauriActivity() {
+  private val notificationPermission = NotificationPermission(this)
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
-    NotificationPermission.requestIfConnected(this)
+  }
+
+  override fun onResume() {
+    super.onResume()
+    notificationPermission.askIfDue()
   }
 }

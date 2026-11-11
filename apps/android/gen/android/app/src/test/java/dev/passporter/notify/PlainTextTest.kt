@@ -32,4 +32,14 @@ class PlainTextTest {
         val family = "👩‍👧"
         assertEquals("joiners inside emoji stay", family, PlainText.oneLine(family, 10))
     }
+
+    @Test
+    fun theBridgesHiddenCharactersGoAndItsJoinersStay() {
+        // Hangul and Khmer fillers, a Mongolian selector, a tag: as the bridge.
+        assertEquals("ab", PlainText.oneLine("aㅤᅟ឴᠋󠁁b", 10))
+        assertNull("fillers alone are blank", PlainText.oneLine("ㅤ ﾠ", 10))
+        assertNull("so are joiners and selectors", PlainText.oneLine("‍️", 10))
+        val persian = "می‌خواهم"
+        assertEquals("the non-joiner shapes Persian", persian, PlainText.oneLine(persian, 20))
+    }
 }

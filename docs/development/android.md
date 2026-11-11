@@ -217,19 +217,26 @@ turns a decrypted message into notifications:
 | File | What |
 |---|---|
 | `Notice.kt`, `NoticeParser.kt`, `PlainText.kt` | The message as typed Kotlin, parsed strictly where the bridge is strict (types, ids) and tolerantly where it is tolerant (unknown fields, unknown states); texts cleaned and bounded again |
-| `NotificationPlanner.kt` | Pure: which agents to post with an alert, update silently, or leave alone |
+| `NotificationPlanner.kt` | Pure: which notices of a message to post (one per agent, unknown states skipped) |
 | `NoticeNotification.kt` | One `MessagingStyle` conversation per agent, with its shortcut and `LocusId`; channels *Needs you* (high, blocked agents) and *Finished* (default) |
-| `NoticeNotifier.kt` | The entry point: `NoticeNotifier(context).show(payload)` |
-| `NotificationPermission.kt` | Asks for `POST_NOTIFICATIONS` (Android 13+) on the first launch after you connect to a bridge |
+| `NoticeNotifier.kt`, `RecentPings.kt` | The entry point, `NoticeNotifier(context).show(payload)`, and the pings of recent messages |
+| `NotificationPermission.kt` | Asks for `POST_NOTIFICATIONS` (Android 13+) when you return to the app after connecting to a bridge |
 
-**Only news disrupts.** A message lists only the agents with news since the
-last one, so an agent it leaves out keeps its notification. A notice the
-shade already shows (same state, line, *Decide* line and dialog) changes
-nothing, so a re-sent message never buzzes; a new name alone updates the
-notification silently. What is shown is read back from the shade, so a
-dismissed notification counts as not shown. The text is the agent's name,
-its one line and the *Decide* line, never more (the car reads the same). A
-tap opens the app with the intent `passporter://agent/<id>`.
+**Only news disrupts.** The bridge sends a notice only for a new event,
+so every notice of a new message alerts, replacing the agent's last
+notification. A message delivered twice (a push retry) carries the same
+`ping`, and the app remembers the last 32, so a retry never buzzes. A
+message lists only the agents with news since the last one, so an agent it
+leaves out keeps its notification. The text is the agent's name, its one
+line and the *Decide* line, never more (the car reads the same). A tap
+opens the app with the intent `passporter://agent/<id>` (the id is one
+percent-encoded path segment: read it with `NoticeNotification.agentToOpen`).
+
+Known gaps: the shell does not yet navigate to the agent on a tap, and
+nothing clears a notification once its news is old (a dialog you answered
+on the desktop stays until you tap or swipe it), because the bridge sends
+no "resolved" message. Each agent's conversation shortcut stays too;
+Android drops the oldest once the app reaches its shortcut limit.
 
 A debug build can post sample messages through the same path, from the dev
 machine with the phone on adb (`-n` targets the receiver, which only adb's
@@ -240,11 +247,12 @@ adb shell am broadcast -n dev.passporter.app/dev.passporter.notify.SampleNoticeR
 ```
 
 The samples are `blocked` (alerts on *Needs you*), `blocked-again` (the
-same agent at a new dialog: alerts again, in place), `finished` (quieter,
-on *Finished*), `decide` (that turn's *Decide* line: alerts once more) and
-`many` (four agents, one conversation each; one name and line cut at their
-bounds). Sending one twice must not buzz the second time. Release builds
-leave the receiver out.
+same agent at a new dialog: alerts again, in place), `finished` (on
+*Finished*, quieter), `decide` (that turn's *Decide* line: alerts once
+more) and `many` (four agents, one conversation each; one name and line
+cut at their bounds). Each broadcast is a new message; add `--es ping
+test1` to two broadcasts to send the same message twice, and the second
+must not buzz. Release builds leave the receiver out.
 
 ## What it installs, and where
 

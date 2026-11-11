@@ -5,7 +5,6 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Bundle
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -41,15 +40,6 @@ object NoticeNotification {
     /** The scheme and host of [openAgent]'s data: `passporter://agent/<id>`. */
     private const val SCHEME = "passporter"
     private const val HOST = "agent"
-
-    // The shown notice, so the next message can tell news from a repeat.
-    private const val EXTRA_AGENT_ID = "dev.passporter.notify.agentId"
-    private const val EXTRA_NAME = "dev.passporter.notify.name"
-    private const val EXTRA_STATE = "dev.passporter.notify.state"
-    private const val EXTRA_LINE = "dev.passporter.notify.line"
-    private const val EXTRA_DECIDE = "dev.passporter.notify.decide"
-    private const val EXTRA_PENDING_ID = "dev.passporter.notify.pendingId"
-    private const val EXTRA_ANNOUNCE = "dev.passporter.notify.announce"
 
     /** The notification tag of [agent]'s conversation. */
     fun tag(agent: AgentId): String = agent.value
@@ -96,8 +86,11 @@ object NoticeNotification {
             .build()
     }
 
-    /** The notification of [notice]; [alert] says whether it may sound. */
-    fun build(context: Context, notice: Notice, alert: Boolean, now: Long): Notification {
+    /**
+     * The notification of [notice]. It is news ([NotificationPlanner]), so
+     * it alerts even when it replaces the agent's last one.
+     */
+    fun build(context: Context, notice: Notice, now: Long): Notification {
         val agent = person(notice)
         val style = NotificationCompat.MessagingStyle(
             Person.Builder().setName(context.getString(R.string.notify_you)).build(),
@@ -129,35 +122,18 @@ object NoticeNotification {
             .setAutoCancel(true)
             .setWhen(now)
             .setShowWhen(true)
-            // A quiet update of a showing notification never sounds; news
-            // replacing one sounds again.
-            .setOnlyAlertOnce(!alert)
+            // News that replaces the agent's last notification sounds again.
+            .setOnlyAlertOnce(false)
             // The text is agent output: no system-suggested actions from it.
             .setAllowSystemGeneratedContextualActions(false)
-            .addExtras(extras(notice))
             .build()
     }
 
-    /** The notice a posted notification of ours shows, from its extras. */
-    fun shownNotice(extras: Bundle): Notice? {
-        val agentId = extras.getString(EXTRA_AGENT_ID)?.let(AgentId::parse) ?: return null
-        val name = extras.getString(EXTRA_NAME) ?: return null
-        val state = extras.getString(EXTRA_STATE)?.let(NoticeState::fromWire) ?: return null
-        return Notice(
-            agentId = agentId,
-            name = name,
-            state = state,
-            line = extras.getString(EXTRA_LINE),
-            decide = extras.getString(EXTRA_DECIDE),
-            pendingId = extras.getString(EXTRA_PENDING_ID)?.let(PendingId::parse),
-            announce = extras.getBoolean(EXTRA_ANNOUNCE),
-        )
-    }
-
     /**
-     * Opens the app at [agent]: `passporter://agent/<id>` with action
-     * [ACTION_OPEN_AGENT], explicit to [MainActivity]. The data keeps each
-     * agent's pending intent apart.
+     * Opens the app at [agent]: `passporter://agent/<id>` (the id as one
+     * percent-encoded path segment; read it back with [agentToOpen]) with
+     * action [ACTION_OPEN_AGENT], explicit to [MainActivity]. The data keeps
+     * each agent's pending intent apart.
      */
     fun openAgent(context: Context, agent: AgentId): Intent =
         Intent(context, MainActivity::class.java)
@@ -175,16 +151,5 @@ object NoticeNotification {
         when (state) {
             NoticeState.BLOCKED -> CHANNEL_NEEDS_YOU
             else -> CHANNEL_FINISHED
-        }
-
-    private fun extras(notice: Notice): Bundle =
-        Bundle().apply {
-            putString(EXTRA_AGENT_ID, notice.agentId.value)
-            putString(EXTRA_NAME, notice.name)
-            putString(EXTRA_STATE, notice.state.wire)
-            putString(EXTRA_LINE, notice.line)
-            putString(EXTRA_DECIDE, notice.decide)
-            putString(EXTRA_PENDING_ID, notice.pendingId?.value)
-            putBoolean(EXTRA_ANNOUNCE, notice.announce)
         }
 }

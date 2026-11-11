@@ -117,6 +117,15 @@ class NoticeParserTest {
     }
 
     @Test
+    fun onlyTheNewestNoticesAreKept() {
+        val notices = (1..6).joinToString(",") {
+            """{"agentId":"w1:p$it","name":"n","state":"blocked"}"""
+        }
+        val kept = parsed("""{"ping":"ab","notices":[$notices]}""").notices.map { it.agentId.value }
+        assertEquals(listOf("w1:p3", "w1:p4", "w1:p5", "w1:p6"), kept)
+    }
+
+    @Test
     fun idsFollowTheBridgesCharset() {
         for (valid in listOf("w6:p1", "w6:p1~abc", "a.b_c-d", "x".repeat(128))) {
             assertEquals(valid, AgentId.parse(valid)?.value)

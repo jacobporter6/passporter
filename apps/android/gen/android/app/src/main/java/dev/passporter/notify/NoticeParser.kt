@@ -47,10 +47,14 @@ sealed interface NoticeError {
  *
  * The policy is the bridge's for outbound types (`protocol::push`):
  * tolerant of what a newer bridge may add (unknown fields are ignored, an
- * unknown state is [NoticeState.UNKNOWN]), strict about what is there (a
- * wrong type or an invalid id rejects the whole message, as serde would).
- * Texts are cleaned and bounded again ([PlainText]) so a notification never
- * shows more than the bridge meant to send.
+ * unknown state is [NoticeState.UNKNOWN]), strict about the fields it
+ * knows (a wrong type or an invalid id rejects the whole message, as serde
+ * would). The JSON syntax itself is the platform's `org.json`, which is
+ * more lenient than serde (single quotes, unquoted keys, trailing text);
+ * the payload was decrypted and authenticated as the bridge's first.
+ * Only the newest [Notice.MAX_NOTICES] notices are kept, and texts are
+ * cleaned and bounded again ([PlainText]), so a notification never shows
+ * more than the bridge meant to send.
  */
 object NoticeParser {
     /** The message in [payload], or why there is none. Never throws. */
@@ -72,12 +76,13 @@ object NoticeParser {
     private fun message(root: JSONObject): NoticeMessage {
         val ping = root.required<String>("ping", "ping")
         val notices = root.optional<JSONArray>("notices", "notices")
-        val list = (0 until (notices?.length() ?: 0)).map { index ->
+        val count = notices?.length() ?: 0
+        val list = (0 until count).map { index ->
             val path = "notices[$index]"
             val raw = notices?.opt(index)
             notice(raw as? JSONObject ?: throw Failure(NoticeError.WrongType(path)), path)
         }
-        return NoticeMessage(ping, list)
+        return NoticeMessage(ping, list.takeLast(Notice.MAX_NOTICES))
     }
 
     private fun notice(json: JSONObject, path: String): Notice {

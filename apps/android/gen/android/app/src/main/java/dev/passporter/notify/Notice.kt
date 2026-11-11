@@ -11,7 +11,7 @@ package dev.passporter.notify
 data class NoticeMessage(
     /** 128 random bits as hex, fresh per message; meaningless. */
     val ping: String,
-    /** At most [MAX_NOTICES] notices, oldest first; empty for a bare ping. */
+    /** At most [Notice.MAX_NOTICES] notices, oldest first; none for a bare ping. */
     val notices: List<Notice>,
 )
 
@@ -36,14 +36,6 @@ data class Notice(
     /** Whether Android Auto should announce it (used by the car task). */
     val announce: Boolean,
 ) {
-    /**
-     * Whether this tells the same news as [other]: the same state, line,
-     * *Decide* line and dialog. A new name alone is not news.
-     */
-    fun sameNewsAs(other: Notice): Boolean =
-        state == other.state && line == other.line && decide == other.decide &&
-            pendingId == other.pendingId
-
     companion object {
         /** Most notices in one message (`protocol::MAX_NOTICES`). */
         const val MAX_NOTICES = 4
