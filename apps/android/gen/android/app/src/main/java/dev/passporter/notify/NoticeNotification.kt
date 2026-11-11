@@ -43,6 +43,14 @@ object NoticeNotification {
      */
     const val EXTRA_QUESTION = "dev.passporter.notify.QUESTION"
 
+    /**
+     * The extra holding when a notice was posted (unix ms): which notice of
+     * the agent a notification shows, kept by every repost of it. Android
+     * Auto's actions name it ([CarActions]), so an answer from the car
+     * never lands on newer news, two finished turns included.
+     */
+    const val EXTRA_STAMP = "dev.passporter.notify.STAMP"
+
     /** [EXTRA_QUESTION] of a finished turn. */
     const val TURN = "turn"
 
@@ -128,8 +136,13 @@ object NoticeNotification {
             // News that replaces the agent's last notification sounds again.
             .setOnlyAlertOnce(false)
         NoticeActions.build(context, notice).forEach(builder::addAction)
-        CarActions.build(context, notice).forEach(builder::addInvisibleAction)
-        question(notice)?.let { builder.addExtras(Bundle().apply { putString(EXTRA_QUESTION, it) }) }
+        CarActions.build(context, notice, now).forEach(builder::addInvisibleAction)
+        builder.addExtras(
+            Bundle().apply {
+                question(notice)?.let { putString(EXTRA_QUESTION, it) }
+                putLong(EXTRA_STAMP, now)
+            },
+        )
         return builder.build()
     }
 

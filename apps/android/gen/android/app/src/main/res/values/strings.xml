@@ -45,6 +45,8 @@
     <string name="car_trouble_too_long">That was too long to send from the car. Please use your phone.</string>
     <string name="car_trouble_not_paired">This phone isn\'t paired with your computer any more. Please open Passporter.</string>
     <string name="car_trouble_unreachable">I couldn\'t reach your computer, so that may not have gone through. Please check your phone.</string>
+    <string name="car_trouble_too_old">I couldn\'t reach your computer in time, so I stopped trying. Please check your phone.</string>
+    <string name="car_answer_on_phone">Answer from your phone</string>
     <string name="car_trouble_uncertain">I\'m not sure that went through. Please check your phone.</string>
     <string name="car_trouble_failed">That didn\'t go through. Please check your phone.</string>
 </resources>

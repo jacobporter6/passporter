@@ -147,7 +147,14 @@ class ActionFeedback(
             .setSilent(true)
         status?.let { builder.setSubText(context.getString(it)).setContentText(context.getString(it)) }
         val question = base?.extras?.getString(NoticeNotification.EXTRA_QUESTION) ?: request.question
-        builder.addExtras(Bundle().apply { putString(NoticeNotification.EXTRA_QUESTION, question) })
+        builder.addExtras(
+            Bundle().apply {
+                putString(NoticeNotification.EXTRA_QUESTION, question)
+                // Still the same notice: Android Auto's actions name it.
+                base?.extras?.takeIf { it.containsKey(NoticeNotification.EXTRA_STAMP) }
+                    ?.let { putLong(NoticeNotification.EXTRA_STAMP, it.getLong(NoticeNotification.EXTRA_STAMP)) }
+            },
+        )
         when (mark) {
             is Mark.Job -> builder.addExtras(Bundle().apply { putString(EXTRA_JOB, mark.key) })
             Mark.Outcome -> builder.addExtras(Bundle().apply { putBoolean(EXTRA_OUTCOME, true) })

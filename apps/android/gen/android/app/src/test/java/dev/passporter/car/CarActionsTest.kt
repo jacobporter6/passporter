@@ -71,8 +71,8 @@ class CarActionsTest {
     fun carIntentsAreExplicitBroadcastsToTheCarReceiverNamingTheDialog() {
         val component = ComponentName(context, CarReplyReceiver::class.java)
         val expected = listOf(
-            "passporter://car/reply/w1%3Ap1/dialog/screen-2-ab" to PendingIntent.FLAG_MUTABLE,
-            "passporter://car/read/w1%3Ap1/dialog/screen-2-ab" to PendingIntent.FLAG_IMMUTABLE,
+            "passporter://car/reply/w1%3Ap1/dialog/screen-2-ab/1" to PendingIntent.FLAG_MUTABLE,
+            "passporter://car/read/w1%3Ap1/dialog/screen-2-ab/1" to PendingIntent.FLAG_IMMUTABLE,
         )
         for ((action, want) in invisible(build(notice())).zip(expected)) {
             val shadow = shadowOf(requireNotNull(action.actionIntent))
@@ -90,15 +90,25 @@ class CarActionsTest {
     fun aFinishedTurnAndAnUnnamedDialogAreAnnouncedToo() {
         val turn = invisible(build(notice(state = NoticeState.FINISHED, pending = null, decide = "Merge now?")))
         assertEquals(
-            listOf("passporter://car/reply/w1%3Ap1/turn", "passporter://car/read/w1%3Ap1/turn"),
+            listOf("passporter://car/reply/w1%3Ap1/turn/1", "passporter://car/read/w1%3Ap1/turn/1"),
             turn.map { shadowOf(requireNotNull(it.actionIntent)).savedIntent.dataString },
         )
         val unnamed = invisible(build(notice(pending = null)))
         assertEquals(
-            "passporter://car/reply/w1%3Ap1/blocked",
+            "passporter://car/reply/w1%3Ap1/blocked/1",
             shadowOf(requireNotNull(unnamed.first().actionIntent)).savedIntent.dataString,
         )
         assertTrue("nothing for the shade to answer", visible(build(notice(pending = null))).isEmpty())
+    }
+
+    @Test
+    fun eachNoticeHasItsOwnCarIntentsTwoTurnsOfOneAgentIncluded() {
+        val turn = notice(state = NoticeState.FINISHED, pending = null)
+        val first = invisible(NoticeNotification.build(context, turn, now = 1)).first()
+        val second = invisible(NoticeNotification.build(context, turn, now = 2)).first()
+        assertEquals("passporter://car/reply/w1%3Ap1/turn/2", shadowOf(requireNotNull(second.actionIntent)).savedIntent.dataString)
+        assertFalse(first.actionIntent == second.actionIntent)
+        assertEquals(2L, NoticeNotification.build(context, turn, now = 2).extras.getLong(NoticeNotification.EXTRA_STAMP))
     }
 
     @Test

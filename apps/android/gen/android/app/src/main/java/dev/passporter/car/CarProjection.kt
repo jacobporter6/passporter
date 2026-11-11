@@ -14,6 +14,9 @@ fun interface CarProjection {
     fun isProjecting(): Boolean
 }
 
+/** The [CarProjection] the car path asks: Android Auto's ([AndroidAutoProjection]); tests fake it. */
+internal var carProjection: (Context) -> CarProjection = ::AndroidAutoProjection
+
 /**
  * [CarProjection] from Android Auto's own connection provider, the source
  * `androidx.car.app`'s `CarConnection` reads (`content://androidx.car.app.connection`,

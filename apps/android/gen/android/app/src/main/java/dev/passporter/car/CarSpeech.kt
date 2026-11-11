@@ -24,13 +24,17 @@ import dev.passporter.notify.actions.ActionFeedback
  * question is answered.
  *
  * News wins, as for answers from the shade ([ActionFeedback]): if newer
- * news replaced the notification meanwhile (another dialog, a new turn),
- * it stays as it is; it was announced itself. The look and the post hold
- * [NotificationLock].
+ * news replaced the notification meanwhile (another dialog, a new turn:
+ * any other notice, by its [NoticeNotification.EXTRA_STAMP]), it stays as
+ * it is, announced or not. If the notification is gone (a heard turn,
+ * swiped, or cleared as old news), the answer comes back only while
+ * Android Auto projects: the driver must hear it, and off the car old news
+ * stays cleared. The look and the post hold [NotificationLock].
  */
 class CarSpeech(
     context: Context,
     private val now: () -> Long = System::currentTimeMillis,
+    private val projection: CarProjection = carProjection(context),
 ) {
     private val context = context.applicationContext
     private val manager = NotificationManagerCompat.from(this.context)
@@ -47,11 +51,37 @@ class CarSpeech(
     fun trouble(request: CarRequest, name: String, utterance: String?, trouble: CarTrouble) =
         post(request, name, utterance, context.getString(message(trouble)), keepShadeActions = true)
 
+    /**
+     * A car action fired while Android Auto does not project (a watch, the
+     * Assistant): nothing was sent. The notification stays as it was,
+     * actions included, quietly saying to answer on the phone, so whoever
+     * fired it is not left believing it went.
+     */
+    fun offTheCar(request: CarRequest, name: String) = synchronized(NotificationLock) {
+        val base = active(request)?.takeIf { shows(it, request) } ?: return@synchronized
+        val style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(base) ?: return@synchronized
+        val status = context.getString(R.string.car_answer_on_phone)
+        val state = NoticeNotification.stateOf(base.channelId) ?: request.state
+        val builder = NoticeNotification.conversation(context, request.agent, state, style, now())
+            .setContentTitle(name)
+            .setSubText(status)
+            .setContentText(status)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .addExtras(base.extras.marks())
+        copyActions(base, builder, visible = true)
+        notify(request, builder)
+    }
+
     private fun post(request: CarRequest, name: String, utterance: String?, speech: String, keepShadeActions: Boolean) =
         synchronized(NotificationLock) {
             val base = active(request)
-            if (base != null && base.extras.getString(NoticeNotification.EXTRA_QUESTION) != request.question) {
+            if (base != null && !shows(base, request)) {
                 Log.i(TAG, "newer news replaced the conversation; the car's answer is not shown")
+                return@synchronized
+            }
+            if (base == null && !projection.isProjecting()) {
+                Log.i(TAG, "the conversation is gone and the car with it; the car's answer is not shown")
                 return@synchronized
             }
             val style = base?.let(NotificationCompat.MessagingStyle::extractMessagingStyleFromNotification)
@@ -67,25 +97,59 @@ class CarSpeech(
                 .setContentText(speech)
                 // A new message: the car announces it.
                 .setOnlyAlertOnce(false)
-            builder.addExtras(
-                Bundle().apply {
-                    request.question?.let { putString(NoticeNotification.EXTRA_QUESTION, it) }
-                    // An answer from the shade still on its way keeps its mark.
-                    base?.extras?.getString(ActionFeedback.EXTRA_JOB)?.let { putString(ActionFeedback.EXTRA_JOB, it) }
-                },
-            )
-            if (keepShadeActions && base != null) {
-                for (index in 0 until NotificationCompat.getActionCount(base)) {
-                    NotificationCompat.getAction(base, index)?.let(builder::addAction)
-                }
+            builder.addExtras(base?.extras?.marks() ?: Bundle().apply { stamp(request) })
+            if (base != null) {
+                copyActions(base, builder, visible = keepShadeActions)
+            } else {
+                CarActions.of(context, request.agent, request.subject, request.stamp, name)
+                    .forEach(builder::addInvisibleAction)
             }
-            CarActions.of(context, request.agent, request.subject, name).forEach(builder::addInvisibleAction)
-            try {
-                manager.notify(NoticeNotification.tag(request.agent), NoticeNotification.ID, builder.build())
-            } catch (_: SecurityException) {
-                // Notifications were turned off meanwhile: nothing to show.
+            notify(request, builder)
+        }
+
+    /** Whether [notification] still shows the notice [request] is about. */
+    private fun shows(notification: Notification, request: CarRequest): Boolean {
+        val extras = notification.extras
+        return extras.getString(NoticeNotification.EXTRA_QUESTION) == request.question &&
+            extras.containsKey(NoticeNotification.EXTRA_STAMP) &&
+            extras.getLong(NoticeNotification.EXTRA_STAMP) == request.stamp
+    }
+
+    /**
+     * What a repost keeps of this notice's extras: its question and stamp,
+     * and the mark of an answer from the shade still on its way.
+     */
+    private fun Bundle.marks(): Bundle = Bundle().also { kept ->
+        getString(NoticeNotification.EXTRA_QUESTION)?.let { kept.putString(NoticeNotification.EXTRA_QUESTION, it) }
+        kept.putLong(NoticeNotification.EXTRA_STAMP, getLong(NoticeNotification.EXTRA_STAMP))
+        getString(ActionFeedback.EXTRA_JOB)?.let { kept.putString(ActionFeedback.EXTRA_JOB, it) }
+    }
+
+    private fun Bundle.stamp(request: CarRequest) {
+        request.question?.let { putString(NoticeNotification.EXTRA_QUESTION, it) }
+        putLong(NoticeNotification.EXTRA_STAMP, request.stamp)
+    }
+
+    /**
+     * Copies [base]'s car actions, which it has since it shows an announced
+     * notice, and its shade actions if [visible].
+     */
+    private fun copyActions(base: Notification, builder: NotificationCompat.Builder, visible: Boolean) {
+        if (visible) {
+            for (index in 0 until NotificationCompat.getActionCount(base)) {
+                NotificationCompat.getAction(base, index)?.let(builder::addAction)
             }
         }
+        NotificationCompat.getInvisibleActions(base).forEach(builder::addInvisibleAction)
+    }
+
+    private fun notify(request: CarRequest, builder: NotificationCompat.Builder) {
+        try {
+            manager.notify(NoticeNotification.tag(request.agent), NoticeNotification.ID, builder.build())
+        } catch (_: SecurityException) {
+            // Notifications were turned off meanwhile: nothing to show.
+        }
+    }
 
     private fun active(request: CarRequest): Notification? {
         val tag = NoticeNotification.tag(request.agent)
@@ -115,6 +179,7 @@ class CarSpeech(
                 CarTrouble.TOO_LONG -> R.string.car_trouble_too_long
                 CarTrouble.NOT_PAIRED -> R.string.car_trouble_not_paired
                 CarTrouble.UNREACHABLE -> R.string.car_trouble_unreachable
+                CarTrouble.TOO_OLD -> R.string.car_trouble_too_old
                 CarTrouble.UNCERTAIN -> R.string.car_trouble_uncertain
                 CarTrouble.FAILED -> R.string.car_trouble_failed
             }

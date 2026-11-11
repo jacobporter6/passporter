@@ -16,9 +16,14 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /** A car job of [utterance] about dialog `screen-2-ab` of `w1:p1` (a finished turn when [pending] is null). */
-fun carJob(utterance: String = "no, use the other file", pending: String? = "screen-2-ab"): CarJob {
+fun carJob(
+    utterance: String = "no, use the other file",
+    pending: String? = "screen-2-ab",
+    heardAt: Long = System.currentTimeMillis(),
+): CarJob {
     val subject = pending?.let { CarSubject.Dialog(requireNotNull(PendingId.parse(it))) } ?: CarSubject.Turn
-    return CarJob(KEY, CarRequest(CarAction.REPLY, agent("w1:p1"), subject), utterance, "widget")
+    // Stamp 1: the notice CarFlowTest shows.
+    return CarJob(KEY, CarRequest(CarAction.REPLY, agent("w1:p1"), subject, 1), utterance, "widget", heardAt)
 }
 
 /** A bridge's `CarReply` body. */

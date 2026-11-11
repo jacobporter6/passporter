@@ -21,9 +21,11 @@ import java.util.concurrent.Executors
  * anything else that reads notifications (a watch, a notification
  * listener the person allowed, the Assistant). So it acts **only while
  * Android Auto projects** ([CarProjection]), and then also with the phone
- * locked: that is what the car needs. Off the car it does nothing at
- * all; the shade's own actions ([dev.passporter.notify.actions.NoticeActions])
- * are the way to answer there, phone unlocked.
+ * locked: that is what the car needs. Off the car it sends nothing, and
+ * a reply only says, quietly in the notification, to answer on the phone
+ * ([CarSpeech.offTheCar]): the shade's own actions
+ * ([dev.passporter.notify.actions.NoticeActions]) are the way there,
+ * phone unlocked.
  *
  * - [CarAction.REPLY]: the utterance, made fit for the bridge's
  *   `Utterance` (one line, no hidden characters, at most
@@ -60,8 +62,9 @@ class CarReplyReceiver : BroadcastReceiver() {
     }
 
     private fun take(context: Context, request: CarRequest, name: String, heard: CharSequence?) {
-        if (!projection(context).isProjecting()) {
+        if (!carProjection(context).isProjecting()) {
             Log.i(TAG, "ignored a car action while Android Auto is not projecting")
+            if (request.action == CarAction.REPLY) CarSpeech(context).offTheCar(request, name)
             return
         }
         when (request.action) {
@@ -78,7 +81,7 @@ class CarReplyReceiver : BroadcastReceiver() {
                 return CarSpeech(context).trouble(request, name, null, trouble)
             }
         }
-        val job = CarJob.create(request, utterance, name)
+        val job = CarJob.create(request, utterance, name, System.currentTimeMillis())
         try {
             CarOutbox.enqueue(context, job)
         } catch (e: Exception) {
@@ -95,12 +98,13 @@ class CarReplyReceiver : BroadcastReceiver() {
             val shown = context.getSystemService(NotificationManager::class.java).activeNotifications
                 .firstOrNull { it.tag == tag && it.id == NoticeNotification.ID }
                 ?.notification
-            // Only the turn the car read: newer news stays, and so does an
-            // answer from the shade on its way (its progress shows there).
+            // Only the turn the car read (its stamp): newer news stays, and so
+            // does an answer from the shade on its way (its progress shows there).
             val extras = shown?.extras ?: return
-            if (extras.getString(NoticeNotification.EXTRA_QUESTION) == request.question &&
-                !extras.containsKey(ActionFeedback.EXTRA_JOB)
-            ) {
+            val heard = extras.getString(NoticeNotification.EXTRA_QUESTION) == request.question &&
+                extras.containsKey(NoticeNotification.EXTRA_STAMP) &&
+                extras.getLong(NoticeNotification.EXTRA_STAMP) == request.stamp
+            if (heard && !extras.containsKey(ActionFeedback.EXTRA_JOB)) {
                 NotificationManagerCompat.from(context).cancel(tag, NoticeNotification.ID)
             }
         }
@@ -114,9 +118,6 @@ class CarReplyReceiver : BroadcastReceiver() {
 
         /** Runs the actions, one at a time; tests run them in place. */
         internal var executor: Executor = Executors.newSingleThreadExecutor()
-
-        /** Whether Android Auto projects; tests fake it. */
-        internal var projection: (Context) -> CarProjection = ::AndroidAutoProjection
 
         /** The utterance Android Auto put into a reply, if any. */
         fun heard(intent: Intent): CharSequence? =

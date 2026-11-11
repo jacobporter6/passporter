@@ -370,9 +370,9 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
   Each answer is a durable WorkManager job with its idempotency key and
   `origin: "notification"` (§6.5), and the notification shows how it went
   (sent, already answered, the agent moved on). The app clears
-  notifications whose news is old when it comes to the foreground. A
-  mark-as-read action waits for a bridge API (a turn is unread until herdr
-  sees the pane). See docs/development/android.md.
+  notifications whose news is old when it comes to the foreground. The
+  shade offers no mark-as-read: that waits for a bridge API (a turn is
+  unread until herdr sees the pane); Android Auto's is local (below). See docs/development/android.md.
 - **Android Auto** (T33) uses the messaging category: no custom car UI, just
   correctly built notifications plus the `automotive_app_desc` declaration
   (`<uses name="notification"/>`). Android Auto reads "widget: run

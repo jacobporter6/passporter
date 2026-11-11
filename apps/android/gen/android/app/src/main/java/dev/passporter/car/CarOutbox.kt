@@ -18,11 +18,19 @@ import java.util.concurrent.TimeUnit
  * The car's outbox: each spoken reply is one WorkManager job, like an
  * answer from the shade ([Outbox]): it waits for a network, retries with
  * the same exponential backoff and gives up after the same
- * [Outbox.MAX_ATTEMPTS]. Replies to one agent are appended, so they reach
+ * [Outbox.MAX_ATTEMPTS], or once the reply is older than [MAX_AGE_MS],
+ * whichever comes first. Replies to one agent are appended, so they reach
  * it in the order they were said, and a job always ends in success so it
  * never fails the one after it.
  */
 object CarOutbox {
+    /**
+     * The oldest reply still sent: about four retries. A reply to a turn
+     * names no dialog, so the bridge cannot tell it was said to an older
+     * one; past this it is not sent at all.
+     */
+    const val MAX_AGE_MS = 10 * 60_000L
+
     /** Tags every car job, for tests and diagnostics. */
     const val TAG = "dev.passporter.car.outbox"
 
@@ -57,6 +65,7 @@ class CarReplyWorker internal constructor(
     context: Context,
     params: WorkerParameters,
     private val bridge: Bridge,
+    private val now: () -> Long = System::currentTimeMillis,
 ) : Worker(context, params) {
     /** The constructor WorkManager calls. */
     constructor(context: Context, params: WorkerParameters) :
@@ -67,10 +76,14 @@ class CarReplyWorker internal constructor(
             Log.w(TAG, "dropped an unreadable car job")
             return Result.success()
         }
+        val speech = CarSpeech(applicationContext)
+        if (now() - job.heardAt > CarOutbox.MAX_AGE_MS) {
+            speech.trouble(job.request, job.name, job.utterance, CarTrouble.TOO_OLD)
+            return Result.success()
+        }
         val outcome = CarReplySender(bridge).send(job)
         // Stopped meanwhile: WorkManager runs it again; nothing may show.
         if (isStopped) return Result.retry()
-        val speech = CarSpeech(applicationContext)
         when (outcome) {
             is CarOutcome.Spoken -> speech.answer(job, outcome.speech, outcome.sent)
             is CarOutcome.Trouble -> speech.trouble(job.request, job.name, job.utterance, outcome.trouble)

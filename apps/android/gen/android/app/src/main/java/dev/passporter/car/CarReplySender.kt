@@ -39,6 +39,9 @@ enum class CarTrouble {
     /** The bridge stayed unreachable for every retry. */
     UNREACHABLE,
 
+    /** The bridge stayed unreachable until the reply was too old to send ([CarOutbox.MAX_AGE_MS]). */
+    TOO_OLD,
+
     /** The bridge answered, but not with a reply this app can read: it may have been sent. */
     UNCERTAIN,
 
@@ -117,7 +120,9 @@ class CarReplySender(private val bridge: Bridge) {
             is DeviceAuthException.RateLimited -> CarOutcome.Retry(e.retryAfterSecs)
             is DeviceAuthException.NotPaired, is DeviceAuthException.Forgotten, is DeviceAuthException.NoBridge ->
                 CarOutcome.Trouble(CarTrouble.NOT_PAIRED)
-            else -> CarOutcome.Trouble(CarTrouble.FAILED)
+            is DeviceAuthException.TooManyDevices, is DeviceAuthException.BadResponse, is DeviceAuthException.Keystore,
+            is DeviceAuthException.Storage, is DeviceAuthException.InvalidInput,
+            -> CarOutcome.Trouble(CarTrouble.FAILED)
         }
 
     companion object {

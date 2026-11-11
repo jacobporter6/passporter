@@ -44,15 +44,18 @@ object CarActions {
     /** The agent's name, for the conversation. Display only. */
     const val EXTRA_NAME = "dev.passporter.car.NAME"
 
-    /** The car actions of [notice]: reply and mark-as-read if it is announced, else none. */
-    fun build(context: Context, notice: Notice): List<NotificationCompat.Action> {
+    /**
+     * The car actions of [notice], posted at [stamp]: reply and
+     * mark-as-read if it is announced, else none.
+     */
+    fun build(context: Context, notice: Notice, stamp: Long): List<NotificationCompat.Action> {
         val subject = CarSubject.of(notice)?.takeIf { notice.announce } ?: return emptyList()
-        return of(context, notice.agentId, subject, notice.name)
+        return of(context, notice.agentId, subject, stamp, notice.name)
     }
 
-    /** Reply and mark-as-read about [subject] of [agent], called [name]. */
-    fun of(context: Context, agent: AgentId, subject: CarSubject, name: String): List<NotificationCompat.Action> =
-        CarAction.entries.map { action(context, CarRequest(it, agent, subject), name) }
+    /** Reply and mark-as-read about [subject] of [agent], called [name], in the notice posted at [stamp]. */
+    fun of(context: Context, agent: AgentId, subject: CarSubject, stamp: Long, name: String): List<NotificationCompat.Action> =
+        CarAction.entries.map { action(context, CarRequest(it, agent, subject, stamp), name) }
 
     /** The explicit broadcast [request] sends. */
     fun intent(context: Context, request: CarRequest, name: String): Intent =

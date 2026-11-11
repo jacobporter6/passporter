@@ -20,6 +20,8 @@ data class CarJob(
     val utterance: String,
     /** The agent's name when the car heard the notice. Display only. */
     val name: String,
+    /** When the car heard it (phone clock, unix ms): a reply too old is not sent ([CarOutbox.MAX_AGE_MS]). */
+    val heardAt: Long,
 ) {
     init {
         require(request.action == CarAction.REPLY) { "a car job is a reply" }
@@ -42,8 +44,8 @@ data class CarJob(
 
     companion object {
         /** A new job for [request], with a fresh key. */
-        fun create(request: CarRequest, utterance: String, name: String): CarJob =
-            CarJob(UUID.randomUUID().toString(), request, utterance, name)
+        fun create(request: CarRequest, utterance: String, name: String, now: Long): CarJob =
+            CarJob(UUID.randomUUID().toString(), request, utterance, name, now)
     }
 }
 
@@ -53,6 +55,7 @@ internal object CarJobData {
     private const val REQUEST = "request"
     private const val UTTERANCE = "utterance"
     private const val NAME = "name"
+    private const val HEARD_AT = "heardAt"
 
     /** The input of [job]. */
     fun write(job: CarJob): Data =
@@ -62,6 +65,7 @@ internal object CarJobData {
             .putString(REQUEST, job.request.toUri().toString())
             .putString(UTTERANCE, job.utterance)
             .putString(NAME, job.name)
+            .putLong(HEARD_AT, job.heardAt)
             .build()
 
     /** The job in [data], or `null` if it is not one. */
@@ -73,6 +77,7 @@ internal object CarJobData {
             request = request,
             utterance = data.getString(UTTERANCE) ?: return null,
             name = data.getString(NAME) ?: return null,
+            heardAt = data.getLong(HEARD_AT, 0),
         )
     }
 }

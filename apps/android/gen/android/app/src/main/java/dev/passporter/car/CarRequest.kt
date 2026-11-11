@@ -54,10 +54,11 @@ sealed interface CarSubject {
 }
 
 /**
- * What one car action is about: the action, the agent and the
- * [CarSubject]. It travels as the intent's data,
- * `passporter://car/<action>/<agent>/dialog/<pending>`, `…/blocked` or
- * `…/turn`, which keeps each conversation's pending intents apart and
+ * What one car action is about: the action, the agent, the [CarSubject]
+ * and the [stamp] of the notice the car heard. It travels as the intent's
+ * data, `passporter://car/<action>/<agent>/dialog/<pending>/<stamp>`,
+ * `…/blocked/<stamp>` or `…/turn/<stamp>`, which keeps each notice's
+ * pending intents apart (two finished turns of one agent included) and
  * which the car (or anything else holding the mutable reply intent)
  * cannot change: only the `RemoteInput` result is filled in.
  */
@@ -68,6 +69,12 @@ data class CarRequest(
     val agent: AgentId,
     /** About what. */
     val subject: CarSubject,
+    /**
+     * When the notice was posted ([NoticeNotification.EXTRA_STAMP]): which
+     * notice of the agent this is, so an answer or a mark-as-read never
+     * lands on newer news.
+     */
+    val stamp: Long,
 ) {
     /** The pending id a reply names (`pendingId`): only a named dialog's. */
     val pending: PendingId? get() = (subject as? CarSubject.Dialog)?.pending
@@ -99,6 +106,7 @@ data class CarRequest(
                     CarSubject.Turn -> appendPath(TURN)
                 }
             }
+            .appendPath(stamp.toString())
             .build()
 
     companion object {
@@ -114,14 +122,15 @@ data class CarRequest(
             val segments = uri.pathSegments
             val action = segments.getOrNull(0)?.let(CarAction::fromWire) ?: return null
             val agent = segments.getOrNull(1)?.let(AgentId::parse) ?: return null
-            val subject = when (segments.drop(2).firstOrNull()) {
-                DIALOG -> segments.getOrNull(3)?.let(PendingId::parse)?.let(CarSubject::Dialog)
-                    ?.takeIf { segments.size == 4 }
-                BLOCKED -> CarSubject.UnnamedDialog.takeIf { segments.size == 3 }
-                TURN -> CarSubject.Turn.takeIf { segments.size == 3 }
-                else -> null
-            } ?: return null
-            return CarRequest(action, agent, subject)
+            val (subject, size) = when (segments.getOrNull(2)) {
+                DIALOG -> (segments.getOrNull(3)?.let(PendingId::parse)?.let(CarSubject::Dialog) ?: return null) to 5
+                BLOCKED -> CarSubject.UnnamedDialog to 4
+                TURN -> CarSubject.Turn to 4
+                else -> return null
+            }
+            if (segments.size != size) return null
+            val stamp = segments.last().takeIf { it.all(Char::isDigit) }?.toLongOrNull() ?: return null
+            return CarRequest(action, agent, subject, stamp)
         }
     }
 }

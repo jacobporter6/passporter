@@ -17,16 +17,16 @@ class CarRequestTest {
     @Test
     fun requestsSurviveTheirIntentData() {
         val requests = listOf(
-            CarRequest(CarAction.REPLY, agent("w1:p1~dev"), CarSubject.Dialog(pending)),
-            CarRequest(CarAction.MARK_AS_READ, agent("w1:p1"), CarSubject.Turn),
-            CarRequest(CarAction.REPLY, agent("w1:p1"), CarSubject.UnnamedDialog),
+            CarRequest(CarAction.REPLY, agent("w1:p1~dev"), CarSubject.Dialog(pending), 1_700_000_000_000),
+            CarRequest(CarAction.MARK_AS_READ, agent("w1:p1"), CarSubject.Turn, 0),
+            CarRequest(CarAction.REPLY, agent("w1:p1"), CarSubject.UnnamedDialog, 5),
         )
         for (request in requests) assertEquals(request, CarRequest.parse(request.toUri()))
     }
 
     @Test
     fun onlyANamedDialogGivesAPendingIdAndAQuestion() {
-        val dialog = CarRequest(CarAction.REPLY, agent("w1:p1"), CarSubject.Dialog(pending))
+        val dialog = CarRequest(CarAction.REPLY, agent("w1:p1"), CarSubject.Dialog(pending), 1)
         assertEquals(pending, dialog.pending)
         assertEquals("screen-2-ab", dialog.question)
         assertEquals(NoticeState.BLOCKED, dialog.state)
@@ -42,15 +42,18 @@ class CarRequestTest {
     @Test
     fun anyOtherUriIsNoRequest() {
         for (raw in listOf(
-            "passporter://car/allow/w1%3Ap1/dialog/screen-2-ab",
-            "passporter://action/reply/w1%3Ap1/turn",
+            "passporter://car/allow/w1%3Ap1/dialog/screen-2-ab/1",
+            "passporter://action/reply/w1%3Ap1/turn/1",
             "passporter://car/reply/w1%3Ap1",
-            "passporter://car/reply/w1%3Ap1/dialog",
-            "passporter://car/reply/w1%3Ap1/dialog/screen-2-ab/more",
+            "passporter://car/reply/w1%3Ap1/turn",
+            "passporter://car/reply/w1%3Ap1/dialog/1",
+            "passporter://car/reply/w1%3Ap1/dialog/screen-2-ab",
+            "passporter://car/reply/w1%3Ap1/dialog/screen-2-ab/1/more",
             "passporter://car/reply/w1%3Ap1/turn/screen-2-ab",
-            "passporter://car/reply/w1%3Ap1/dialog/bad%20id",
-            "passporter://car/reply/..%2F/turn",
-            "https://car/reply/w1%3Ap1/turn",
+            "passporter://car/reply/w1%3Ap1/turn/-1",
+            "passporter://car/reply/w1%3Ap1/dialog/bad%20id/1",
+            "passporter://car/reply/..%2F/turn/1",
+            "https://car/reply/w1%3Ap1/turn/1",
         )) {
             assertNull(raw, CarRequest.parse(Uri.parse(raw)))
         }

@@ -394,21 +394,29 @@ mark-as-read action with `SEMANTIC_ACTION_MARK_AS_READ`.
 Those two are **invisible** actions (package `dev.passporter.car`), on an
 announced notice only (`announce`: the bridge applies `car_announce_done`,
 so a blocked agent always, a finished turn once its TL;DR has a *Decide*
-line by default). Android Auto takes a messaging notification only with
-both, so a notice that is not announced is not read aloud in the car. They
+line by default). Google's requirements say Android Auto takes a
+messaging notification only with both, so a notice that is not announced
+is not read aloud in the car (a DHU check below confirms it). They
 are the notification's only semantic actions: the shade's *Allow once*,
 *Deny*, *Deny with note* and *Reply* carry none, so the car never reaches
 them.
 
 | Car action | Intent data | Does |
 |---|---|---|
-| Reply (`RemoteInput` `dev.passporter.car.UTTERANCE`) | `passporter://car/reply/<agent>/dialog/<pending>`, `…/blocked` or `…/turn` | Sends the utterance, as heard, to `POST /v1/agents/:id/car-reply` with a **car**-scope session |
-| Mark as read | `passporter://car/read/<agent>/…` | Local only: a finished turn's notification goes (it was heard); a blocked agent's stays, since it still waits |
+| Reply (`RemoteInput` `dev.passporter.car.UTTERANCE`) | `passporter://car/reply/<agent>/dialog/<pending>/<stamp>`, `…/blocked/<stamp>` or `…/turn/<stamp>` | Sends the utterance, as heard, to `POST /v1/agents/:id/car-reply` with a **car**-scope session |
+| Mark as read | `passporter://car/read/<agent>/…/<stamp>` | Local only: a finished turn's notification goes (it was heard); a blocked agent's stays, since it still waits |
+
+The stamp is when the notice was posted (`EXTRA_STAMP` on the
+notification, kept by every repost), so two turns of one agent have their
+own intents, and an answer or a mark-as-read lands only on the notice the
+car heard.
 
 Both are broadcasts to `CarReplyReceiver` (explicit, not exported; the
 reply's pending intent is mutable for its `RemoteInput`, the other
 immutable). It acts **only while Android Auto projects**, and then also
-with the phone locked; otherwise it does nothing at all. It reads Android
+with the phone locked. Otherwise it sends nothing, and a reply (a watch or
+the Assistant firing it) only says *Answer from your phone* under the
+notification, which keeps its actions. It reads Android
 Auto's connection provider (`content://androidx.car.app.connection`, the
 source of `androidx.car.app`'s `CarConnection`) directly, and only when
 that provider belongs to Android Auto's package; anything else is no car
@@ -419,7 +427,7 @@ that provider belongs to Android Auto's package; anything else is no car
 | `CarRequest.kt` | The two actions and the `CarRequest` in the intent's data (what the car read: a named dialog, an unnamed one, a turn) |
 | `CarActions.kt`, `CarReplyReceiver.kt` | The invisible actions, and their receiver |
 | `CarProjection.kt` | Whether Android Auto projects |
-| `CarJob.kt`, `CarOutbox.kt` | The reply as a durable job (key, utterance, pending id fixed when the car hears it) and its outbox: the shade's backoff (30 s, doubling) and attempts (8); replies to one agent go in order |
+| `CarJob.kt`, `CarOutbox.kt` | The reply as a durable job (key, utterance, pending id fixed when the car hears it) and its outbox: the shade's backoff (30 s, doubling) and attempts (8), but never sent once 10 minutes old (a reply to a turn names no dialog, so the bridge could not tell it was said to an older one); replies to one agent go in order |
 | `CarReplySender.kt` | One attempt over `DeviceAuth` with `Scope.CAR`, and the answer (`CarReply`: a sentence and the result) |
 | `CarSpeech.kt` | The answer in the conversation, for the car to read aloud |
 
@@ -433,8 +441,13 @@ note.", "I'm not sure what you meant…") is added to the conversation as a
 message from *Passporter*, after your words, as a new message the car
 announces; the car actions stay, so you can answer again. When the bridge
 gives no sentence the app says why itself (nothing heard, too long, not
-paired, unreachable after the last retry, not sure it went through). If
-news replaced the conversation meanwhile, the news stays.
+paired, unreachable after the last retry or once too old, not sure it went
+through). If news replaced the conversation meanwhile, the news stays; if
+the conversation is gone (heard, swiped, cleared as old news), the answer
+comes back only while Android Auto projects. After a sent answer the
+car's reply stays on the notification (Android Auto needs it to take the
+message at all); a second answer to the same dialog is read back as *The
+agent has moved on*.
 
 ### Testing with the Desktop Head Unit
 
@@ -495,7 +508,7 @@ What to expect:
 | A dialog only the screen parse described | Refused aloud; answer it on the phone |
 | `decide` (announced finished turn) | Read aloud with its *Decide* line; a free reply goes to the agent as a prompt ("Sent.") |
 | `finished` (not announced) | Silent in the car; shown on the phone |
-| The phone off the car, locked or not | Car actions do nothing; the shade asks to unlock |
+| The phone off the car, locked or not | Car actions send nothing (*Answer from your phone*); the shade asks to unlock |
 
 ## Links, taps and the Bridge page
 

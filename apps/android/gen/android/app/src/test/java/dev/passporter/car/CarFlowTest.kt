@@ -73,13 +73,15 @@ class CarFlowTest {
         )
         NoticeNotification.createChannels(context)
         CarReplyReceiver.executor = Executor { it.run() }
-        CarReplyReceiver.projection = { CarProjection { projecting } }
+        carProjection = { CarProjection { projecting } }
         NoticeActionReceiver.executor = Executor { it.run() }
     }
 
-    private fun show(notice: Notice) {
-        manager.notify(NoticeNotification.tag(notice.agentId), NoticeNotification.ID, NoticeNotification.build(context, notice, 1))
+    private fun show(notice: Notice, now: Long = 1) {
+        manager.notify(NoticeNotification.tag(notice.agentId), NoticeNotification.ID, NoticeNotification.build(context, notice, now))
     }
+
+    private fun subText(notification: Notification) = notification.extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()
 
     private fun shown(): Notification? = shadowOf(manager).getNotification("w1:p1", NoticeNotification.ID)
 
@@ -109,13 +111,13 @@ class CarFlowTest {
         queued().filter { it.state == WorkInfo.State.ENQUEUED }.forEach { driver.setAllConstraintsMet(it.id) }
     }
 
-    private fun worker(job: CarJob, bridge: Bridge, runs: Int = 0): CarReplyWorker =
+    private fun worker(job: CarJob, bridge: Bridge, runs: Int = 0, now: Long = System.currentTimeMillis()): CarReplyWorker =
         TestListenableWorkerBuilder<CarReplyWorker>(context)
             .setInputData(CarJobData.write(job))
             .setRunAttemptCount(runs)
             .setWorkerFactory(object : WorkerFactory() {
                 override fun createWorker(appContext: Context, workerClassName: String, workerParameters: WorkerParameters): ListenableWorker =
-                    CarReplyWorker(appContext, workerParameters, bridge)
+                    CarReplyWorker(appContext, workerParameters, bridge) { now }
             })
             .build()
 
@@ -180,16 +182,69 @@ class CarFlowTest {
     }
 
     @Test
-    fun offTheCarTheCarActionsDoNothingLockedOrNot() {
+    fun offTheCarTheCarActionsSendNothingLockedOrNotAndSaySo() {
         show(notice(state = NoticeState.FINISHED, pending = null))
-        val before = shown()
+        val before = requireNotNull(shown())
         projecting = false
-        fire(CarAction.REPLY, heard = "merge it")
         fire(CarAction.MARK_AS_READ)
+        assertEquals("mark-as-read does nothing", before, shown())
+        fire(CarAction.REPLY, heard = "merge it")
         lock()
         fire(CarAction.REPLY, heard = "merge it")
         assertTrue(queued().isEmpty())
-        assertEquals(before, shown())
+        val after = requireNotNull(shown())
+        assertEquals("Answer from your phone", subText(after))
+        assertEquals("nothing added to the conversation", messages(before), messages(after))
+        assertTrue(after.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0)
+        assertEquals("still answerable", 1, NotificationCompat.getActionCount(after))
+        assertEquals(2, NotificationCompat.getInvisibleActions(after).size)
+        assertEquals(1L, after.extras.getLong(NoticeNotification.EXTRA_STAMP))
+    }
+
+    @Test
+    fun aLateAnswerToAnOlderTurnDoesNotTouchANewerUnannouncedOne() {
+        show(notice(state = NoticeState.FINISHED, pending = null))
+        fire(CarAction.REPLY, heard = "merge it")
+        val quiet = notice(state = NoticeState.FINISHED, pending = null, line = "Ran the tests", announce = false)
+        show(quiet, now = 2)
+        val news = shown()
+        bridge = FakeBridge { HttpResponse(200, carReply("Sent.")) }
+        runQueued()
+        assertEquals(news, shown())
+        assertTrue("still nothing for the car", NotificationCompat.getInvisibleActions(requireNotNull(shown())).isEmpty())
+    }
+
+    @Test
+    fun aGoneConversationComesBackOnlyWhileTheCarProjects() {
+        show(notice(state = NoticeState.FINISHED, pending = null, decide = "Merge now?"))
+        fire(CarAction.REPLY, heard = "yes")
+        manager.cancelAll()
+        projecting = false
+        runQueued()
+        assertNull("off the car, cleared news stays cleared", shown())
+
+        projecting = true
+        CarSpeech(context).answer(carJob("yes", pending = null), "Sent.", sent = true)
+        val back = requireNotNull(shown())
+        assertEquals(listOf("you: yes", "Passporter: Sent."), messages(back))
+        assertEquals(2, NotificationCompat.getInvisibleActions(back).size)
+        assertEquals("turn", back.extras.getString(NoticeNotification.EXTRA_QUESTION))
+    }
+
+    @Test
+    fun aReplyTooOldIsNotSent() {
+        show(notice())
+        val job = carJob(heardAt = 1_000_000)
+        val fake = FakeBridge { HttpResponse(200, carReply("Sent.")) }
+        val late = worker(job, fake, now = 1_000_000 + CarOutbox.MAX_AGE_MS + 1)
+        assertEquals(ListenableWorker.Result.success(), late.doWork())
+        assertTrue(fake.requests.isEmpty())
+        assertEquals(
+            "Passporter: I couldn't reach your computer in time, so I stopped trying. Please check your phone.",
+            messages(requireNotNull(shown())).last(),
+        )
+        assertEquals(ListenableWorker.Result.success(), worker(job, fake, now = 1_000_000 + CarOutbox.MAX_AGE_MS).doWork())
+        assertEquals(1, fake.requests.size)
     }
 
     @Test
@@ -273,7 +328,10 @@ class CarFlowTest {
         val old = Intent(shadowOf(requireNotNull(car(requireNotNull(shown()), CarAction.MARK_AS_READ).actionIntent)).savedIntent)
         show(notice())
         CarReplyReceiver().onReceive(context, old)
-        assertNotNull(shown())
+        assertNotNull("a dialog", shown())
+        show(notice(state = NoticeState.FINISHED, pending = null, line = "Another turn"), now = 2)
+        CarReplyReceiver().onReceive(context, old)
+        assertNotNull("another turn of the same agent", shown())
     }
 
     @Test
