@@ -20,6 +20,9 @@
 //! - [`courier`]: store, upload, transcript, in that order, resumable.
 //! - [`browser`]: `MediaRecorder`, `IndexedDB` and `fetch` behind those
 //!   traits.
+//! - [`native`]: in the Android app, the native recorder behind
+//!   [`recorder::AudioCapture`]: takes survive the screen turning off and
+//!   the app being killed. [`capture`] picks it, or `MediaRecorder`.
 //! - [`engine`]: each agent's dictation, driving all of the above. It runs
 //!   in its own WASM (`src/bin/voice.rs`), loaded on demand by [`module`],
 //!   which keeps it out of the app's size budget.
@@ -33,11 +36,13 @@
 //! not shown at all ([`browser::available`]).
 
 pub mod browser;
+pub mod capture;
 pub mod clip;
 pub mod courier;
 pub mod engine;
 pub mod level;
 pub mod module;
+pub mod native;
 pub mod panel;
 pub mod phase;
 pub mod recorder;

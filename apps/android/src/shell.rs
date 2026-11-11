@@ -53,6 +53,7 @@ struct Shell {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_device::init())
+        .plugin(tauri_plugin_recorder::init())
         .invoke_handler(tauri::generate_handler![connect, bridge, forget_bridge])
         .setup(|app| {
             setup(app.handle())?;
@@ -177,7 +178,8 @@ enum GrantError {
 }
 
 /// Lets pages on `origin`, in the main window only, use the native plugins
-/// the bridge capability lists: the device identity (`device:default`).
+/// the bridge capability lists: the device identity (`device:default`) and
+/// the dictation recorder (`recorder:default`).
 ///
 /// Tauri tells frames apart only on `WebView`s with `WEB_MESSAGE_LISTENER`
 /// (`WebView` 86 and later); on older ones every frame's message carries the
@@ -195,7 +197,8 @@ fn grant_ipc(app: &AppHandle, origin: &BridgeOrigin) -> Result<(), GrantError> {
             .remote(origin.capability_pattern())
             .local(false)
             .window(MAIN)
-            .permission("device:default"),
+            .permission("device:default")
+            .permission("recorder:default"),
     )?;
     Ok(())
 }

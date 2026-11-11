@@ -269,6 +269,21 @@ PendingInput = {
   `MediaRecorder` holds the take in memory until it stops. iOS Safari stops
   the capture outright. Recording in the background belongs to the native
   app, with a foreground service.
+- **In the Android app the take is native** (the `recorder` plugin): a
+  foreground service (type `microphone`, with an ongoing notification and
+  its Stop) records AAC in ADTS frames to app-private storage
+  (`noBackupFilesDir`), each frame written as it is encoded, so the take
+  goes on with the screen off and survives the webview reloading or the
+  app being swiped away; if the process is killed, the frames on disk are
+  kept (at most the encoder's last fraction of a second is lost) and
+  recovered at the next start. A call or another app taking the audio
+  focus ends the take, keeping what was said. The PWA only starts and
+  stops it, then reads the audio over IPC into the same clip a browser
+  take makes (stored in `IndexedDB` under the take's id, released natively
+  only after that), so upload, transcription and the card are unchanged.
+  A take no page was waiting for (it ended while the app was closed, or
+  was recovered) waits on its agent's card, never sent unseen. Without the
+  plugin (Chrome, an old `WebView`) the PWA records as above.
 - whisper.cpp's server ends every segment with a newline, and a segment can
   end mid-word or before punctuation (`" dict"`, `"ation,"`): segments join
   as they are, each one's leading space deciding where a word starts.
