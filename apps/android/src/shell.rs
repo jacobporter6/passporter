@@ -11,7 +11,9 @@
 //!
 //! The Kotlin side ([`crate::native`]) asks for the other screens: an agent
 //! on a notification tap, the bundled Bridge page from the launcher
-//! shortcut or when a bridge page fails to load ([`crate::destination`]).
+//! shortcut or when a bridge page fails to load, and the bridge again when
+//! wry rebuilds the webview on a page the guard now refuses
+//! ([`crate::destination`]).
 
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
@@ -20,9 +22,9 @@ use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_device::DeviceExt;
 
-use crate::destination::{self, Request};
+use crate::destination::{self, CONNECT_PAGE, FirstPage, Request};
 use crate::native::{self, NativeExt};
-use crate::navigation::{self, Guard};
+use crate::navigation::Guard;
 use crate::origin::BridgeOrigin;
 use crate::store::Store;
 
@@ -31,9 +33,6 @@ const MAIN: &str = "main";
 
 /// The runtime capability that lets the bridge's PWA reach native plugins.
 const BRIDGE_CAPABILITY: &str = "bridge";
-
-/// The bundled page that asks for the bridge's address.
-const CONNECT_PAGE: &str = "index.html";
 
 /// Shared between the `connect` command and the navigation guard.
 struct Shell {
@@ -76,45 +75,44 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     // Anything unreadable (no file yet, a corrupt one, a storage error)
     // opens the Connect page; `connect` then replaces the file, or shows
     // why it cannot.
-    let start = match store.load() {
+    match store.load() {
         Ok(Some(origin)) => {
             // Without the grant the PWA still works, minus native plugins.
             if let Err(error) = grant_ipc(app, &origin) {
                 log_to_logcat(&error);
             }
-            let url = origin.url().clone();
             let _ = bridge.set(origin);
-            WebviewUrl::External(url)
         }
-        Ok(None) => WebviewUrl::App(CONNECT_PAGE.into()),
-        Err(error) => {
-            // A trace for "the app forgot its bridge".
-            log_to_logcat(&error);
-            WebviewUrl::App(CONNECT_PAGE.into())
-        }
-    };
+        Ok(None) => {}
+        // A trace for "the app forgot its bridge".
+        Err(error) => log_to_logcat(&error),
+    }
     let guard = Arc::new(Guard::new(Arc::clone(&bridge)));
-    let requests = Arc::clone(&guard);
-    let handle = app.clone();
+    // The first page depends on what `watch` answers, so it is set just
+    // after; a request that comes sooner has no window to show it in yet.
+    let first = Arc::new(OnceLock::new());
     let launch = app.native().and_then(|native| {
+        let handle = app.clone();
+        let guard = Arc::clone(&guard);
+        let first = Arc::clone(&first);
         native
-            .watch(move |request| show(&handle, &request, &requests))
+            .watch(move |request| {
+                if let Some(first) = first.get() {
+                    show(&handle, &request, &guard, first);
+                }
+            })
             .unwrap_or_else(|error| {
                 log_to_logcat(&error);
                 None
             })
     });
-    // An agent on the bridge is the first page. The Bridge page is shown
-    // after the first page loads instead: the first page is also what wry
-    // reloads if it ever rebuilds the webview, and the guard refuses a
-    // bundled page there once paired.
-    let (start, later) = match launch
-        .as_ref()
-        .and_then(|request| destination::destination(request, bridge.get()))
-    {
-        Some(url) if navigation::allows(&url, bridge.get()) => (WebviewUrl::External(url), None),
-        _ => (start, launch),
+    let (first_page, later) = FirstPage::choose(bridge.get(), launch);
+    let start = match &first_page {
+        FirstPage::Connect => WebviewUrl::App(CONNECT_PAGE.into()),
+        FirstPage::Bridge(url) => WebviewUrl::External(url.clone()),
     };
+    let _ = first.set(first_page.clone());
+    let first = first_page;
     app.manage(Shell {
         store,
         connecting: Mutex::new(()),
@@ -135,7 +133,7 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
                     && let Some(request) =
                         later.lock().unwrap_or_else(PoisonError::into_inner).take()
                 {
-                    show(window.app_handle(), &request, &guard);
+                    show(window.app_handle(), &request, &guard, &first);
                 }
             }
         })
@@ -143,9 +141,10 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Shows what the Kotlin side asked for, if a bridge is paired.
-fn show(app: &AppHandle, request: &Request, guard: &Guard) {
-    let Some(url) = destination::destination(request, guard.bridge()) else {
+/// Shows what the Kotlin side asked for, if a bridge is paired. `first` is
+/// the webview's first page, which wry loads again when it rebuilds it.
+fn show(app: &AppHandle, request: &Request, guard: &Guard, first: &FirstPage) {
+    let Some(url) = destination::destination(request, guard.bridge(), first) else {
         return;
     };
     // No window yet: the request came during setup, before there was
