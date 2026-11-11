@@ -37,7 +37,7 @@ class NoticeNotificationTest {
         assertFalse("news sounds again", notification.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0)
         assertTrue(notification.flags and Notification.FLAG_AUTO_CANCEL != 0)
         assertFalse(notification.allowSystemGeneratedContextualActions)
-        assertEquals("no actions until the reply task", 0, notification.actions?.size ?: 0)
+        assertEquals("Allow once, Deny, Deny with note", 3, notification.actions?.size ?: 0)
         assertEquals(Notification.VISIBILITY_PRIVATE, notification.visibility)
         val public = requireNotNull(notification.publicVersion)
         assertEquals("Passporter", public.extras.getCharSequence(Notification.EXTRA_TITLE).toString())

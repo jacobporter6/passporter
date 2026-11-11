@@ -58,7 +58,7 @@ object PlainText {
      * format characters other than the joiners, the invisible fillers and
      * reserved characters it lists; also lone surrogates and private use.
      */
-    private fun isHidden(codePoint: Int): Boolean {
+    internal fun isHidden(codePoint: Int): Boolean {
         val category = Character.getType(codePoint).toByte()
         return when {
             category == Character.FORMAT -> !isJoiner(codePoint)
