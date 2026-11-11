@@ -394,9 +394,12 @@ mark-as-read action with `SEMANTIC_ACTION_MARK_AS_READ`.
 Those two are **invisible** actions (package `dev.passporter.car`), on an
 announced notice only (`announce`: the bridge applies `car_announce_done`,
 so a blocked agent always, a finished turn once its TL;DR has a *Decide*
-line by default). Google's requirements say Android Auto takes a
-messaging notification only with both, so a notice that is not announced
-is not read aloud in the car (a DHU check below confirms it). They
+line by default). Google requires both for Android Auto compliance, so
+a notice that is not announced is expected to stay silent in the car.
+That is Android Auto's behaviour, unverified until the DHU check below
+(a blocking human check); even if Android Auto fell back to the shade's
+visible *Reply*, that needs an unlocked phone and goes as
+`origin: "notification"`. They
 are the notification's only semantic actions: the shade's *Allow once*,
 *Deny*, *Deny with note* and *Reply* carry none, so the car never reaches
 them.
@@ -404,12 +407,11 @@ them.
 | Car action | Intent data | Does |
 |---|---|---|
 | Reply (`RemoteInput` `dev.passporter.car.UTTERANCE`) | `passporter://car/reply/<agent>/dialog/<pending>/<stamp>`, `…/blocked/<stamp>` or `…/turn/<stamp>` | Sends the utterance, as heard, to `POST /v1/agents/:id/car-reply` with a **car**-scope session |
-| Mark as read | `passporter://car/read/<agent>/…/<stamp>` | Local only: a finished turn's notification goes (it was heard); a blocked agent's stays, since it still waits |
+| Mark as read | `passporter://car/read/<agent>/…/<stamp>` | Nothing: the bridge has no API for it, and Android Auto fires it on a tap in the car while it may still read or offer a reply, so the notification stays (the reconciler clears it as old news) |
 
 The stamp is when the notice was posted (`EXTRA_STAMP` on the
 notification, kept by every repost), so two turns of one agent have their
-own intents, and an answer or a mark-as-read lands only on the notice the
-car heard.
+own intents, and an answer lands only on the notice the car heard.
 
 Both are broadcasts to `CarReplyReceiver` (explicit, not exported; the
 reply's pending intent is mutable for its `RemoteInput`, the other
@@ -443,11 +445,12 @@ announces; the car actions stay, so you can answer again. When the bridge
 gives no sentence the app says why itself (nothing heard, too long, not
 paired, unreachable after the last retry or once too old, not sure it went
 through). If news replaced the conversation meanwhile, the news stays; if
-the conversation is gone (heard, swiped, cleared as old news), the answer
-comes back only while Android Auto projects. After a sent answer the
-car's reply stays on the notification (Android Auto needs it to take the
-message at all); a second answer to the same dialog is read back as *The
-agent has moved on*.
+the conversation is gone (swiped, cleared as old news), the answer comes
+back while Android Auto projects; off the car only one you must act on
+comes back (not sent, unsure, not paired), quietly. After a sent answer
+the car's reply stays on the notification (Google's compliance asks for
+both car actions on a message the car should read); a second answer to
+the same dialog is read back as *The agent has moved on*.
 
 ### Testing with the Desktop Head Unit
 
@@ -507,7 +510,8 @@ What to expect:
 | You say "yes but run the tests first" | "I'm not sure what you meant. Say just yes to allow, or no and what to do instead."; nothing sent, you can answer again |
 | A dialog only the screen parse described | Refused aloud; answer it on the phone |
 | `decide` (announced finished turn) | Read aloud with its *Decide* line; a free reply goes to the agent as a prompt ("Sent.") |
-| `finished` (not announced) | Silent in the car; shown on the phone |
+| `finished` (not announced) | Silent in the car, no reply offered (**blocking**: the rule rests on this); shown on the phone |
+| Tap a conversation in the car (mark-as-read) | It stays, still replyable |
 | The phone off the car, locked or not | Car actions send nothing (*Answer from your phone*); the shade asks to unlock |
 
 ## Links, taps and the Bridge page

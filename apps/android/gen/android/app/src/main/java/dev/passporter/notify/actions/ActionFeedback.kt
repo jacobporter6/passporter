@@ -153,6 +153,8 @@ class ActionFeedback(
                 // Still the same notice: Android Auto's actions name it.
                 base?.extras?.takeIf { it.containsKey(NoticeNotification.EXTRA_STAMP) }
                     ?.let { putLong(NoticeNotification.EXTRA_STAMP, it.getLong(NoticeNotification.EXTRA_STAMP)) }
+                base?.extras?.getString(NoticeNotification.EXTRA_AGENT_NAME)
+                    ?.let { putString(NoticeNotification.EXTRA_AGENT_NAME, it) }
             },
         )
         when (mark) {

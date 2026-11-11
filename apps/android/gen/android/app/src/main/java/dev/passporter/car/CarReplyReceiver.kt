@@ -1,15 +1,10 @@
 package dev.passporter.car
 
-import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.RemoteInput
-import dev.passporter.notify.NoticeNotification
-import dev.passporter.notify.NotificationLock
-import dev.passporter.notify.actions.ActionFeedback
 import dev.passporter.notify.actions.ReplyText
 import dev.passporter.notify.actions.Unsendable
 import java.util.concurrent.Executor
@@ -33,10 +28,12 @@ import java.util.concurrent.Executors
  *   a fresh idempotency key, queued in [CarOutbox]. The bridge decides
  *   what it means under the car policy (design §6.6); the app adds
  *   nothing.
- * - [CarAction.MARK_AS_READ]: local only (the bridge has no such API). A
- *   finished turn heard in the car is read: its notification goes, as the
- *   shade's does once a reply is sent. A blocked agent's stays, since it
- *   still waits for an answer; it goes once answered (the reconciler).
+ * - [CarAction.MARK_AS_READ]: taken, and nothing else. Android Auto
+ *   needs the action, the bridge has no API for it (a turn is unread
+ *   until herdr sees the pane), and Android Auto fires it on a tap in the
+ *   car, while it may still read the conversation or offer a reply, so
+ *   the notification stays; the reconciler clears it as old news, as for
+ *   any other.
  *
  * Handled one at a time, off the main thread.
  */
@@ -69,7 +66,7 @@ class CarReplyReceiver : BroadcastReceiver() {
         }
         when (request.action) {
             CarAction.REPLY -> reply(context, request, name, heard)
-            CarAction.MARK_AS_READ -> markAsRead(context, request)
+            CarAction.MARK_AS_READ -> Log.i(TAG, "a conversation was read in the car")
         }
     }
 
@@ -88,25 +85,6 @@ class CarReplyReceiver : BroadcastReceiver() {
             // WorkManager's database failed: say so rather than stay silent.
             Log.e(TAG, "could not queue a car reply", e)
             CarSpeech(context).trouble(request, name, utterance, CarTrouble.FAILED)
-        }
-    }
-
-    private fun markAsRead(context: Context, request: CarRequest) {
-        if (request.subject != CarSubject.Turn) return
-        synchronized(NotificationLock) {
-            val tag = NoticeNotification.tag(request.agent)
-            val shown = context.getSystemService(NotificationManager::class.java).activeNotifications
-                .firstOrNull { it.tag == tag && it.id == NoticeNotification.ID }
-                ?.notification
-            // Only the turn the car read (its stamp): newer news stays, and so
-            // does an answer from the shade on its way (its progress shows there).
-            val extras = shown?.extras ?: return
-            val heard = extras.getString(NoticeNotification.EXTRA_QUESTION) == request.question &&
-                extras.containsKey(NoticeNotification.EXTRA_STAMP) &&
-                extras.getLong(NoticeNotification.EXTRA_STAMP) == request.stamp
-            if (heard && !extras.containsKey(ActionFeedback.EXTRA_JOB)) {
-                NotificationManagerCompat.from(context).cancel(tag, NoticeNotification.ID)
-            }
         }
     }
 

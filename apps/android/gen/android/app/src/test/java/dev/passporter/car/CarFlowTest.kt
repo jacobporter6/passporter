@@ -313,25 +313,43 @@ class CarFlowTest {
     }
 
     @Test
-    fun markAsReadClearsAHeardTurnButNotAWaitingDialog() {
-        show(notice())
-        fire(CarAction.MARK_AS_READ)
-        assertNotNull("the agent still waits", shown())
+    fun markAsReadLeavesTheConversationForTheCarToReadAndReplyTo() {
         show(notice(state = NoticeState.FINISHED, pending = null))
+        val before = shown()
         fire(CarAction.MARK_AS_READ)
-        assertNull(shown())
+        assertEquals(before, shown())
+        fire(CarAction.REPLY, heard = "merge it")
+        assertEquals(1, queued().size)
     }
 
     @Test
-    fun markAsReadOfAnOlderTurnLeavesNewerNews() {
+    fun aReplyThatCannotBeSentComesBackQuietlyOffTheCarEvenIfTheConversationWent() {
         show(notice(state = NoticeState.FINISHED, pending = null))
-        val old = Intent(shadowOf(requireNotNull(car(requireNotNull(shown()), CarAction.MARK_AS_READ).actionIntent)).savedIntent)
+        manager.cancelAll()
+        projecting = false
+        val job = carJob("merge it", pending = null, heardAt = 1_000_000)
+        worker(job, FakeBridge { HttpResponse(200, carReply("Sent.")) }, now = 1_000_000 + CarOutbox.MAX_AGE_MS + 1).doWork()
+        val back = requireNotNull(shown())
+        assertEquals(
+            listOf("you: merge it", "Passporter: I couldn't reach your computer in time, so I stopped trying. Please check your phone."),
+            messages(back),
+        )
+        assertTrue("quietly", back.flags and Notification.FLAG_ONLY_ALERT_ONCE != 0)
+    }
+
+    @Test
+    fun theTitleIsTheNotificationsWhateverTheIntentSays() {
         show(notice())
-        CarReplyReceiver().onReceive(context, old)
-        assertNotNull("a dialog", shown())
-        show(notice(state = NoticeState.FINISHED, pending = null, line = "Another turn"), now = 2)
-        CarReplyReceiver().onReceive(context, old)
-        assertNotNull("another turn of the same agent", shown())
+        val reply = car(requireNotNull(shown()), CarAction.REPLY)
+        val intent = Intent(shadowOf(requireNotNull(reply.actionIntent)).savedIntent).putExtra(CarActions.EXTRA_NAME, "bank")
+        val results = Bundle().apply { putCharSequence(CarActions.KEY_UTTERANCE, "yes") }
+        RemoteInput.addResultsToIntent(requireNotNull(reply.remoteInputs), intent, results)
+        CarReplyReceiver().onReceive(context, intent)
+        bridge = FakeBridge { HttpResponse(200, carReply("Allowed: pnpm test")) }
+        runQueued()
+        val shown = requireNotNull(shown())
+        assertEquals("widget", shown.extras.getString(NoticeNotification.EXTRA_AGENT_NAME))
+        assertFalse(shown.extras.keySet().any { "${shown.extras.get(it)}".contains("bank") })
     }
 
     @Test

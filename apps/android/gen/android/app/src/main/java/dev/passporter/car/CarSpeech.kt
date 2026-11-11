@@ -26,10 +26,13 @@ import dev.passporter.notify.actions.ActionFeedback
  * News wins, as for answers from the shade ([ActionFeedback]): if newer
  * news replaced the notification meanwhile (another dialog, a new turn:
  * any other notice, by its [NoticeNotification.EXTRA_STAMP]), it stays as
- * it is, announced or not. If the notification is gone (a heard turn,
- * swiped, or cleared as old news), the answer comes back only while
- * Android Auto projects: the driver must hear it, and off the car old news
- * stays cleared. The look and the post hold [NotificationLock].
+ * it is, announced or not. If the notification is gone (swiped, or
+ * cleared as old news), the answer comes back while Android Auto projects
+ * (the driver must hear it); off the car only one the person must act on
+ * comes back (not sent, unsure, not paired), quietly, and other old news
+ * stays cleared. The title is the notification's own: the name in the
+ * intent is display only, and anything holding the reply intent could
+ * fill it in. The look and the post hold [NotificationLock].
  */
 class CarSpeech(
     context: Context,
@@ -42,14 +45,14 @@ class CarSpeech(
 
     /** The bridge answered [job] with [speech]; [sent] when it reached the agent. */
     fun answer(job: CarJob, speech: String, sent: Boolean) =
-        post(job.request, job.name, job.utterance, speech, keepShadeActions = !sent)
+        post(job.request, job.name, job.utterance, speech, keepShadeActions = !sent, mustReturn = false)
 
     /**
      * The app answers [request] itself, for [trouble]; [utterance] is what
      * was heard, if it was fit to show.
      */
     fun trouble(request: CarRequest, name: String, utterance: String?, trouble: CarTrouble) =
-        post(request, name, utterance, context.getString(message(trouble)), keepShadeActions = true)
+        post(request, name, utterance, context.getString(message(trouble)), keepShadeActions = true, mustReturn = trouble in MUST_RETURN)
 
     /**
      * A car action fired while Android Auto does not project (a watch, the
@@ -63,7 +66,7 @@ class CarSpeech(
         val status = context.getString(R.string.car_answer_on_phone)
         val state = NoticeNotification.stateOf(base.channelId) ?: request.state
         val builder = NoticeNotification.conversation(context, request.agent, state, style, now())
-            .setContentTitle(name)
+            .setContentTitle(base.extras.getString(NoticeNotification.EXTRA_AGENT_NAME) ?: name)
             .setSubText(status)
             .setContentText(status)
             .setOnlyAlertOnce(true)
@@ -73,14 +76,22 @@ class CarSpeech(
         notify(request, builder)
     }
 
-    private fun post(request: CarRequest, name: String, utterance: String?, speech: String, keepShadeActions: Boolean) =
+    private fun post(
+        request: CarRequest,
+        name: String,
+        utterance: String?,
+        speech: String,
+        keepShadeActions: Boolean,
+        mustReturn: Boolean,
+    ) =
         synchronized(NotificationLock) {
             val base = active(request)
             if (base != null && !shows(base, request)) {
                 Log.i(TAG, "newer news replaced the conversation; the car's answer is not shown")
                 return@synchronized
             }
-            if (base == null && !projection.isProjecting()) {
+            val quiet = base == null && !projection.isProjecting()
+            if (quiet && !mustReturn) {
                 Log.i(TAG, "the conversation is gone and the car with it; the car's answer is not shown")
                 return@synchronized
             }
@@ -93,10 +104,11 @@ class CarSpeech(
             style.addMessage(speech, time, passporter())
             val state = NoticeNotification.stateOf(base?.channelId) ?: request.state
             val builder = NoticeNotification.conversation(context, request.agent, state, style, time)
-                .setContentTitle(name)
+                .setContentTitle(base?.extras?.getString(NoticeNotification.EXTRA_AGENT_NAME) ?: name)
                 .setContentText(speech)
-                // A new message: the car announces it.
-                .setOnlyAlertOnce(false)
+                // A new message: the car announces it. Off the car, back on the phone quietly.
+                .setOnlyAlertOnce(quiet)
+                .setSilent(quiet)
             builder.addExtras(base?.extras?.marks() ?: Bundle().apply { stamp(request) })
             if (base != null) {
                 copyActions(base, builder, visible = keepShadeActions)
@@ -116,12 +128,13 @@ class CarSpeech(
     }
 
     /**
-     * What a repost keeps of this notice's extras: its question and stamp,
-     * and the mark of an answer from the shade still on its way.
+     * What a repost keeps of this notice's extras: its question, stamp and
+     * agent name, and the mark of an answer from the shade still on its way.
      */
     private fun Bundle.marks(): Bundle = Bundle().also { kept ->
         getString(NoticeNotification.EXTRA_QUESTION)?.let { kept.putString(NoticeNotification.EXTRA_QUESTION, it) }
         kept.putLong(NoticeNotification.EXTRA_STAMP, getLong(NoticeNotification.EXTRA_STAMP))
+        getString(NoticeNotification.EXTRA_AGENT_NAME)?.let { kept.putString(NoticeNotification.EXTRA_AGENT_NAME, it) }
         getString(ActionFeedback.EXTRA_JOB)?.let { kept.putString(ActionFeedback.EXTRA_JOB, it) }
     }
 
@@ -171,6 +184,15 @@ class CarSpeech(
         const val PASSPORTER_KEY = "dev.passporter"
 
         private const val TAG = "PassporterCar"
+
+        /** Troubles shown even after the conversation went: the person must act on them. */
+        private val MUST_RETURN = setOf(
+            CarTrouble.NOT_PAIRED,
+            CarTrouble.UNREACHABLE,
+            CarTrouble.TOO_OLD,
+            CarTrouble.UNCERTAIN,
+            CarTrouble.FAILED,
+        )
 
         /** The sentence read aloud for [trouble]. */
         fun message(trouble: CarTrouble): Int =

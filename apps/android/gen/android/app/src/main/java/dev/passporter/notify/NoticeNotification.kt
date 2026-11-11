@@ -51,6 +51,13 @@ object NoticeNotification {
      */
     const val EXTRA_STAMP = "dev.passporter.notify.STAMP"
 
+    /**
+     * The extra holding the agent's name as the notice gave it, kept by
+     * every repost: the conversation's title, whatever an action's intent
+     * says (anything holding a mutable action intent can fill in its extras).
+     */
+    const val EXTRA_AGENT_NAME = "dev.passporter.notify.AGENT_NAME"
+
     /** [EXTRA_QUESTION] of a finished turn. */
     const val TURN = "turn"
 
@@ -141,6 +148,7 @@ object NoticeNotification {
             Bundle().apply {
                 question(notice)?.let { putString(EXTRA_QUESTION, it) }
                 putLong(EXTRA_STAMP, now)
+                putString(EXTRA_AGENT_NAME, notice.name)
             },
         )
         return builder.build()

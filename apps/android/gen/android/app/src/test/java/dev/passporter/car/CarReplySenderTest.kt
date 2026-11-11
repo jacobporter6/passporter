@@ -93,14 +93,14 @@ class CarReplySenderTest {
     @Test
     fun busyAndUnavailableBridgesAreRetried() {
         val unreachable = carReply("I can't reach the agent right now. Try again in a moment.", status = "failed")
-        assertEquals(CarOutcome.Retry(null), send { HttpResponse(503, unreachable) }.first)
-        assertEquals(CarOutcome.Retry(5), send { HttpResponse(429, "", retryAfterSecs = 5) }.first)
-        assertEquals(CarOutcome.Retry(null), send { HttpResponse(502, "") }.first)
+        assertEquals(CarOutcome.Retry, send { HttpResponse(503, unreachable) }.first)
+        assertEquals(CarOutcome.Retry, send { HttpResponse(429, "", retryAfterSecs = 5) }.first)
+        assertEquals(CarOutcome.Retry, send { HttpResponse(502, "") }.first)
     }
 
     @Test
     fun signInFailuresAreRetriedOrFinalAsInTheShadesOutbox() {
-        assertEquals(CarOutcome.Retry(null), send { throw DeviceAuthException.Unreachable(java.io.IOException("offline")) }.first)
+        assertEquals(CarOutcome.Retry, send { throw DeviceAuthException.Unreachable(java.io.IOException("offline")) }.first)
         assertEquals(CarOutcome.Trouble(CarTrouble.NOT_PAIRED), send { throw DeviceAuthException.NotPaired() }.first)
     }
 }

@@ -15,7 +15,7 @@ enum class CarAction(
     /** The spoken reply: the utterance goes, as heard, to `POST /v1/agents/:id/car-reply`. */
     REPLY("reply"),
 
-    /** The person heard or opened the conversation in the car: local only. */
+    /** The person heard or opened the conversation in the car: taken, nothing else ([CarReplyReceiver]). */
     MARK_AS_READ("read"),
     ;
 
@@ -71,8 +71,7 @@ data class CarRequest(
     val subject: CarSubject,
     /**
      * When the notice was posted ([NoticeNotification.EXTRA_STAMP]): which
-     * notice of the agent this is, so an answer or a mark-as-read never
-     * lands on newer news.
+     * notice of the agent this is, so an answer never lands on newer news.
      */
     val stamp: Long,
 ) {
@@ -129,7 +128,7 @@ data class CarRequest(
                 else -> return null
             }
             if (segments.size != size) return null
-            val stamp = segments.last().takeIf { it.all(Char::isDigit) }?.toLongOrNull() ?: return null
+            val stamp = segments.last().takeIf { stamp -> stamp.all { it in '0'..'9' } }?.toLongOrNull() ?: return null
             return CarRequest(action, agent, subject, stamp)
         }
     }

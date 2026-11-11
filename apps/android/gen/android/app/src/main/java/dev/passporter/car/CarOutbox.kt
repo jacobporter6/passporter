@@ -87,7 +87,7 @@ class CarReplyWorker internal constructor(
         when (outcome) {
             is CarOutcome.Spoken -> speech.answer(job, outcome.speech, outcome.sent)
             is CarOutcome.Trouble -> speech.trouble(job.request, job.name, job.utterance, outcome.trouble)
-            is CarOutcome.Retry -> {
+            CarOutcome.Retry -> {
                 if (runAttemptCount + 1 < Outbox.MAX_ATTEMPTS) return Result.retry()
                 speech.trouble(job.request, job.name, job.utterance, CarTrouble.UNREACHABLE)
             }

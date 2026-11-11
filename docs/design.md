@@ -372,7 +372,7 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
   (sent, already answered, the agent moved on). The app clears
   notifications whose news is old when it comes to the foreground. The
   shade offers no mark-as-read: that waits for a bridge API (a turn is
-  unread until herdr sees the pane); Android Auto's is local (below). See docs/development/android.md.
+  unread until herdr sees the pane); Android Auto's does nothing (below). See docs/development/android.md.
 - **Android Auto** (T33) uses the messaging category: no custom car UI, just
   correctly built notifications plus the `automotive_app_desc` declaration
   (`<uses name="notification"/>`). Android Auto reads "widget: run
@@ -381,8 +381,8 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
   semantic actions (the shade's carry none, so the car never reaches
   them); they act only while Android Auto projects, then also with the
   phone locked. The bridge's answer sentence is added to the conversation
-  for the car to read back. Mark-as-read is local: a heard finished turn's
-  notification goes. See docs/development/android.md. Notes:
+  for the car to read back. Mark-as-read does nothing (no bridge API; the
+  notification stays for the car). See docs/development/android.md. Notes:
   - Sideloaded app, so you must enable Android Auto developer settings →
     "Unknown sources". This is accepted (decision D3).
   - Car text is the notice's one line (what a blocked agent asks), or a
@@ -391,8 +391,8 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
   - **Announcements**: blocked agents always; a finished agent only once
     its TL;DR has a *Decide* line (`[push] car_announce_done`, default
     `"decide"`; `"always"` or `"never"`). A notice not announced gets no
-    car actions, and Android Auto takes a messaging notification only
-    with a reply and a mark-as-read, so it stays silent in the car.
+    car actions; Google requires both for Android Auto, so it is expected
+    to stay silent in the car (Android Auto's behaviour: a DHU check).
   - **Car replies** go to `POST /v1/agents/:id/car-reply` with the
     transcribed utterance as heard, the pending id from the notice, and an
     idempotency key; the app adds nothing. The bridge maps it with a tiny

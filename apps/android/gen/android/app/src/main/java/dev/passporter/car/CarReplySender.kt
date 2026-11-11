@@ -65,11 +65,11 @@ sealed interface CarOutcome {
         val trouble: CarTrouble,
     ) : CarOutcome
 
-    /** Nothing decided: send the same body again later. */
-    data class Retry(
-        /** The bridge's `Retry-After`, if it gave one. */
-        val afterSecs: Long?,
-    ) : CarOutcome
+    /**
+     * Nothing decided: send the same body again later, after WorkManager's
+     * backoff (a `Retry-After` is not followed, [CarReplyWorker]).
+     */
+    data object Retry : CarOutcome
 }
 
 /**
@@ -93,7 +93,7 @@ class CarReplySender(private val bridge: Bridge) {
     private fun answer(response: HttpResponse): CarOutcome {
         val status = response.status
         return when {
-            status == 429 || status in 500..599 -> CarOutcome.Retry(response.retryAfterSecs)
+            status == 429 || status in 500..599 -> CarOutcome.Retry
             status == 401 -> CarOutcome.Trouble(CarTrouble.NOT_PAIRED)
             response.isSuccess || status in FINAL -> spoken(response.body)
                 ?: CarOutcome.Trouble(if (response.isSuccess || status == 409) CarTrouble.UNCERTAIN else CarTrouble.FAILED)
@@ -115,9 +115,9 @@ class CarReplySender(private val bridge: Bridge) {
     /** A failure to get an answer at all, from [DeviceAuth]: as the shade's outbox treats it. */
     private fun failure(e: DeviceAuthException): CarOutcome =
         when (e) {
-            is DeviceAuthException.Unreachable, is DeviceAuthException.ServerError, is DeviceAuthException.Refused ->
-                CarOutcome.Retry(null)
-            is DeviceAuthException.RateLimited -> CarOutcome.Retry(e.retryAfterSecs)
+            is DeviceAuthException.Unreachable, is DeviceAuthException.ServerError, is DeviceAuthException.Refused,
+            is DeviceAuthException.RateLimited,
+            -> CarOutcome.Retry
             is DeviceAuthException.NotPaired, is DeviceAuthException.Forgotten, is DeviceAuthException.NoBridge ->
                 CarOutcome.Trouble(CarTrouble.NOT_PAIRED)
             is DeviceAuthException.TooManyDevices, is DeviceAuthException.BadResponse, is DeviceAuthException.Keystore,

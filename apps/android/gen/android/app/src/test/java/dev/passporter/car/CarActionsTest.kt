@@ -127,7 +127,7 @@ class CarActionsTest {
     fun androidAutoReachesOnlyTheCarReceiverAndNeverAnAllowOrDeny() {
         for (notice in everyNotice) {
             val notification = build(notice)
-            // Android Auto finds actions by semantics: only the car's have any.
+            // Google's requirements name the car's actions by semantics: only the car's have any.
             assertTrue(visible(notification).all { it.semanticAction == NotificationCompat.Action.SEMANTIC_ACTION_NONE })
             for (action in invisible(notification)) {
                 assertTrue(action.semanticAction in semantic)

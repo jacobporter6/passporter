@@ -25,9 +25,10 @@ import dev.passporter.notify.Notice
  * goes to the bridge as said, which maps it under the car policy.
  *
  * Only an announced notice ([Notice.announce]: the bridge applies
- * `car_announce_done`) gets them. Android Auto takes a messaging
- * notification only with a reply and a mark-as-read action, so a notice
- * without them is not read aloud in the car.
+ * `car_announce_done`) gets them. Google requires both for Android Auto
+ * compliance, so a notice without them is expected not to be read aloud
+ * in the car; that is Android Auto's behaviour, not this code's, and a DHU
+ * check (docs/development/android.md).
  *
  * Both go to [CarReplyReceiver], explicit and not exported, which acts
  * only while Android Auto projects ([CarProjection]). They do not ask to
