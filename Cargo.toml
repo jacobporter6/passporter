@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["apps/android", "crates/*", "e2e"]
+members = ["apps/android", "apps/android/plugins/*", "crates/*", "e2e"]
 
 [workspace.package]
 edition = "2024"

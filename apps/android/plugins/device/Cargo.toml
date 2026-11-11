@@ -1,0 +1,30 @@
+[package]
+# Tauri derives the plugin's ACL name (`device`) from the crate name, and
+# its build helper requires `links` to match.
+name = "tauri-plugin-device"
+description = "Passporter's Android device identity: a non-exportable Keystore key and the native bridge client that signs in with it."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+links = "tauri-plugin-device"
+
+# Like the shell: Tauri only for Android. On the host the crate is empty
+# apart from its tests, so `just verify` needs no Android toolchain.
+[target.'cfg(target_os = "android")'.dependencies]
+serde.workspace = true
+tauri = { version = "2.12.5", default-features = false, features = ["wry"] }
+thiserror.workspace = true
+
+[build-dependencies]
+tauri-plugin = { version = "2.7.2", features = ["build"] }
+
+[dev-dependencies]
+p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
+protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

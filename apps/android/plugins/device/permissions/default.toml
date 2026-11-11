@@ -1,0 +1,9 @@
+"$schema" = "schemas/schema.json"
+
+[default]
+description = """
+What the paired bridge's PWA may ask of the device identity: whether the app
+is paired, pairing with a code, an app-scope session token, and forgetting
+the pairing. A car-scope token is native-only and never reaches the webview.
+"""
+permissions = ["allow-status", "allow-pair", "allow-session", "allow-forget"]
