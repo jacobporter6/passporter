@@ -16,8 +16,9 @@ shell in `apps/android`. It does not bundle the PWA: on first launch it
 asks for your bridge's HTTPS address (the one you open in Chrome), then
 loads the PWA from there, so the app shows exactly what the browser shows
 and picks up PWA updates without a new APK. You pair the phone in the PWA
-as usual. Native plugins (notifications, UnifiedPush, the recorder,
-Android Auto) are later additions.
+as usual; in the app the device key is made and kept by native code (see
+[Device identity](#device-identity)). Other native plugins (notifications,
+UnifiedPush, the recorder, Android Auto) are later additions.
 
 Building it needs a JDK, the Android SDK and NDK, the Rust Android
 targets and the Tauri CLI. One script installs all of them under your
@@ -75,9 +76,12 @@ and is about 40 MB, most of it the unstripped Rust library.
 just android-test
 ```
 
-It runs clippy on the shell for the Android target, the shell's Rust tests
-(also part of `just verify`), and Gradle's JVM unit tests
-(`testUniversalDebugUnitTest`, in `gen/android/app/src/test/`). Nothing
+It runs clippy on the shell and the plugins for the Android target, their
+Rust tests (also part of `just verify`), and Gradle's JVM unit tests (the
+app's `testUniversalDebugUnitTest`, in `gen/android/app/src/test/`, and each
+plugin's `testDebugUnitTest`, in `plugins/<name>/android/src/test/`). The
+JVM tests need the Kotlin files a build generates, so run `just android-build`
+once in a fresh checkout first. Nothing
 here needs a device. `just verify` and CI never touch the Android
 toolchain: on the host the crate builds without Tauri.
 
@@ -161,6 +165,7 @@ safe and the change out of commits (`SecurityConfigTest` rejects it on purpose).
 | `src/lib.rs`, `src/shell.rs` | The Tauri app: the main window, the `connect` command, the navigation guard, the bridge capability. `shell.rs` builds for Android only |
 | `src/origin.rs`, `src/navigation.rs`, `src/store.rs` | The rules, in plain Rust tested on any host: what counts as a bridge origin, which pages the webview may show, where the origin is saved |
 | `connect/` | The bundled Connect page (`frontendDist`) |
+| `plugins/device/` | The device identity plugin: Keystore key, native bridge client, the PWA's `device` commands ([Device identity](#device-identity)) |
 | `tauri.conf.json` | App id `dev.passporter.app`, name, the Connect page's CSP |
 | `gen/android/` | The Gradle project from `cargo tauri android init`, trimmed: manifest, theme, icons, network security config, signing, JVM tests. Build output and the files Tauri regenerates on each build are gitignored |
 
@@ -177,7 +182,8 @@ Only Passporter's own pages reach native IPC, by three fences:
    remote capability to exactly `https://<bridge>/*` in the main window.
    The address must be a plain DNS name or IPv4 address, so the pattern
    holds no wildcard syntax; `localhost` names are refused.
-   It lists the plugin permissions the PWA may use (none yet).
+   It lists the plugin permissions the PWA may use: `device:default`.
+   It is granted only on a WebView with `WEB_MESSAGE_LISTENER` (below).
 3. **App commands.** The app has no ACL manifest, so Tauri refuses its own
    commands (`connect`) to every remote page; only the bundled Connect
    page can call them.
@@ -187,8 +193,10 @@ else on that host name: another app behind the same proxy name would get
 the same access.
 
 The address is saved in the app's private storage (`bridge-origin` in the
-data directory); it is not a secret. The device key and session tokens
-stay in the PWA's own storage, as in the browser. Neither backups nor a
+data directory); it is not a secret. Native code reads the same file, so
+the webview and native sign-ins always use the same bridge. The device key
+is in the Android Keystore and its id in `noBackupFilesDir`; session tokens
+stay in memory. Neither backups nor a
 device-to-device transfer copy the app's data (`allowBackup="false"` plus
 backup and data-extraction rules that exclude everything), so the key
 stays on the phone; a new phone pairs afresh.
@@ -200,12 +208,57 @@ page) covers form submissions instead.
 Fence 2 tells frames apart only on a current WebView: Tauri learns each
 frame's own origin through `WEB_MESSAGE_LISTENER` (Android System WebView
 86 and later). On an older WebView every message is labelled with the URL
-the main page last started loading, so only the PWA's CSP keeps a foreign
-frame from borrowing the bridge capability, and a message sent while the
-Connect page is being replaced can even count as local. That is harmless
-while the capability grants nothing and no local capability exists; the
-first plugin task gates the grant on the feature and must not add a local
+the main page last started loading, so only the PWA's CSP would keep a
+foreign frame from borrowing the bridge capability, and a message sent
+while the Connect page is being replaced could even count as local. So the
+shell asks the device plugin about the feature before granting anything,
+and on an old WebView grants nothing: logcat says why, and the PWA keeps
+its device key in WebCrypto as in Chrome. The app never adds a local
 capability.
+
+## Device identity
+
+Inside the APK native code owns the device, so notification replies, push
+registration and Android Auto can sign in with the app closed
+([design §8](../design.md#8-security)). The plugin in `plugins/device`
+(Kotlin package `dev.passporter.device`):
+
+- makes a non-exportable P-256 key in the Android Keystore at pairing
+  (StrongBox when the phone has one, the TEE otherwise), with no
+  user-authentication requirement so it works with the screen locked
+  (biometric step-up is a later phase);
+- pairs and signs in itself (`/v1/auth/pair`, then challenge → session
+  with a chosen scope, `app` or `car`), over the platform's
+  `HttpsURLConnection` (no HTTP library in the APK), and caches each
+  scope's token in memory until two minutes before it expires;
+- forgets the pairing when the bridge answers `410 Gone` (revoked).
+
+The PWA reaches it through `plugin:device|status`, `pair`, `session` (a
+fresh **app**-scope token; the webview never gets a car token) and
+`forget` (`crates/web/src/pair/native.rs`). Without the plugin (Chrome, an
+old WebView) the PWA uses WebCrypto, unchanged.
+
+Native code calls `DeviceAuth` directly, from a worker thread (every call
+may do network or Keystore work):
+
+```kotlin
+import dev.passporter.device.DeviceAuth
+import dev.passporter.device.DeviceAuthException
+import dev.passporter.device.Scope
+
+val auth = DeviceAuth.get(context)
+// An authenticated request; a 401 is retried once with a fresh token.
+val response = auth.send(Scope.APP, "POST", "/v1/agents/$id/reply", json)
+// Or just a token, e.g. for a header you set yourself:
+val token = auth.token(Scope.CAR)       // token.authorization() == "Bearer …"
+// If the bridge refuses it: auth.invalidate(token), then ask again.
+```
+
+Failures are `DeviceAuthException` subclasses: `NotPaired`, `Forgotten`
+(revoked; the pairing is gone), `Unreachable` and `ServerError` (retry
+later), `RateLimited`, `Refused`, `Keystore`, and so on. Another plugin uses
+it by depending on the library in its `android/build.gradle.kts`:
+`implementation(project(":tauri-plugin-device"))`.
 
 ## What it installs, and where
 

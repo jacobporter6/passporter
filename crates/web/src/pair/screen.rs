@@ -28,7 +28,7 @@ use super::device;
 use super::scanner::{self, QrDetector, ScanError};
 use super::token::TokenForm;
 use crate::api::FetchTransport;
-use crate::api::auth::{DeviceAuthError, DeviceSigner, pair_device};
+use crate::api::auth::{DeviceSigner, pair_device};
 use crate::platform;
 use crate::session;
 use crate::ui::icons::{self, Icon};
@@ -51,6 +51,16 @@ extern "C" {
     /// failed.
     #[wasm_bindgen(method, js_name = adoptDevice)]
     fn adopt_device(this: &Host, device_id: &str, private: &CryptoKey) -> Promise;
+
+    /// Whether the page pairs through the Android app's native layer
+    /// ([`super::native`]) rather than with a `WebCrypto` key.
+    #[wasm_bindgen(method)]
+    fn native(this: &Host) -> bool;
+
+    /// Pairs through the native layer with `code` and signs in. Resolves
+    /// like [`Host::adopt_device`].
+    #[wasm_bindgen(method, js_name = pairNative)]
+    fn pair_native(this: &Host, code: &str) -> Promise;
 
     /// Stores `token` as this device's credential. Resolves like
     /// [`Host::adopt_device`].
@@ -150,9 +160,13 @@ async fn settle(promise: Option<Promise>) -> Result<(), String> {
 /// Pairs this device with `code` (from `passporter pair`): makes a key and
 /// registers it, then hands it to the page, which stores it and signs in.
 /// The page is the one this pairing started on: a key the bridge has
-/// registered is adopted even if the user left the screen meanwhile.
+/// registered is adopted even if the user left the screen meanwhile. In the
+/// Android app the page pairs through the native layer instead.
 async fn pair(code: protocol::PairingCode) -> Result<(), String> {
     let host = host();
+    if host.as_ref().is_some_and(Host::native) {
+        return settle(host.map(|host| host.pair_native(code.as_str()))).await;
+    }
     let new = device::generate().await.map_err(|e| e.to_string())?;
     let paired = pair_device(
         &FetchTransport,
@@ -163,14 +177,7 @@ async fn pair(code: protocol::PairingCode) -> Result<(), String> {
         },
     )
     .await
-    .map_err(|error| match error {
-        DeviceAuthError::Refused => {
-            "The bridge rejected this code. It may have expired or been used; run \
-             `passporter pair` for a new one."
-                .to_owned()
-        }
-        other => other.to_string(),
-    })?;
+    .map_err(super::pairing_failure)?;
     let key = new.paired(paired.device_id);
     settle(host.map(|host| host.adopt_device(key.device_id().as_str(), key.private_key()))).await
 }

@@ -1,0 +1,194 @@
+//! The Android app's device identity, reached over Tauri's IPC (design §8).
+//!
+//! In the APK the device key is a non-exportable Android Keystore key owned
+//! by native code (the `device` plugin, `apps/android/plugins/device`), so
+//! notification replies and the car can sign in with the app closed. The
+//! PWA asks that plugin to pair and for app-scope session tokens instead of
+//! using `WebCrypto` ([`super::device`]).
+//!
+//! The plugin is there only when the page runs in the app and the shell
+//! granted it (`window.__TAURI__` exists, and the `WebView` passed the shell's
+//! frame-isolation check). [`probe`] says whether it answers; everywhere else
+//! the `WebCrypto` path is used, unchanged.
+
+use js_sys::{Function, JSON, Object, Promise, Reflect};
+use protocol::{DeviceId, PairingCode, SessionGrant};
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen_futures::JsFuture;
+
+use crate::api::ApiError;
+use crate::api::auth::DeviceAuthError;
+use crate::platform::js_error_message;
+
+/// What the plugin's `status` answers.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeStatus {
+    /// Whether the app is paired.
+    pub paired: bool,
+    /// The bridge's id for this device, once paired.
+    #[serde(default)]
+    pub device_id: Option<DeviceId>,
+}
+
+/// What the plugin's `pair` answers.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Paired {
+    device_id: DeviceId,
+}
+
+/// A rejected plugin call: `{message, code}` from the plugin, or a bare
+/// message from Tauri (an ACL refusal, say).
+#[derive(Debug, Deserialize)]
+struct Failure {
+    message: String,
+    #[serde(default)]
+    code: Option<String>,
+}
+
+/// The plugin's status, or `None` when there is no plugin to ask (Chrome,
+/// or an app whose `WebView` was too old for the shell to grant it).
+pub async fn probe() -> Option<NativeStatus> {
+    invoke_fn()?;
+    match call("status", &Object::new()).await {
+        Ok(status) => Some(status),
+        Err(error) => {
+            leptos::logging::warn!("native device identity unavailable: {error}");
+            None
+        }
+    }
+}
+
+/// Pairs the app with `code`: the plugin makes a Keystore key, registers it
+/// and keeps the id. An earlier native pairing is replaced only on success.
+pub async fn pair(code: &PairingCode) -> Result<DeviceId, DeviceAuthError> {
+    let args = Object::new();
+    // Setting a plain property on a fresh object cannot fail.
+    let _ = Reflect::set(&args, &"code".into(), &code.as_str().into());
+    call::<Paired>("pair", &args)
+        .await
+        .map(|paired| paired.device_id)
+}
+
+/// A fresh app-scope session. The plugin never hands the webview a car token.
+pub async fn session() -> Result<SessionGrant, DeviceAuthError> {
+    call("session", &Object::new()).await
+}
+
+/// Forgets the native pairing (key and id).
+pub async fn forget() -> Result<(), DeviceAuthError> {
+    call::<()>("forget", &Object::new()).await
+}
+
+/// `window.__TAURI__.core.invoke`, if this page runs in the app.
+fn invoke_fn() -> Option<Function> {
+    let tauri = Reflect::get(&js_sys::global(), &"__TAURI__".into()).ok()?;
+    let core = Reflect::get(&tauri, &"core".into()).ok()?;
+    Reflect::get(&core, &"invoke".into()).ok()?.dyn_into().ok()
+}
+
+/// Calls the plugin's `command` with `args` and reads its answer as `T`.
+async fn call<T: DeserializeOwned>(command: &str, args: &Object) -> Result<T, DeviceAuthError> {
+    let invoke = invoke_fn().ok_or_else(|| {
+        DeviceAuthError::Api(ApiError::Transport(
+            "the app's native layer is gone".to_owned(),
+        ))
+    })?;
+    let promise: Promise = invoke
+        .call2(
+            &JsValue::NULL,
+            &format!("plugin:device|{command}").into(),
+            args,
+        )
+        .and_then(JsCast::dyn_into)
+        .map_err(|e| failure(&e))?;
+    let value = JsFuture::from(promise).await.map_err(|e| failure(&e))?;
+    decode(&value)
+}
+
+/// `value` (a plugin answer) as `T`, through its JSON text.
+fn decode<T: DeserializeOwned>(value: &JsValue) -> Result<T, DeviceAuthError> {
+    let text = if value.is_undefined() {
+        "null".to_owned()
+    } else {
+        JSON::stringify(value)
+            .map(String::from)
+            .map_err(|e| ApiError::Decode(js_error_message(&e)))?
+    };
+    serde_json::from_str(&text).map_err(|e| ApiError::Decode(e.to_string()).into())
+}
+
+/// A rejection as the error the session code acts on.
+fn failure(error: &JsValue) -> DeviceAuthError {
+    let failure = decode::<Failure>(error).unwrap_or_else(|_| Failure {
+        message: js_error_message(error),
+        code: None,
+    });
+    auth_error(failure.code.as_deref(), failure.message)
+}
+
+/// Maps the plugin's error codes (`DeviceAuthException.code` in Kotlin) to
+/// [`DeviceAuthError`], keeping what matters to the session: whether the
+/// pairing is gone, and whether to retry.
+fn auth_error(code: Option<&str>, message: String) -> DeviceAuthError {
+    match code {
+        // The plugin has already forgotten the pairing on a 410.
+        Some("forgotten" | "notPaired") => DeviceAuthError::Forgotten,
+        Some("refused") => DeviceAuthError::Refused,
+        Some("rateLimited") => DeviceAuthError::RateLimited,
+        Some("tooManyDevices") => DeviceAuthError::TooManyDevices,
+        Some("keystore") => DeviceAuthError::Signing(message),
+        Some("unreachable" | "serverError") => DeviceAuthError::Api(ApiError::Transport(message)),
+        _ => DeviceAuthError::Api(ApiError::Decode(message)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_codes_keep_their_meaning() {
+        let cases = [
+            (Some("forgotten"), DeviceAuthError::Forgotten),
+            (Some("notPaired"), DeviceAuthError::Forgotten),
+            (Some("refused"), DeviceAuthError::Refused),
+            (Some("rateLimited"), DeviceAuthError::RateLimited),
+            (Some("tooManyDevices"), DeviceAuthError::TooManyDevices),
+            (Some("keystore"), DeviceAuthError::Signing("m".to_owned())),
+        ];
+        for (code, want) in cases {
+            assert_eq!(auth_error(code, "m".to_owned()), want, "{code:?}");
+        }
+        for retryable in ["unreachable", "serverError"] {
+            assert!(auth_error(Some(retryable), "m".to_owned()).is_retryable());
+        }
+        for final_ in [Some("badResponse"), Some("internal"), None] {
+            assert!(!auth_error(final_, "m".to_owned()).is_retryable());
+        }
+    }
+
+    #[test]
+    fn status_is_read_strictly() {
+        let status: NativeStatus =
+            serde_json::from_str(r#"{"paired":true,"deviceId":"dev-0123456789abcdef"}"#).unwrap();
+        assert!(status.paired);
+        assert_eq!(status.device_id.unwrap().as_str(), "dev-0123456789abcdef");
+        let unpaired: NativeStatus = serde_json::from_str(r#"{"paired":false}"#).unwrap();
+        assert_eq!(unpaired.device_id, None);
+        assert!(serde_json::from_str::<NativeStatus>(r#"{"paired":true,"extra":1}"#).is_err());
+        assert!(serde_json::from_str::<NativeStatus>(r#"{"paired":true,"deviceId":"x"}"#).is_err());
+    }
+
+    #[test]
+    fn a_native_session_is_a_session_grant() {
+        let grant: SessionGrant =
+            serde_json::from_str(r#"{"token":"abc","expiresInSecs":899,"deviceName":"Phone"}"#)
+                .unwrap();
+        assert_eq!(grant.expires_in_secs, 899);
+        assert_eq!(grant.scope, protocol::Scope::App);
+    }
+}
