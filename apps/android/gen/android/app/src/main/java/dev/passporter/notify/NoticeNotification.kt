@@ -13,6 +13,7 @@ import androidx.core.content.LocusIdCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import dev.passporter.app.MainActivity
 import dev.passporter.app.R
+import dev.passporter.notify.actions.NoticeActions
 
 /**
  * Builds the notification of one [Notice]: a `MessagingStyle` conversation
@@ -21,8 +22,8 @@ import dev.passporter.app.R
  *
  * Car-safe text: the conversation shows the agent's name, then its one
  * line (what it asks, or the turn's headline) and the *Decide* line, and
- * nothing else. Actions (reply, *Allow once* / *Deny*, mark as read) are a
- * later task's; they belong in [build].
+ * nothing else. The actions (reply, *Allow once* / *Deny*) are
+ * [NoticeActions]'s.
  */
 object NoticeNotification {
     /** Channel of blocked agents: high importance, it waits for you. */
@@ -88,7 +89,8 @@ object NoticeNotification {
 
     /**
      * The notification of [notice]. It is news ([NotificationPlanner]), so
-     * it alerts even when it replaces the agent's last one.
+     * it alerts even when it replaces the agent's last one. Its actions are
+     * [NoticeActions]'s: what the notice can be answered with from the shade.
      */
     fun build(context: Context, notice: Notice, now: Long): Notification {
         val agent = person(notice)
@@ -103,33 +105,51 @@ object NoticeNotification {
         )
         style.addMessage(headline, now, agent)
         notice.decide?.let { style.addMessage(context.getString(R.string.notify_decide, it), now, agent) }
-        val shortcutId = shortcutId(notice.agentId)
+        val builder = conversation(context, notice.agentId, notice.state, style, now)
+            .setContentTitle(notice.name)
+            .setContentText(notice.decide?.let { context.getString(R.string.notify_decide, it) } ?: headline)
+            // News that replaces the agent's last notification sounds again.
+            .setOnlyAlertOnce(false)
+        NoticeActions.build(context, notice).forEach(builder::addAction)
+        return builder.build()
+    }
+
+    /**
+     * What every notification of [agent]'s conversation shares: the
+     * channel of [state], [style], the shortcut and `LocusId`, the tap that opens the
+     * agent, and the private lock-screen version. [build] adds the news;
+     * [dev.passporter.notify.actions.ActionFeedback] the progress of an
+     * answer given from the shade.
+     */
+    internal fun conversation(
+        context: Context,
+        agent: AgentId,
+        state: NoticeState,
+        style: NotificationCompat.MessagingStyle,
+        now: Long,
+    ): NotificationCompat.Builder {
+        val shortcutId = shortcutId(agent)
         val tap = PendingIntent.getActivity(
             context,
             0,
-            openAgent(context, notice.agentId),
+            openAgent(context, agent),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        return NotificationCompat.Builder(context, channel(notice.state))
+        return NotificationCompat.Builder(context, channel(state))
             .setSmallIcon(R.drawable.ic_notification)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setStyle(style)
-            .setContentTitle(notice.name)
-            .setContentText(notice.decide?.let { context.getString(R.string.notify_decide, it) } ?: headline)
             // The lock screen shows that an agent has news, never what it says.
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .setPublicVersion(publicVersion(context, notice.state))
+            .setPublicVersion(publicVersion(context, state))
             .setShortcutId(shortcutId)
             .setLocusId(LocusIdCompat(shortcutId))
             .setContentIntent(tap)
             .setAutoCancel(true)
             .setWhen(now)
             .setShowWhen(true)
-            // News that replaces the agent's last notification sounds again.
-            .setOnlyAlertOnce(false)
             // The text is agent output: no system-suggested actions from it.
             .setAllowSystemGeneratedContextualActions(false)
-            .build()
     }
 
     /**
@@ -166,6 +186,15 @@ object NoticeNotification {
             )
             .build()
 
+    /** The state whose channel is [channel], or `null` for any other channel. */
+    internal fun stateOf(channel: String?): NoticeState? =
+        when (channel) {
+            CHANNEL_NEEDS_YOU -> NoticeState.BLOCKED
+            CHANNEL_FINISHED -> NoticeState.FINISHED
+            else -> null
+        }
+
+    /** The channel of a notice in [state]. */
     private fun channel(state: NoticeState): String =
         when (state) {
             NoticeState.BLOCKED -> CHANNEL_NEEDS_YOU

@@ -32,5 +32,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Answers from notification actions (dev.passporter.notify.actions). -->
+        <receiver
+            android:name="dev.passporter.notify.actions.NoticeActionReceiver"
+            android:exported="false" />
     </application>
 </manifest>

@@ -345,10 +345,16 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
   its finished turn still unread. If a push still finds nothing to report (a
   late race), the PWA never alerts: a showing notification is re-shown
   silently in place, else a silent one is shown and closes itself.
-- **Notifications** (native, planned) use `MessagingStyle`, one conversation per agent.
-  A reply action uses `RemoteInput` (inline text/voice reply in the shade),
-  plus option actions such as *Allow once* / *Deny* for permissions and a
-  mark-as-read action.
+- **Notifications** (native) use `MessagingStyle`, one conversation per agent.
+  A dialog gets *Allow once*, *Deny* and *Deny with note* (`RemoteInput`,
+  the note as feedback, like the PWA's "Deny opens dictation"); a finished
+  turn gets a `RemoteInput` reply (inline text/voice) sent as a prompt.
+  Each answer is a durable WorkManager job with its idempotency key and
+  `origin: "notification"` (§6.5), and the notification shows how it went
+  (sent, already answered, the agent moved on). The app clears
+  notifications whose news is old when it comes to the foreground. A
+  mark-as-read action waits for a bridge API (a turn is unread until herdr
+  sees the pane). See docs/development/android.md.
 - **Android Auto** (planned) uses the messaging category: no custom car UI, just
   correctly built notifications plus the `automotive_app_desc` declaration
   (`<uses name="notification"/>`). Android Auto reads "widget: run

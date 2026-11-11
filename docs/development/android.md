@@ -241,11 +241,9 @@ line and the *Decide* line, never more (the car reads the same). A tap
 opens the app with the intent `passporter://agent/<id>` (the id is one
 percent-encoded path segment: read it with `NoticeNotification.agentToOpen`).
 
-Known gaps: the shell does not yet navigate to the agent on a tap, and
-nothing clears a notification once its news is old (a dialog you answered
-on the desktop stays until you tap or swipe it), because the bridge sends
-no "resolved" message. Each agent's conversation shortcut stays too;
-Android drops the oldest once the app reaches its shortcut limit.
+Known gaps: the shell does not yet navigate to the agent on a tap. Each
+agent's conversation shortcut stays; Android drops the oldest once the app
+reaches its shortcut limit.
 
 A debug build can post sample messages through the same path, from the dev
 machine with the phone on adb (`-n` targets the receiver, which only adb's
@@ -261,7 +259,73 @@ same agent at a new dialog: alerts again, in place), `finished` (on
 more) and `many` (four agents, one conversation each; one name and line
 cut at their bounds). Each broadcast is a new message; add `--es ping
 1234` to two broadcasts to send the same message twice, and the second
-must not buzz. Release builds leave the receiver out.
+must not buzz. Release builds leave the receiver out. The sample agents are
+not on your bridge, so their actions end as *That agent is gone*, and
+opening the app clears them ([old news](#answering-from-the-shade)).
+
+### Answering from the shade
+
+A notice can be answered without opening the app (package
+`dev.passporter.notify.actions`). What it offers:
+
+| Notice | Action | Sends | Semantic action | `RemoteInput` key |
+|---|---|---|---|---|
+| Blocked, with a pending id | *Allow once* | `choose` of the dialog's low-risk `yes` | none | — |
+| | *Deny* | `choose` of its low-risk `no` (else `no_feedback`) | none | — |
+| | *Deny with note* | `choose` of `no_feedback`, the text as `feedbackText` | none | `dev.passporter.notify.TEXT` |
+| Finished | *Reply* | `prompt` with the text | `SEMANTIC_ACTION_REPLY` | `dev.passporter.notify.TEXT` |
+
+A dialog without a pending id (the bridge could not parse it), or a state
+this app predates, has no actions: the tap opens the app. *Always allow* and
+other elevated options are never offered. The dialog answers carry no
+semantic action, so nothing in the system triggers them by guessing; none
+shows a user interface, and all need the phone unlocked. Mark-as-read is
+not offered: the bridge has no API for it (a turn is unread until herdr
+sees the pane).
+
+Each tap is a broadcast to `NoticeActionReceiver` (explicit, not exported;
+pending intents immutable except the two with a `RemoteInput`). It makes
+an `OutboxJob` with a fresh idempotency key, appends the answer to the
+conversation as your message with *Sending…* (and no actions, so it cannot
+be answered twice), and queues it:
+
+| File | What |
+|---|---|
+| `NoticeAction.kt` | Which actions a notice offers (pure), and the `ActionRequest` in the intent's data, `passporter://action/<action>/<agent>[/<pending>]` |
+| `NoticeActions.kt`, `NoticeActionReceiver.kt` | The notification actions, and their receiver |
+| `OutboxJob.kt` | The job, and the text rules (`ReplyText`: at most 4 KiB, a note on one line) |
+| `Outbox.kt`, `OutboxWorker.kt` | The native outbox: one WorkManager job per key (unique, network-bound, exponential backoff from 30 s, at most 8 attempts; a `Retry-After` longer than the backoff is followed) |
+| `OutboxSender.kt`, `BridgeState.kt` | One attempt: reads the agent (and the dialog) with `DeviceAuth`, posts `POST /v1/actions` with `origin: "notification"`, classifies the answer |
+| `ActionFeedback.kt` | The notification while sending, after (removed when sent), or with the reason it was not sent |
+| `Reconciler.kt` | Clears old news when the app comes to the foreground and after a sent answer |
+
+A notice has no `expectedSeq` or option ids, so the first attempt reads
+them, as the bridge's car replies do: the agent from `GET /v1/agents`, and
+for a dialog answer `GET /v1/agents/:id/pending`, which must still show the
+notice's dialog. A reply goes only while the agent is ready and has not
+changed state since you replied. The body is then frozen, and a retry
+resends it unchanged, so the bridge replays a lost answer instead of
+deciding it again. The bridge's own rules still apply on top
+(`origin: "notification"`: no prompt into a dialog, no `!`/`/`/`#` prompt).
+
+| Bridge's answer | Shown |
+|---|---|
+| sent | the notification is removed |
+| 409, or the dialog changed before sending | *Already answered* (a reply: *The agent moved on: open the app*) |
+| 403, 400, 422, or no low-risk option to choose | *Answer this one in the app* |
+| `failed` (herdr failed after sending) | *Not sure it arrived: open the app* (never resent) |
+| no answer, 5xx, 429 | retried; after the last attempt *Couldn't reach the bridge: open the app* |
+| not paired or revoked | *Not paired: open the app* |
+
+If news replaced the notification meanwhile (a new dialog, a new turn), the
+news stays and the older answer's outcome is not shown.
+
+**Old news is cleared.** The bridge sends no "resolved" message, so when
+the app comes to the foreground, and after an answer was sent, a worker
+reads `GET /v1/agents` (only if a notification is showing) and removes a
+dialog's notification once the agent is no longer blocked, a finished
+turn's once it is no longer unread, and any whose agent is gone. Answers
+still in progress are left alone.
 
 ## Device identity
 
