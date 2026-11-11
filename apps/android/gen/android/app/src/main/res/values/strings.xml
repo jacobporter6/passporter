@@ -10,4 +10,6 @@
     <string name="notify_blocked_fallback">Waiting for you</string>
     <string name="notify_finished_fallback">Finished its turn</string>
     <string name="notify_decide">Decide: %1$s</string>
+    <string name="notify_public_blocked">An agent needs you</string>
+    <string name="notify_public_finished">An agent finished its turn</string>
 </resources>

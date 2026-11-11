@@ -115,7 +115,10 @@ object NoticeNotification {
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setStyle(style)
             .setContentTitle(notice.name)
-            .setContentText(notice.decide ?: headline)
+            .setContentText(notice.decide?.let { context.getString(R.string.notify_decide, it) } ?: headline)
+            // The lock screen shows that an agent has news, never what it says.
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicVersion(context, notice.state))
             .setShortcutId(shortcutId)
             .setLocusId(LocusIdCompat(shortcutId))
             .setContentIntent(tap)
@@ -146,6 +149,22 @@ object NoticeNotification {
         val matches = intent.action == ACTION_OPEN_AGENT && data.scheme == SCHEME && data.host == HOST
         return data.pathSegments.singleOrNull()?.takeIf { matches }?.let(AgentId::parse)
     }
+
+    /** What a locked phone shows instead: no agent text at all. */
+    private fun publicVersion(context: Context, state: NoticeState): Notification =
+        NotificationCompat.Builder(context, channel(state))
+            .setSmallIcon(R.drawable.ic_notification)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setContentTitle(context.getString(R.string.app_name))
+            .setContentText(
+                context.getString(
+                    when (state) {
+                        NoticeState.BLOCKED -> R.string.notify_public_blocked
+                        else -> R.string.notify_public_finished
+                    },
+                ),
+            )
+            .build()
 
     private fun channel(state: NoticeState): String =
         when (state) {

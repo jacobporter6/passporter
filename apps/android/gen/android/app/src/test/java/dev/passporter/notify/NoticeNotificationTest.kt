@@ -38,6 +38,10 @@ class NoticeNotificationTest {
         assertTrue(notification.flags and Notification.FLAG_AUTO_CANCEL != 0)
         assertFalse(notification.allowSystemGeneratedContextualActions)
         assertEquals("no actions until the reply task", 0, notification.actions?.size ?: 0)
+        assertEquals(Notification.VISIBILITY_PRIVATE, notification.visibility)
+        val public = requireNotNull(notification.publicVersion)
+        assertEquals("Passporter", public.extras.getCharSequence(Notification.EXTRA_TITLE).toString())
+        assertEquals("An agent needs you", public.extras.getCharSequence(Notification.EXTRA_TEXT).toString())
     }
 
     @Test
@@ -54,6 +58,10 @@ class NoticeNotificationTest {
         assertEquals(
             listOf("docs" to "Fixed the flaky test", "docs" to "Decide: Merge PR #12?"),
             messages(notification),
+        )
+        assertEquals(
+            "Decide: Merge PR #12?",
+            notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString(),
         )
     }
 

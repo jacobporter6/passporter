@@ -251,7 +251,7 @@ same agent at a new dialog: alerts again, in place), `finished` (on
 *Finished*, quieter), `decide` (that turn's *Decide* line: alerts once
 more) and `many` (four agents, one conversation each; one name and line
 cut at their bounds). Each broadcast is a new message; add `--es ping
-test1` to two broadcasts to send the same message twice, and the second
+1234` to two broadcasts to send the same message twice, and the second
 must not buzz. Release builds leave the receiver out.
 
 ## What it installs, and where

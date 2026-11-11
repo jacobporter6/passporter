@@ -80,6 +80,9 @@ class NoticeParserTest {
             "[]" to NoticeError.NotAnObject,
             "{}" to NoticeError.Missing("ping"),
             """{"ping":7}""" to NoticeError.WrongType("ping"),
+            """{"ping":""}""" to NoticeError.InvalidId("ping"),
+            """{"ping":"a\nb"}""" to NoticeError.InvalidId("ping"),
+            """{"ping":"XYZ"}""" to NoticeError.InvalidId("ping"),
             """{"ping":"ab","notices":{}}""" to NoticeError.WrongType("notices"),
             """{"ping":"ab","notices":[1]}""" to NoticeError.WrongType("notices[0]"),
             """{"ping":"ab","notices":[{"name":"n","state":"blocked"}]}""" to

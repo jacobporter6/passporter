@@ -38,7 +38,7 @@ sealed interface NoticeError {
     /** A field has the wrong JSON type. */
     data class WrongType(override val field: String) : NoticeError
 
-    /** An id field is outside the bridge's identifier charset. */
+    /** An id field (or the ping) is not in the bridge's format. */
     data class InvalidId(override val field: String) : NoticeError
 }
 
@@ -47,9 +47,9 @@ sealed interface NoticeError {
  *
  * The policy is the bridge's for outbound types (`protocol::push`):
  * tolerant of what a newer bridge may add (unknown fields are ignored, an
- * unknown state is [NoticeState.UNKNOWN]), strict about the fields it
- * knows (a wrong type or an invalid id rejects the whole message, as serde
- * would). The JSON syntax itself is the platform's `org.json`, which is
+ * unknown state is [NoticeState.UNKNOWN], and `null` counts as absent),
+ * strict about the fields it knows (a wrong type or an invalid id rejects
+ * the whole message). The JSON syntax itself is the platform's `org.json`, which is
  * more lenient than serde (single quotes, unquoted keys, trailing text);
  * the payload was decrypted and authenticated as the bridge's first.
  * Only the newest [Notice.MAX_NOTICES] notices are kept, and texts are
@@ -75,6 +75,11 @@ object NoticeParser {
 
     private fun message(root: JSONObject): NoticeMessage {
         val ping = root.required<String>("ping", "ping")
+        // A random hex id from the bridge; anything else would defeat the
+        // duplicate check (RecentPings keeps one per line).
+        if (ping.length !in 1..MAX_PING_CHARS || !ping.all { it in '0'..'9' || it in 'a'..'f' }) {
+            throw Failure(NoticeError.InvalidId("ping"))
+        }
         val notices = root.optional<JSONArray>("notices", "notices")
         val count = notices?.length() ?: 0
         val list = (0 until count).map { index ->
@@ -106,6 +111,9 @@ object NoticeParser {
             announce = json.optional<Boolean>("announce", field("announce")) ?: false,
         )
     }
+
+    /** Most characters of a ping (the bridge sends 32). */
+    private const val MAX_PING_CHARS = 64
 
     /** What the bridge calls an agent whose title has nothing visible. */
     private const val FALLBACK_NAME = "Agent"

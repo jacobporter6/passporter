@@ -17,7 +17,7 @@ import java.util.UUID
  * ```
  *
  * [Sample] lists the samples. Each broadcast is a new message (a fresh
- * ping) unless `--es ping <id>` names one: the same id twice is a retry of
+ * ping) unless `--es ping <hex>` names one: the same id twice is a retry of
  * the same message, which must not buzz.
  */
 class SampleNoticeReceiver : BroadcastReceiver() {
