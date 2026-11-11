@@ -24,6 +24,9 @@ import org.unifiedpush.android.connector.data.PushMessage
 class PassporterPushService : PushService() {
     override fun onNewEndpoint(endpoint: PushEndpoint, instance: String) {
         if (instance != PushWork.INSTANCE) return
+        // A temporary endpoint (a fallback distributor's, while the primary
+        // is down) is posted like any other: the bridge refuses it unless its
+        // host is allowed, and the primary's comes back as a new endpoint.
         val keys = endpoint.pubKeySet
         val registration = keys?.let { Registration.of(endpoint.url, it.pubKey, it.auth) }
         if (registration == null) {

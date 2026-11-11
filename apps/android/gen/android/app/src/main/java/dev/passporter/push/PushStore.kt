@@ -16,14 +16,21 @@ data class Subscribed(
 
 /**
  * What [PushSync] remembers between runs: the distributor's latest
- * [registration], and what the bridge holds ([subscribed]), so the next
- * run posts only what changed and knows which endpoint to drop.
+ * [registration], what the bridge holds ([subscribed]), so the next run
+ * posts only what changed and knows which endpoint to drop, and the device
+ * the current keys belong to ([owner]).
  */
 data class PushRecord(
     /** The distributor's latest registration, or null before one (or after unregistering). */
     val registration: Registration? = null,
     /** What the bridge holds for this app, or null when nothing (that this app could still remove). */
     val subscribed: Subscribed? = null,
+    /**
+     * The device (`DeviceId.value`) the registration was asked for, set
+     * before anything is posted: a bridge may hold the keys even when its
+     * answer was lost, so a new pairing must replace them all the same.
+     */
+    val owner: String? = null,
 )
 
 /**
@@ -31,12 +38,30 @@ data class PushRecord(
  * and device transfers are off for the app anyway). It holds the public
  * keys and the auth secret, which the connector's own store keeps as well;
  * the private key is not here (see [Registration]).
+ *
+ * Safe from any thread: reads and writes take one lock, and the record is
+ * kept in memory once read, so a reader (a push message, on the main
+ * thread from cold) costs no disk read after the first.
  */
 class PushStore(file: File) {
     private val file = AtomicFile(file)
+    private val lock = Any()
+    private var cached: PushRecord? = null
 
     /** The record; empty when there is none, or the file does not read back as one. */
-    fun load(): PushRecord {
+    fun load(): PushRecord = synchronized(lock) {
+        cached ?: read().also { cached = it }
+    }
+
+    /** Replaces the record. Atomic: a crash leaves the old file or the new one. */
+    fun save(record: PushRecord): Unit = synchronized(lock) {
+        // Forgotten first: if the write fails, the next load reads the disk.
+        cached = null
+        write(record)
+        cached = record
+    }
+
+    private fun read(): PushRecord {
         val text = try {
             file.readFully().toString(Charsets.UTF_8)
         } catch (e: IOException) {
@@ -50,17 +75,17 @@ class PushStore(file: File) {
                 val posted = registration(sub)
                 if (deviceId != null && posted != null) Subscribed(posted, deviceId) else null
             }
-            PushRecord(registration, subscribed)
+            PushRecord(registration, subscribed, obj.optString(OWNER).takeIf { it.isNotEmpty() })
         } catch (e: JSONException) {
             PushRecord()
         }
     }
 
-    /** Replaces the record. Atomic: a crash leaves the old file or the new one. */
-    fun save(record: PushRecord) {
+    private fun write(record: PushRecord) {
         val obj = JSONObject()
         record.registration?.let { obj.put(REGISTRATION, json(it)) }
         record.subscribed?.let { obj.put(SUBSCRIBED, json(it.registration).put(DEVICE_ID, it.deviceId)) }
+        record.owner?.let { obj.put(OWNER, it) }
         file.baseFile.parentFile?.mkdirs()
         val out = file.startWrite()
         try {
@@ -84,6 +109,7 @@ class PushStore(file: File) {
         const val REGISTRATION = "registration"
         const val SUBSCRIBED = "subscribed"
         const val DEVICE_ID = "deviceId"
+        const val OWNER = "owner"
         const val ENDPOINT = "endpoint"
         const val P256DH = "p256dh"
         const val AUTH = "auth"

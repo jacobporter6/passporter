@@ -74,9 +74,18 @@ class PushSync(
     /** Unregisters from the distributor (`UnifiedPush.unregister`), deleting the keys. */
     private val unregister: () -> Unit,
 ) {
-    /** The bridge's VAPID key, once learnt; forgotten with the pairing. */
+    /** The bridge's VAPID key, once learnt, for the device it was learnt as. */
     @Volatile
-    private var vapidKey: String? = null
+    private var vapidKey: Pair<String, String>? = null
+
+    /**
+     * Whether the bridge confirmed the record's subscription in this
+     * process. The first sync of a process posts it again (the bridge
+     * answers 204 when it holds it), in case the bridge dropped it on its
+     * own, after a 404 from a misconfigured proxy, say.
+     */
+    @Volatile
+    private var confirmed = false
 
     /** The distributor gave [registration]: remember it and post it. */
     fun onNewEndpoint(registration: Registration): PushState {
@@ -97,7 +106,7 @@ class PushSync(
         val record = store.load()
         return when (val pairing = pairing()) {
             Pairing.Unknown -> {
-                save(PushRecord(registration = null, subscribed = record.subscribed))
+                save(record.copy(registration = null))
                 PushState.RetryLater
             }
             Pairing.Unpaired -> {
@@ -123,19 +132,30 @@ class PushSync(
             Pairing.Unpaired -> return unpaired()
             Pairing.Unknown -> return PushState.RetryLater
         }
-        val record = store.load()
+        var record = store.load()
         if (startAfresh(record, device)) return PushState.NoEndpoint
         val registration = record.registration ?: return PushState.NoEndpoint
         val current = Subscribed(registration, device)
-        if (record.subscribed == current) return PushState.Subscribed
-        record.subscribed?.takeIf { it.registration.endpoint != registration.endpoint }?.let { drop(it) }
+        if (record.subscribed == current && confirmed) return PushState.Subscribed
+        record.subscribed?.takeIf { it.registration.endpoint != registration.endpoint }?.let {
+            drop(it)
+            record = record.copy(subscribed = null)
+        }
+        // Before posting: the bridge may keep it even if its answer is lost.
+        record = record.copy(owner = device)
+        if (!save(record)) return PushState.RetryLater
         val response = try {
             bridge.subscribe(registration.subscribeJson())
         } catch (e: DeviceAuthException) {
             return failed(e)
         }
         val state = when (response.status) {
-            201, 204 -> if (save(PushRecord(registration, current))) PushState.Subscribed else PushState.RetryLater
+            201, 204 -> if (save(record.copy(subscribed = current))) {
+                confirmed = true
+                PushState.Subscribed
+            } else {
+                PushState.RetryLater
+            }
             400 -> PushState.Refused(response.body.lineSequence().firstOrNull().orEmpty().take(MAX_REASON_CHARS))
             404 -> PushState.BridgeOff
             409 -> PushState.Full
@@ -143,7 +163,7 @@ class PushSync(
         }
         if (state != PushState.Subscribed) {
             // A subscription that was not kept must not be taken for one.
-            save(PushRecord(registration, null))
+            save(record.copy(subscribed = null))
         }
         Log.i(PUSH_TAG, "subscription at ${Registration.host(registration.endpoint)}: status ${response.status}, $state")
         return state
@@ -163,11 +183,12 @@ class PushSync(
             }
             Pairing.Unknown -> return Readiness.Later
         }
-        startAfresh(store.load(), device)
-        vapidKey?.let { return Readiness.Register(it) }
+        val record = store.load()
+        if (!startAfresh(record, device) && record.owner != device) save(record.copy(owner = device))
+        vapidKey?.takeIf { it.first == device }?.let { return Readiness.Register(it.second) }
         return when (val key = bridge.vapidKey()) {
             is VapidKey.Known -> {
-                vapidKey = key.value
+                vapidKey = device to key.value
                 Readiness.Register(key.value)
             }
             VapidKey.PushOff -> Readiness.BridgeOff
@@ -192,12 +213,12 @@ class PushSync(
     }
 
     /**
-     * If [record] was posted by another device than [device] (the app was
-     * paired anew), leaves the distributor so the keys are replaced; whether
-     * it did.
+     * If [record]'s keys belong to another device than [device] (the app
+     * was paired anew), leaves the distributor so the keys are replaced;
+     * whether it did.
      */
     private fun startAfresh(record: PushRecord, device: String): Boolean {
-        val previous = record.subscribed?.deviceId ?: return false
+        val previous = record.owner ?: record.subscribed?.deviceId ?: return false
         if (previous == device) return false
         Log.i(PUSH_TAG, "paired anew: registering with new keys")
         reset()
@@ -206,6 +227,7 @@ class PushSync(
 
     /** Forgets everything and leaves the distributor, if there was anything. */
     private fun unpaired(): PushState {
+        vapidKey = null
         if (store.load() != PushRecord()) {
             Log.i(PUSH_TAG, "not paired: unregistering from the distributor")
             reset()
@@ -215,6 +237,7 @@ class PushSync(
 
     private fun reset() {
         vapidKey = null
+        confirmed = false
         save(PushRecord())
         unregister()
     }

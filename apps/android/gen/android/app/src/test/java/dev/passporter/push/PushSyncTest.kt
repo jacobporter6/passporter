@@ -152,6 +152,28 @@ class PushSyncTest {
     }
 
     @Test
+    fun aLostAnswerStillCountsForANewPairing() {
+        // The bridge may have stored it before its proxy timed out.
+        bridge.answers += 504
+        assertEquals(PushState.RetryLater, sync.onNewEndpoint(first))
+        assertNull(store.load().subscribed)
+        bridge.device = "dev-2"
+        assertEquals(PushState.NoEndpoint, sync.sync())
+        assertEquals(1, unregistered)
+    }
+
+    @Test
+    fun aNewProcessPostsTheSubscriptionAgain() {
+        sync.onNewEndpoint(first)
+        // The bridge may have dropped it meanwhile (a 404 from a proxy, say).
+        val restarted = PushSync(PushStore(File(dir, "push.json")), bridge) { unregistered++ }
+        bridge.answers += 201
+        assertEquals(PushState.Subscribed, restarted.sync())
+        assertEquals(PushState.Subscribed, restarted.sync())
+        assertEquals(listOf("POST ${first.endpoint}", "POST ${first.endpoint}"), bridge.calls)
+    }
+
+    @Test
     fun aKeystoreHiccupChangesNothing() {
         sync.onNewEndpoint(first)
         bridge.keystoreFails = true
@@ -176,7 +198,7 @@ class PushSyncTest {
         sync.onNewEndpoint(first)
         bridge.keystoreFails = true
         assertEquals(PushState.RetryLater, sync.onUnregistered())
-        assertEquals(PushRecord(null, Subscribed(first, "dev-1")), store.load())
+        assertEquals(PushRecord(null, Subscribed(first, "dev-1"), owner = "dev-1"), store.load())
         // The next endpoint replaces it at the bridge.
         bridge.keystoreFails = false
         assertEquals(PushState.Subscribed, sync.onNewEndpoint(second))
@@ -197,6 +219,10 @@ class PushSyncTest {
         // Asked once a key is known: every resume asks readiness.
         assertEquals(Readiness.Register("B" + "A".repeat(86)), sync.readiness())
         assertEquals(3, bridge.vapidAsked)
+        // Another pairing (perhaps another bridge) asks again.
+        bridge.device = "dev-2"
+        assertTrue(sync.readiness() is Readiness.Register)
+        assertEquals(4, bridge.vapidAsked)
     }
 
     @Test
@@ -204,6 +230,6 @@ class PushSyncTest {
         sync.onNewEndpoint(first)
         assertEquals(store.load(), PushStore(File(dir, "push.json")).load())
         File(dir, "push.json").writeText("{not json")
-        assertEquals(PushRecord(), store.load())
+        assertEquals(PushRecord(), PushStore(File(dir, "push.json")).load())
     }
 }

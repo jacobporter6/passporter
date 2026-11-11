@@ -2,6 +2,7 @@ package dev.passporter.device
 
 import android.content.Context
 import android.os.SystemClock
+import android.util.Log
 import java.io.File
 import java.io.IOException
 import java.security.ProviderException
@@ -161,7 +162,14 @@ class DeviceAuth internal constructor(
 
     /** Tells the listeners, outside the lock (they may call back in). */
     private fun changed(status: DeviceStatus) {
-        listeners.forEach { it.onPairingChanged(status) }
+        // The change is made: a failing listener must not undo the caller's success.
+        listeners.forEach { listener ->
+            try {
+                listener.onPairingChanged(status)
+            } catch (e: RuntimeException) {
+                Log.e(LOG_TAG, "a pairing listener failed", e)
+            }
+        }
     }
 
     /**
@@ -290,6 +298,9 @@ class DeviceAuth internal constructor(
 
         /** The pause before the one retry of a failed signature. */
         private const val SIGN_RETRY_MS = 1_000L
+
+        /** Logcat tag, as the plugin's. */
+        private const val LOG_TAG = "PassporterDevice"
 
         /** The record's file in `noBackupFilesDir`. */
         private const val RECORD_FILE = "passporter-device.json"

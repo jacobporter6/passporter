@@ -45,7 +45,7 @@ object PushWork {
         }
     }
 
-    /** The app's push record. Reading it is safe from any thread. */
+    /** The app's push record ([PushStore]: safe from any thread). */
     fun store(context: Context): PushStore = store ?: synchronized(this) {
         store ?: PushStore(File(context.applicationContext.noBackupFilesDir, RECORD_FILE)).also { store = it }
     }

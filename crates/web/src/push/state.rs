@@ -29,7 +29,9 @@ impl Unavailable {
             Self::Unsupported => "This browser can't receive push notifications.",
             Self::Denied => "Notifications are blocked for this site in your browser settings.",
             Self::BridgeOff => "Push is turned off on the bridge.",
-            Self::NativeApp => "The app gets notifications through ntfy (UnifiedPush) by itself.",
+            Self::NativeApp => {
+                "In the app, notifications come through UnifiedPush (ntfy), not this switch."
+            }
         }
     }
 }
@@ -321,6 +323,7 @@ mod tests {
             Unavailable::Unsupported,
             Unavailable::Denied,
             Unavailable::BridgeOff,
+            Unavailable::NativeApp,
         ] {
             let state = PushState::Unavailable(why);
             assert!(!state.can_toggle(true));
