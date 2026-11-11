@@ -57,6 +57,17 @@ class LinkPolicyTest {
     }
 
     @Test
+    fun aHistoryMayNotMixBundledPagesWithOthers() {
+        val bridge = Uri.parse("https://bridge.example.org/")
+        val agent = Uri.parse("https://bridge.example.org/agent/w1:p1")
+        val page = Uri.parse("https://tauri.localhost/bridge.html")
+        assertFalse(LinkPolicy.mixesBundledPages(listOf(bridge, agent)))
+        assertFalse(LinkPolicy.mixesBundledPages(listOf(page)))
+        assertTrue(LinkPolicy.mixesBundledPages(listOf(page, agent)))
+        assertTrue(LinkPolicy.mixesBundledPages(listOf(bridge, page)))
+    }
+
+    @Test
     fun onlyBridgePagesAreRemote() {
         assertTrue(LinkPolicy.isRemote(Uri.parse("https://bridge.example.org/agent/w1:p1")))
         assertFalse(LinkPolicy.isRemote(Uri.parse("https://tauri.localhost/index.html")))

@@ -8,6 +8,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import java.io.File
@@ -26,8 +27,10 @@ class ShellRequestTest {
 
     @Test
     fun theShortcutOpensTheBridgePage() {
-        val shortcut = Intent(ShellRequest.ACTION_MANAGE_BRIDGE).setClass(context, MainActivity::class.java)
-        assertEquals(ShellRequest.ManageBridge, ShellRequest.from(shortcut))
+        val activity = Robolectric.buildActivity(BridgeShortcutActivity::class.java).get()
+        val forwarded = BridgeShortcutActivity.forward(activity)
+        assertEquals(MainActivity::class.java.name, forwarded.component?.className)
+        assertEquals(ShellRequest.ManageBridge, ShellRequest.from(forwarded))
     }
 
     @Test
@@ -57,14 +60,13 @@ class ShellRequestTest {
     }
 
     @Test
-    fun theShortcutSendsTheActionTheShellKnows() {
+    fun theShortcutGoesThroughItsOwnTask() {
         val shortcuts = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
             .newDocumentBuilder().parse(File("src/main/res/xml/shortcuts.xml"))
         val intent = shortcuts.getElementsByTagName("intent").item(0)
         val android = "http://schemas.android.com/apk/res/android"
         val attributes = intent.attributes
-        assertEquals(ShellRequest.ACTION_MANAGE_BRIDGE, attributes.getNamedItemNS(android, "action").nodeValue)
-        assertEquals(MainActivity::class.java.name, attributes.getNamedItemNS(android, "targetClass").nodeValue)
+        assertEquals(BridgeShortcutActivity::class.java.name, attributes.getNamedItemNS(android, "targetClass").nodeValue)
         assertEquals(context.packageName, attributes.getNamedItemNS(android, "targetPackage").nodeValue)
     }
 }

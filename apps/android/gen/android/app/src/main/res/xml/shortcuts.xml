@@ -9,9 +9,11 @@
         android:icon="@mipmap/ic_launcher"
         android:shortcutShortLabel="@string/shortcut_bridge_short"
         android:shortcutLongLabel="@string/shortcut_bridge_long">
+        <!-- Android adds CLEAR_TASK to a static shortcut's intent, so it
+             goes to a trampoline in a task of its own. -->
         <intent
-            android:action="dev.passporter.app.MANAGE_BRIDGE"
+            android:action="android.intent.action.VIEW"
             android:targetPackage="dev.passporter.app"
-            android:targetClass="dev.passporter.app.MainActivity" />
+            android:targetClass="dev.passporter.app.BridgeShortcutActivity" />
     </shortcut>
 </shortcuts>

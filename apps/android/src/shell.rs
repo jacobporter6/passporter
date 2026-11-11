@@ -16,11 +16,11 @@
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use tauri::ipc::CapabilityBuilder;
-use tauri::{AppHandle, Manager, State, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 use crate::destination::{self, Request};
 use crate::native::{self, NativeExt};
-use crate::navigation;
+use crate::navigation::{self, Guard};
 use crate::origin::BridgeOrigin;
 use crate::store::Store;
 
@@ -40,27 +40,6 @@ struct Shell {
     connecting: Mutex<()>,
     /// Set once: when a saved origin is loaded at launch, or by `connect`.
     bridge: Arc<OnceLock<BridgeOrigin>>,
-}
-
-/// What the navigation guard and [`show`] share.
-struct Guard {
-    bridge: Arc<OnceLock<BridgeOrigin>>,
-    /// The shell's own next navigation that `navigation::allows` refuses.
-    expected: navigation::Expected,
-}
-
-impl Guard {
-    /// Whether the webview may load `url`.
-    fn allows(&self, url: &Url) -> bool {
-        navigation::allows(url, self.bridge.get()) || self.expected.take(url)
-    }
-
-    /// Readies the guard for the shell's own load of `url`.
-    fn expect(&self, url: &Url) {
-        if !navigation::allows(url, self.bridge.get()) {
-            self.expected.expect(url.clone());
-        }
-    }
 }
 
 /// Starts the app. Called by the Android activity through Tauri's entry point.
@@ -84,7 +63,11 @@ pub fn run() {
 /// Loads the saved bridge, if any, and opens the main window on it (or on
 /// the Connect page, or where the intent that started the app asks).
 fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    app.plugin(native::init())?;
+    // Without the Kotlin side, taps and the shortcut do nothing; the app
+    // still works.
+    if let Err(error) = app.plugin(native::init()) {
+        log_to_logcat(&error);
+    }
     let store = Store::in_dir(&app.path().app_data_dir()?);
     let bridge = Arc::new(OnceLock::new());
     // Anything unreadable (no file yet, a corrupt one, a storage error)
@@ -107,27 +90,28 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
             WebviewUrl::App(CONNECT_PAGE.into())
         }
     };
-    let guard = Arc::new(Guard {
-        bridge: Arc::clone(&bridge),
-        expected: navigation::Expected::default(),
-    });
+    let guard = Arc::new(Guard::new(Arc::clone(&bridge)));
     let requests = Arc::clone(&guard);
     let handle = app.clone();
-    let launch = app
-        .native()
-        .watch(move |request| show(&handle, &request, &requests))
-        .unwrap_or_else(|error| {
-            // Taps and the shortcut then do nothing; the app still works.
-            log_to_logcat(&error);
-            None
-        });
-    // wry checks the first load against the guard too.
-    let start = launch
-        .and_then(|request| destination::destination(&request, bridge.get()))
-        .map_or(start, |url| {
-            guard.expect(&url);
-            WebviewUrl::External(url)
-        });
+    let launch = app.native().and_then(|native| {
+        native
+            .watch(move |request| show(&handle, &request, &requests))
+            .unwrap_or_else(|error| {
+                log_to_logcat(&error);
+                None
+            })
+    });
+    // An agent on the bridge is the first page. The Bridge page is shown
+    // once the window is up instead: the first page is also what wry
+    // reloads if it ever rebuilds the webview, and the guard refuses a
+    // bundled page there once paired.
+    let (start, later) = match launch
+        .as_ref()
+        .and_then(|request| destination::destination(request, bridge.get()))
+    {
+        Some(url) if navigation::allows(&url, bridge.get()) => (WebviewUrl::External(url), None),
+        _ => (start, launch),
+    };
     app.manage(Shell {
         store,
         connecting: Mutex::new(()),
@@ -135,22 +119,31 @@ fn setup(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     });
     WebviewWindowBuilder::new(app, MAIN, start)
         .use_https_scheme(true)
-        .on_navigation(move |url| guard.allows(url))
+        .on_navigation({
+            let guard = Arc::clone(&guard);
+            move |url| guard.allows(url)
+        })
         .build()?;
+    if let Some(request) = later {
+        show(app, &request, &guard);
+    }
     Ok(())
 }
 
 /// Shows what the Kotlin side asked for, if a bridge is paired.
 fn show(app: &AppHandle, request: &Request, guard: &Guard) {
-    let Some(url) = destination::destination(request, guard.bridge.get()) else {
+    let Some(url) = destination::destination(request, guard.bridge()) else {
         return;
     };
-    guard.expect(&url);
     // No window yet: the request came during setup, before there was
     // anything to show it in.
-    if let Some(window) = app.get_webview_window(MAIN)
-        && let Err(error) = window.navigate(url)
-    {
+    let Some(window) = app.get_webview_window(MAIN) else {
+        return;
+    };
+    // wry checks this load against the guard too.
+    guard.expect(&url);
+    if let Err(error) = window.navigate(url) {
+        guard.unexpect();
         log_to_logcat(&error);
     }
 }
@@ -241,7 +234,10 @@ async fn forget_bridge(app: AppHandle, shell: State<'_, Shell>) -> Result<(), St
         .store
         .forget()
         .map_err(|error| format!("could not forget the address: {error}"))?;
-    app.native().restart().map_err(|error| {
+    let native = app.native().ok_or_else(|| {
+        "forgot the address, but could not restart; close and reopen the app".to_owned()
+    })?;
+    native.restart().map_err(|error| {
         format!("forgot the address, but could not restart: {error}; close and reopen the app")
     })
 }

@@ -162,10 +162,10 @@ safe and the change out of commits (`SecurityConfigTest` rejects it on purpose).
 | Path in `apps/android` | What |
 |---|---|
 | `src/lib.rs`, `src/shell.rs` | The Tauri app: the main window, the app commands (`connect`, `bridge`, `forget_bridge`), the navigation guard, the bridge capability. `shell.rs` builds for Android only |
-| `src/native.rs` | The Tauri plugin `shell`: registers the app's own Kotlin side (`ShellPlugin`, below) and talks to it. Android only |
+| `src/native.rs` | The Tauri plugin `passporter-shell`: registers the app's own Kotlin side (`ShellPlugin`, below) and talks to it. Android only |
 | `src/origin.rs`, `src/navigation.rs`, `src/store.rs`, `src/destination.rs` | The rules, in plain Rust tested on any host: what counts as a bridge origin, which pages the webview may show, where the origin is saved, where a notification tap, the shortcut or a failed load sends the webview |
 | `connect/` | The bundled pages (`frontendDist`): the Connect page (`index.html`) and the Bridge page (`bridge.html`) |
-| `gen/android/app/src/main/java/dev/passporter/app/` | `MainActivity`; `ShellPlugin` (the shell's Kotlin side: intents, restart), `ShellRequest` (what it asks the shell to show), `ShellWebViewClient` (wraps wry's client: refused links to the browser, failed loads) |
+| `gen/android/app/src/main/java/dev/passporter/app/` | `MainActivity` (wraps each new webview's client); `ShellPlugin` (the shell's Kotlin side: intents, restart), `ShellRequest` (what it asks the shell to show), `ShellWebViewClient` (wraps wry's client: refused links to the browser, failed loads, history), `BridgeShortcutActivity` (the shortcut's trampoline) |
 | `tauri.conf.json` | App id `dev.passporter.app`, name, the Connect page's CSP |
 | `gen/android/` | The Gradle project from `cargo tauri android init`, trimmed: manifest, theme, icons, network security config, signing, JVM tests. Build output and the files Tauri regenerates on each build are gitignored |
 
@@ -178,9 +178,11 @@ Only Passporter's own pages reach native IPC, by three fences:
    they open the bridge. Once paired, only the shell itself opens its
    Bridge page (`destination.rs`): wry checks the shell's own loads against
    the guard too, so the shell names the page's exact URL first and the
-   guard lets that one load through once (`navigation::Expected`). The
-   bridge's pages cannot navigate there, and the Bridge page clears the
-   history, so Back and Forward cannot return to it either.
+   guard lets that one load through once (`navigation::Guard`). No page
+   can navigate there itself (`ShellWebViewClient` refuses it before the
+   guard), and the history never holds a bundled page beside another one,
+   so Back and Forward cannot reach it either. A bridge URL that fails to
+   load does bring it up ([The Bridge page](#the-bridge-page)).
    The PWA's CSP (`default-src 'self'`) keeps other origins out of frames
    and scripts. A refused link you tapped opens in the browser instead
    ([Links](#links-taps-and-the-bridge-page)); the webview itself still
@@ -192,7 +194,7 @@ Only Passporter's own pages reach native IPC, by three fences:
    It lists the plugin permissions the PWA may use (none yet).
 3. **App commands.** The app has no ACL manifest, so Tauri refuses its own
    commands (`connect`, `bridge`, `forget_bridge`) to every remote page;
-   only the bundled pages can call them. The `shell` plugin has no
+   only the bundled pages can call them. The `passporter-shell` plugin has no
    permissions at all, so no page reaches its Kotlin commands (`watch`,
    `restart`); only Rust calls them.
 
@@ -219,8 +221,10 @@ frame from borrowing the bridge capability, and a message sent while the
 Connect page is being replaced can even count as local. (The same holds
 the other way: a message the bridge's page sends while the shell replaces
 it with the Bridge page can count as local, and so reach the app commands.
-The bridge's own PWA sends none; the worst would be `forget_bridge`.)
-That is harmless while the capability grants nothing and no local capability exists; the
+The bridge's own PWA sends none, but a bridge page can bring up the
+Bridge page by loading a URL that fails; the worst would be
+`forget_bridge`.) That is harmless while the capability grants nothing
+and no local capability exists; the
 first plugin task gates the grant on the feature and must not add a local
 capability.
 
@@ -279,7 +283,8 @@ ignores every request until a bridge is paired.
 
 - **A notification tap** opens `MainActivity` with the agent in the intent.
   Cold (the app was closed), the window starts on `https://<bridge>/agent/<id>`;
-  warm, the shell sends the webview there. The id is checked against the
+  warm, the shell sends the webview there. An intent Android delivers
+  again when it restores the app from Recents is ignored. The id is checked against the
   bridge's id rules on both sides (`AgentId`), and the URL against the
   navigation guard.
 - **A link to another site** that you tap in the PWA (the link confirm's
@@ -304,11 +309,15 @@ address, a button back to it, and *Change address*. The shell opens it
   opens offline and shows its own offline state). The button reads
   *Retry*;
 - from the launcher: long-press the icon and choose *Bridge* (a static
-  shortcut, `res/xml/shortcuts.xml`).
+  shortcut, `res/xml/shortcuts.xml`). Android starts a static shortcut
+  with `FLAG_ACTIVITY_CLEAR_TASK`, which would destroy a running
+  `MainActivity` and its webview, so the shortcut opens
+  `BridgeShortcutActivity`, in a task of its own, which passes the request
+  on to `MainActivity`.
 
-The page starts a fresh history: Back from it leaves the app (rather than
-reloading a bridge page that failed), and *Retry* or *Open Passporter*
-replaces it with the bridge. Both go to the bridge's start page, not to
+The page has a fresh history (no bundled page shares one with another
+page): Back from it leaves the app rather than reloading a bridge page
+that failed, and *Retry* or *Open Passporter* replaces it with the bridge. Both go to the bridge's start page, not to
 the agent a failed tap asked for.
 
 *Change address* asks once more, then calls `forget_bridge`: the shell

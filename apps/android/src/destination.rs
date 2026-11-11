@@ -5,7 +5,7 @@
 //! The Kotlin side only names a [`Request`]; every URL is built here, from
 //! the saved bridge origin and nothing else. wry checks the shell's own
 //! loads against the navigation guard too, so the shell lets the Bridge
-//! page through once by its exact URL ([`crate::navigation::Expected`]);
+//! page through once by its exact URL ([`crate::navigation::Guard`]);
 //! the bridge's pages still cannot navigate to the bundled pages themselves.
 
 use protocol::AgentId;

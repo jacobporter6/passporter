@@ -23,32 +23,23 @@ class WatchArgs {
 }
 
 /**
- * The shell's own Kotlin side: the Tauri plugin `shell`
+ * The shell's own Kotlin side: the Tauri plugin `passporter-shell`
  * (`apps/android/src/native.rs`). Only Rust calls it: the plugin has no
  * permissions, so Tauri refuses its commands to every page.
  *
  * It tells the shell what to show ([ShellRequest]): the intent that started
- * the app (answered by [watch]) and each later one ([onNewIntent], which
- * Tauri forwards from `MainActivity`), and failed loads. It opens refused
- * links in the browser ([ShellWebViewClient]) and restarts the app ([restart]).
+ * the app (answered by [watch]), each later one ([onNewIntent], which Tauri
+ * forwards from `MainActivity`), and failed loads ([wrap]). It restarts the
+ * app ([restart]).
+ *
+ * Tauri makes one instance per process. wry may build a new webview (and a
+ * new activity) in the same process, so what outlives one of them (the
+ * channel to the shell) lives in the companion, and each webview is wrapped
+ * as it is made (`MainActivity.onWebViewCreate`).
  */
 @TauriPlugin
-// One instance per process, holding the activity Tauri created it with: the
-// shell has one activity, its config changes keep the webview, and when it
-// is destroyed Tauri's event loop ends with it (no second webview to wrap).
 class ShellPlugin(private val activity: Activity) : Plugin(activity) {
-    private var requests: Channel? = null
     private var launchTaken = false
-
-    override fun load(webView: WebView) {
-        // Tauri loads plugins once wry has set its client on the webview,
-        // and before the first page loads.
-        webView.webViewClient = ShellWebViewClient(
-            inner = webView.webViewClient,
-            onLoadFailed = { send(ShellRequest.LoadFailed) },
-            openInBrowser = ::openInBrowser,
-        )
-    }
 
     /** `{channel}` → `{launch?}`: what the starting intent asked for, once. */
     @Command
@@ -73,25 +64,47 @@ class ShellPlugin(private val activity: Activity) : Plugin(activity) {
         // TODO(T32c): forget the native pairing here (DeviceAuth.forget) once
         // the device plugin is on the branch.
         invoke.resolve()
-        val main = Intent.makeRestartActivityTask(ComponentName(activity, MainActivity::class.java))
-        activity.startActivity(main)
+        val app = activity.applicationContext
+        app.startActivity(Intent.makeRestartActivityTask(ComponentName(app, MainActivity::class.java)))
         Runtime.getRuntime().exit(0)
     }
 
-    private fun send(request: ShellRequest) {
-        requests?.send(request.toJson())
-    }
+    companion object {
+        private const val TAG = "PassporterShell"
 
-    private fun openInBrowser(url: Uri) {
-        val view = Intent(Intent.ACTION_VIEW, url).addCategory(Intent.CATEGORY_BROWSABLE)
-        try {
-            activity.startActivity(view)
-        } catch (e: ActivityNotFoundException) {
-            Log.w(TAG, "no app opens web links", e)
+        /** Where requests go once the shell [watch]es; process-wide. */
+        @Volatile
+        private var requests: Channel? = null
+
+        /**
+         * Wraps [webView]'s client in a [ShellWebViewClient] once wry has set
+         * it: call it from `onWebViewCreate`, which runs just before wry sets
+         * the client, and it runs on the next turn of the UI loop, before
+         * the first page loads (wry posts that load after this).
+         */
+        fun wrap(activity: Activity, webView: WebView) {
+            webView.post {
+                val inner = webView.webViewClient
+                if (inner is ShellWebViewClient) return@post
+                webView.webViewClient = ShellWebViewClient(
+                    inner = inner,
+                    onLoadFailed = { send(ShellRequest.LoadFailed) },
+                    openInBrowser = { openInBrowser(activity, it) },
+                )
+            }
         }
-    }
 
-    private companion object {
-        const val TAG = "PassporterShell"
+        private fun send(request: ShellRequest) {
+            requests?.send(request.toJson())
+        }
+
+        private fun openInBrowser(activity: Activity, url: Uri) {
+            val view = Intent(Intent.ACTION_VIEW, url).addCategory(Intent.CATEGORY_BROWSABLE)
+            try {
+                activity.startActivity(view)
+            } catch (e: ActivityNotFoundException) {
+                Log.w(TAG, "no app opens web links", e)
+            }
+        }
     }
 }

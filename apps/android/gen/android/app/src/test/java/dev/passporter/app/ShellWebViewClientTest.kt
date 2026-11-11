@@ -83,6 +83,15 @@ class ShellWebViewClientTest {
     }
 
     @Test
+    fun noPageMayOpenTheBridgePage() {
+        for (page in listOf("https://tauri.localhost/bridge.html", "https://tauri.localhost/bridge.html?unreachable")) {
+            assertTrue(page, client.shouldOverrideUrlLoading(view, Request(page)))
+        }
+        assertEquals("refused before the guard", emptyList<String>(), inner.calls)
+        assertEquals(emptyList<Uri>(), opened)
+    }
+
+    @Test
     fun aRefusedLinkTheUserTappedOpensInTheBrowser() {
         client.shouldOverrideUrlLoading(view, Request("https://example.com/docs"))
         client.shouldOverrideUrlLoading(view, Request("${bridge}settings"))

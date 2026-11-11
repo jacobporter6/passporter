@@ -1,6 +1,6 @@
 //! The shell's own Kotlin side, `dev.passporter.app.ShellPlugin`
 //! (`gen/android/app/src/main/java/dev/passporter/app/`), registered as the
-//! Tauri plugin `shell`.
+//! Tauri plugin `passporter-shell`.
 //!
 //! It tells the shell what to show ([`Request`]: a notification tap, the
 //! *Bridge* shortcut, a failed load) and restarts the app after the bridge
@@ -69,19 +69,19 @@ impl<R: Runtime> Native<R> {
 
 /// Access to the [`Native`] plugin from an app handle.
 pub(crate) trait NativeExt<R: Runtime> {
-    /// The registered plugin.
-    fn native(&self) -> &Native<R>;
+    /// The registered plugin, or `None` if it failed to register.
+    fn native(&self) -> Option<&Native<R>>;
 }
 
 impl<R: Runtime, T: Manager<R>> NativeExt<R> for T {
-    fn native(&self) -> &Native<R> {
-        self.state::<Native<R>>().inner()
+    fn native(&self) -> Option<&Native<R>> {
+        self.try_state::<Native<R>>().map(|state| state.inner())
     }
 }
 
 /// The plugin, for `AppHandle::plugin`.
 pub(crate) fn init<R: Runtime>() -> TauriPlugin<R> {
-    Builder::new("shell")
+    Builder::new("passporter-shell")
         .setup(|app, api| {
             let handle = api.register_android_plugin(PACKAGE, CLASS)?;
             app.manage(Native(handle));

@@ -19,12 +19,15 @@ if (unreachable) {
 }
 
 let origin = null;
+// Nothing to open or change until the shell answers.
+openButton.disabled = true;
+document.getElementById("change").disabled = true;
 
 async function load() {
   try {
     origin = await invoke("bridge");
   } catch (reason) {
-    error.textContent = String(reason);
+    error.textContent = `${reason}. Close and reopen the app.`;
     return;
   }
   if (origin === null) {
@@ -34,6 +37,8 @@ async function load() {
   }
   document.getElementById("address").textContent = origin;
   document.getElementById("confirm-address").textContent = origin;
+  openButton.disabled = false;
+  document.getElementById("change").disabled = false;
 }
 
 openButton.addEventListener("click", () => {
