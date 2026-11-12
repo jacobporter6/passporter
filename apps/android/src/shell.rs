@@ -41,8 +41,9 @@ const BRIDGE_CAPABILITY: &str = "bridge";
 
 /// Why [`forget_bridge`] refuses on a `WebView` without
 /// `WEB_MESSAGE_LISTENER`, and what to do instead.
-const OLD_WEBVIEW_FORGET: &str = "This phone's Android System WebView is too old to change the \
-     bridge here. Update it, or clear Passporter's storage in Android's app settings to start over.";
+const OLD_WEBVIEW_FORGET: &str = "The app can't change the bridge safely on this WebView (an \
+     old Android System WebView?). Update it, or clear Passporter's storage in Android's app \
+     settings to start over.";
 
 /// Shared between the `connect` command and the navigation guard.
 struct Shell {

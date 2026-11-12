@@ -327,21 +327,7 @@ async fn attempt(app: AppState, generation: u32) -> Attempt {
             schedule(app, generation, expires_in_secs);
             Attempt::Done
         }
-        Err(DeviceAuthError::NativeUnavailable(message)) => {
-            leptos::logging::warn!("the app's device identity failed: {message}; retrying");
-            if !native::probe().await.maybe_paired() && GENERATION.get() == generation {
-                // The native layer says it is not paired: its key is gone,
-                // or it could not read the bridge's address. Show the app
-                // unpaired, so the user can pair again, but keep the
-                // identity and keep trying: a file that could not be read
-                // may be readable next time, and a success shows it paired.
-                app.token.set(None);
-                app.token_rejected.set(true);
-                set_credential(Credential::None);
-            }
-            Attempt::Later
-        }
-        Err(error) if error.is_retryable() => Attempt::Retry,
+        Err(error) if error.is_retryable() && !native_unavailable(&error) => Attempt::Retry,
         Err(DeviceAuthError::Refused) => {
             // Refused even with a fresh challenge, yet the bridge knows the
             // device: keep the key and keep trying (rate limits pace it).
@@ -361,18 +347,35 @@ async fn attempt(app: AppState, generation: u32) -> Attempt {
         Err(error) => {
             leptos::logging::warn!("signing in failed: {error}");
             let lost = matches!(device, Identity::Native) && !native::probe().await.maybe_paired();
-            if lost && GENERATION.get() == generation {
-                // The native layer lost its pairing (its key is gone): the
-                // app is unpaired, but nothing more is deleted.
-                DEVICE.set(None);
-                spawn_local(push::module::turn_off(app.token.get_untracked()));
-                app.token.set(None);
-                app.token_rejected.set(true);
-                set_credential(Credential::None);
+            if lost {
+                if GENERATION.get() == generation {
+                    // The native layer lost its pairing (its key is gone,
+                    // or it cannot read the bridge's address): the app is
+                    // unpaired, but nothing more is deleted.
+                    DEVICE.set(None);
+                    spawn_local(push::module::turn_off(app.token.get_untracked()));
+                    app.token.set(None);
+                    app.token_rejected.set(true);
+                    set_credential(Credential::None);
+                }
+                return Attempt::Stop;
             }
-            Attempt::Stop
+            // Still paired natively: a busy Keystore or a plugin failure
+            // may pass, so try again, ever more slowly.
+            if native_unavailable(&error) {
+                Attempt::Later
+            } else {
+                Attempt::Stop
+            }
         }
     }
+}
+
+/// Whether `error` is the native identity failing in a way that may pass,
+/// retried with backoff ([`Attempt::Later`]) while the native layer still
+/// says it is paired.
+fn native_unavailable(error: &DeviceAuthError) -> bool {
+    matches!(error, DeviceAuthError::NativeUnavailable(_))
 }
 
 /// Renews shortly before a token that lasts `expires_in_secs` expires.

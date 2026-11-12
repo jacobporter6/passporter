@@ -49,7 +49,8 @@ audit:
 web-build:
     #!/usr/bin/env bash
     set -euo pipefail
-    export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=$(rustc --print sysroot)=/rustc"
+    remap=$(just _web-remap)
+    eval "$remap"
     cd crates/web && trunk build --release --locked
 
 # Fail if the PWA's gzipped WASM is over budget (400 KiB).
@@ -58,7 +59,23 @@ web-size: web-build
 
 # Serve the PWA on 127.0.0.1:8080 with the production CSP (no autoreload).
 web-serve:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    remap=$(just _web-remap)
+    eval "$remap"
     cd crates/web && trunk serve --release --locked
+
+# The path remap `web-build` and `web-serve` share, as an `export` line.
+# Cargo ignores per-target flags when RUSTFLAGS is set, so that is refused.
+_web-remap:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -n "${RUSTFLAGS:-}${CARGO_ENCODED_RUSTFLAGS:-}" ]]; then
+        echo "web: unset RUSTFLAGS: it would drop the path remap and change the WASM sizes" >&2
+        exit 1
+    fi
+    printf 'export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS=%q\n' \
+        "--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=$(rustc --print sysroot)=/rustc"
 
 # Documentation site (docs-site/, needs Node 22+): tests, build, link and render checks. Not part of `gate`.
 docs:

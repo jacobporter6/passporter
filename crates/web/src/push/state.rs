@@ -39,8 +39,8 @@ impl Unavailable {
                 "In the app, notifications come through UnifiedPush (ntfy), not this switch."
             }
             Self::NativeOff => {
-                "Notifications need the app's native features, which this WebView can't run: \
-                 update Android System WebView."
+                "Notifications need the app's native features, which are off here \
+                 (an old Android System WebView?). Update it, then reopen the app."
             }
             Self::PairInApp => {
                 "Notifications need the app's own pairing: forget this phone, then pair it again."
