@@ -2,10 +2,12 @@ package dev.passporter.recorder
 
 import android.content.Context
 import android.os.SystemClock
+import android.util.Log
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /** Runs work on the recorder's thread, now or later. */
 internal fun interface Scheduler {
@@ -252,12 +254,22 @@ class Recorder internal constructor(
 
         /**
          * [discardAll] on the app's recorder, on [worker], waiting at most
-         * [DISCARD_WAIT_MS] for it. Blocking: never on the recorder's thread.
+         * [DISCARD_WAIT_MS] for it. If the recorder's thread is stuck (a
+         * microphone that does not stop), the take files are deleted
+         * directly instead, so none outlives the call. Blocking: never on
+         * the recorder's thread.
          */
         fun discardAll(context: Context) {
             val app = context.applicationContext
-            worker.submit { get(app).discardAll() }.get(DISCARD_WAIT_MS, TimeUnit.MILLISECONDS)
+            try {
+                worker.submit { get(app).discardAll() }.get(DISCARD_WAIT_MS, TimeUnit.MILLISECONDS)
+            } catch (e: TimeoutException) {
+                Log.w(TAG, "the recorder is busy; deleting the takes directly", e)
+                File(app.noBackupFilesDir, DIR).listFiles()?.forEach { it.delete() }
+            }
         }
+
+        private const val TAG = "PassporterRecorder"
 
         private const val DISCARD_WAIT_MS = 5_000L
 

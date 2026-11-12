@@ -5,6 +5,7 @@ import android.content.Context
 import android.util.Log
 import androidx.core.app.NotificationManagerCompat
 import androidx.work.Constraints
+import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest
@@ -72,14 +73,16 @@ object Reconciler {
 
     /**
      * Checks once [ANSWER_GRACE_MS] (and a little) from now, network or
-     * not: an answer's notification whose job is not queued by then was
-     * lost, and says so. A later tap moves the check later. Waits until
+     * not, for leftovers only (news is compared with the agent list on
+     * resume and after a sent answer, as before): an answer's notification
+     * whose job is not queued by then was lost, and says so. A later tap moves the check later. Waits until
      * WorkManager has it, so call it before the tap's notification shows
      * it sending. Blocking.
      */
     fun checkLeftoversLater(context: Context) {
         val request = OneTimeWorkRequest.Builder(ReconcileWorker::class.java)
             .setInitialDelay(ANSWER_GRACE_MS + LEFTOVER_MARGIN_MS, TimeUnit.MILLISECONDS)
+            .setInputData(Data.Builder().putBoolean(LEFTOVERS_ONLY, true).build())
             .build()
         try {
             WorkManager.getInstance(context)
@@ -134,6 +137,9 @@ object Reconciler {
 
     private const val LEFTOVER_MARGIN_MS = 10_000L
 
+    /** Input of a check that only settles leftovers ([checkLeftoversLater]). */
+    internal const val LEFTOVERS_ONLY = "leftoversOnly"
+
     private const val TAG = "PassporterNotify"
 
     /** How old an answer's notification must be to count as a leftover: past its tap's queueing. */
@@ -169,6 +175,7 @@ class ReconcileWorker internal constructor(
 
     override fun doWork(): Result {
         clearLeftovers()
+        if (inputData.getBoolean(Reconciler.LEFTOVERS_ONLY, false)) return Result.success()
         val shown = Reconciler.shown(applicationContext)
         if (shown.isEmpty()) return Result.success()
         val response = try {

@@ -52,7 +52,7 @@ class OutboxSender(
         when (val now = paired()) {
             // Unsure (a busy Keystore): neither sent nor dropped yet.
             PairedAs.Unknown -> return SendOutcome.Retry(null)
-            else -> if (now.isNot(job.device)) return SendOutcome.Final(changed(job))
+            else -> if (now.isNot(job.device)) return SendOutcome.Final(NotSent.PAIRING_CHANGED)
         }
         val body = frozen.get(job.key) ?: when (val prepared = prepare(job)) {
             is Prepared.Body -> prepared.json.also { frozen.put(job.key, it) }
@@ -174,20 +174,15 @@ class OutboxSender(
             null
         }
 
-    /**
-     * Why [job] of another pairing is not sent: [NotSent.PAIRING_CHANGED],
-     * or [NotSent.UNCERTAIN] once its body was sent (it may have arrived).
-     */
-    private fun changed(job: OutboxJob): NotSent =
-        if (frozen.get(job.key) != null) NotSent.UNCERTAIN else NotSent.PAIRING_CHANGED
-
     /** A failure to get an answer at all, from [dev.passporter.device.DeviceAuth]. */
     private fun failure(job: OutboxJob, e: DeviceAuthException): SendOutcome {
         // Unpaired or paired anew between the check and the request (a
         // key deleted mid-sign-in, a forgotten bridge): never the old
         // conversation brought back as a failure.
         // A revocation (410) forgets the pairing itself: that one says not paired.
-        if (e !is DeviceAuthException.Forgotten && paired().isNot(job.device)) return SendOutcome.Final(changed(job))
+        val changed = e is DeviceAuthException.OtherDevice ||
+            (e !is DeviceAuthException.Forgotten && paired().isNot(job.device))
+        if (changed) return SendOutcome.Final(NotSent.PAIRING_CHANGED)
         return when (e) {
             // Refused: a sign-in the bridge lost (a restart mid-challenge, say).
             is DeviceAuthException.Unreachable, is DeviceAuthException.ServerError, is DeviceAuthException.Refused ->

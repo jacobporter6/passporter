@@ -87,6 +87,16 @@ class DeviceAuth internal constructor(
     fun status(): DeviceStatus = synchronized(state) { DeviceStatus(record()?.deviceId) }
 
     /**
+     * The device id saved for the saved bridge, without asking the Keystore
+     * whether its key still exists (as [status] does): two small file
+     * reads, for a check on the main thread. A key lost to a Keystore reset
+     * still counts here until [status] or a sign-in notices.
+     */
+    fun savedDevice(): DeviceId? = synchronized(state) {
+        store.load()?.takeIf { it.origin == origin() }?.deviceId
+    }
+
+    /**
      * Calls [listener] after every [pair] that succeeds and every [forget]
      * (not when the bridge revokes the device: that surfaces as
      * [DeviceAuthException.Forgotten] to whoever asked for a token).
@@ -197,7 +207,7 @@ class DeviceAuth internal constructor(
      * absolute (`/v1/...`), [jsonBody] goes as `application/json` (not with
      * [Method.GET]). With [device], it goes only as that device: a token of
      * any other pairing (one made after a new pairing that raced the
-     * caller's own check) is refused as [DeviceAuthException.NotPaired]
+     * caller's own check) is refused as [DeviceAuthException.OtherDevice]
      * before anything is sent. A 401 is
      * retried once with a fresh token. Any answer the bridge gives is
      * returned as is; only failing to get a token throws.
@@ -222,7 +232,12 @@ class DeviceAuth internal constructor(
 
     /** [token] for [scope], if it was made for [device] (when given). */
     private fun token(scope: Scope, device: DeviceId?): SessionToken =
-        token(scope).also { if (device != null && it.device != device) throw DeviceAuthException.NotPaired() }
+        try {
+            token(scope)
+        } catch (e: DeviceAuthException.NotPaired) {
+            if (device != null) throw DeviceAuthException.OtherDevice()
+            throw e
+        }.also { if (device != null && it.device != device) throw DeviceAuthException.OtherDevice() }
 
     private fun sendWith(token: SessionToken, method: Method, url: String, jsonBody: String?): HttpResponse {
         val headers = buildMap {

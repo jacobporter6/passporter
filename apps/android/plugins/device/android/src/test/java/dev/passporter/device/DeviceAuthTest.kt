@@ -330,7 +330,16 @@ class DeviceAuthTest {
         assertEquals(200, auth.send(Scope.APP, Method.GET, "/v1/agents", device = id).status)
         val other = checkNotNull(DeviceId.parse("dev-fedcba9876543210"))
         val asked = bridge.sent.size
-        assertThrows(DeviceAuthException.NotPaired::class.java) { auth.send(Scope.APP, Method.GET, "/v1/agents", device = other) }
+        assertThrows(DeviceAuthException.OtherDevice::class.java) { auth.send(Scope.APP, Method.GET, "/v1/agents", device = other) }
         assertEquals("nothing sent", asked, bridge.sent.size)
+    }
+
+    @Test
+    fun theSavedDeviceNeedsNoKeystore() {
+        assertNull(auth.savedDevice())
+        val id = auth.pair(code, null)
+        assertEquals(id, auth.savedDevice())
+        origin = BridgeOrigin.parse("https://other.example.org")
+        assertNull("another bridge's record", auth.savedDevice())
     }
 }

@@ -141,13 +141,16 @@ class CarReplySender(
     private fun failure(job: CarJob, e: DeviceAuthException): CarOutcome {
         // Unpaired or paired anew between the check and the request.
         // A revocation (410) forgets the pairing itself: that one says not paired.
-        if (e !is DeviceAuthException.Forgotten && paired().isNot(job.device)) return CarOutcome.Trouble(CarTrouble.PAIRING_CHANGED)
+        val changed = e is DeviceAuthException.OtherDevice ||
+            (e !is DeviceAuthException.Forgotten && paired().isNot(job.device))
+        if (changed) return CarOutcome.Trouble(CarTrouble.PAIRING_CHANGED)
         return when (e) {
             is DeviceAuthException.Unreachable, is DeviceAuthException.ServerError, is DeviceAuthException.Refused,
             is DeviceAuthException.RateLimited,
             -> CarOutcome.Retry
             is DeviceAuthException.NotPaired, is DeviceAuthException.Forgotten, is DeviceAuthException.NoBridge ->
                 CarOutcome.Trouble(CarTrouble.NOT_PAIRED)
+            is DeviceAuthException.OtherDevice -> CarOutcome.Trouble(CarTrouble.PAIRING_CHANGED)
             is DeviceAuthException.TooManyDevices, is DeviceAuthException.BadResponse, is DeviceAuthException.Keystore,
             is DeviceAuthException.Storage, is DeviceAuthException.InvalidInput,
             -> CarOutcome.Trouble(CarTrouble.FAILED)

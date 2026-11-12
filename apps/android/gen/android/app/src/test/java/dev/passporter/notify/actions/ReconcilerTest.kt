@@ -5,6 +5,7 @@ import android.app.Application
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
+import androidx.work.Data
 import androidx.work.ListenableWorker
 import androidx.work.WorkerFactory
 import androidx.work.WorkerParameters
@@ -84,8 +85,9 @@ class ReconcilerTest {
      * Runs the check against [bridge], with the outbox's jobs [queued] and
      * the clock at [now] (by default, every notification is past its grace).
      */
-    private fun run(bridge: Bridge, queued: Set<String> = setOf(KEY), now: Long = Long.MAX_VALUE / 2) =
+    private fun run(bridge: Bridge, queued: Set<String> = setOf(KEY), now: Long = Long.MAX_VALUE / 2, input: Data = Data.EMPTY) =
         TestListenableWorkerBuilder<ReconcileWorker>(context)
+            .setInputData(input)
             .setWorkerFactory(object : WorkerFactory() {
                 override fun createWorker(appContext: Context, workerClassName: String, workerParameters: WorkerParameters): ListenableWorker =
                     ReconcileWorker(appContext, workerParameters, bridge, frozen, { it in queued }, { now })
@@ -160,6 +162,16 @@ class ReconcilerTest {
         ActionFeedback(context).notSent(job, NotSent.UNCERTAIN)
         // The agent moved on, and the job is long gone: still shown.
         run(FakeBridge { HttpResponse(200, "[]") }, queued = emptySet())
+        assertEquals(setOf("w1:p1"), tags())
+    }
+
+    /** The check after a tap settles leftovers only: news is left to the resume and a sent answer. */
+    @Test
+    fun theCheckAfterATapLeavesTheNewsAlone() {
+        show(notice())
+        val bridge = FakeBridge { HttpResponse(200, "[]") }
+        run(bridge, input = Data.Builder().putBoolean(Reconciler.LEFTOVERS_ONLY, true).build())
+        assertTrue(bridge.requests.isEmpty())
         assertEquals(setOf("w1:p1"), tags())
     }
 }

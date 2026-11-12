@@ -358,7 +358,7 @@ deciding it again. The bridge's own rules still apply on top
 | `failed` (herdr failed after sending) | *Not sure it arrived: open the app* (never resent) |
 | no answer, 5xx, 429, a sign-in the bridge refused | retried; after the last attempt *Couldn't reach the bridge: open the app*, or *Not sure it arrived* once the action itself was sent |
 | not paired or revoked | *Not paired: open the app* |
-| paired anew since you answered | nothing is sent; *Not paired: open the app* on its notification, if it still shows (*Not sure it arrived* if an earlier attempt sent it) |
+| paired anew since you answered | nothing is sent; *Not paired: open the app* on its notification, if it still shows |
 
 If news replaced the notification meanwhile (a new dialog, a new turn), the
 news stays and the older answer's outcome is not shown.
@@ -371,7 +371,7 @@ turn's once it is no longer unread, and any whose agent is gone (an
 agent herdr cannot tell about keeps its notification). An answer's
 notification still *Sending…* once its job is no longer queued (the
 app died between showing it and queueing it) says *Not sent: open the
-app*, never cleared as if sent; each tap schedules that check a little
+app*, never cleared as if sent; each tap schedules that check (and only that one) a little
 past its minute of grace, so it does not wait for the app to open. The
 frozen bodies of jobs that are gone are dropped. A
 final outcome (*Already answered*, *Not sure it arrived*, ...) stays until
@@ -683,11 +683,16 @@ were registered for), and each job keeps it: a tap, a car reply or a
 queued job made for another device than the one the app is paired as now
 sends nothing (`DeviceStamp`, `NotSent.PAIRING_CHANGED`,
 `CarTrouble.PAIRING_CHANGED`; `DeviceAuth.send` also refuses a token of
-another pairing, should one be made between the check and the request),
+another pairing, should one be made between the check and the request,
+as `OtherDevice`),
 and an old conversation is never brought back for it. When the app
 cannot tell what it is paired as (a busy Keystore just after boot), a
-job waits and retries rather than being dropped, and a push is shown. A push decrypted
-with an older pairing's keys (not yet replaced) is dropped unseen.
+job waits and retries rather than being dropped. A push decrypted
+with an older pairing's keys (not yet replaced) is dropped unseen; that
+check reads the saved device id (`DeviceAuth.savedDevice`), never the
+Keystore, since a push from cold arrives on the main thread. The reset
+also runs when the PWA forgets the pairing, so that drops unsent
+dictation too.
 
 Any app can send `MainActivity` the tap or shortcut intent, because a
 launcher activity is exported. The worst that does is open an agent's

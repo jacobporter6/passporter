@@ -60,8 +60,8 @@ class IncomingPush(
          * Whether [record] holds a registration of the pairing the app has
          * now ([paired]). Keys of an older one, not yet replaced after a new
          * pairing, are not: their notices must not come back into the shade
-         * the pairing change cleared. When the app cannot tell (a busy
-         * Keystore after boot), a registration counts.
+         * the pairing change cleared. When the app cannot tell, a
+         * registration counts.
          */
         fun isCurrent(record: PushRecord, paired: PairedAs): Boolean =
             record.registration != null && !paired.isNot(record.owner?.let(DeviceId::parse))

@@ -244,12 +244,24 @@ class OutboxSenderTest {
         assertEquals(SendOutcome.Final(NotSent.PAIRING_CHANGED), OutboxSender(bridge, frozen) { paired }.send(job(NoticeAction.REPLY, "hi")))
     }
 
-    /** Its body went out before the pairing changed: it may have arrived, so it is not said to be unsent. */
+    /** Even with a frozen body: it belongs to the old pairing, whose conversation is never brought back. */
     @Test
-    fun anAnswerOfAnotherPairingWhoseBodyWasSentMayHaveArrived() {
+    fun anAnswerOfAnotherPairingWithAFrozenBodyIsDroppedAndItsBodyForgotten() {
         frozen.put(KEY, "{}")
         val outcome = OutboxSender(FakeBridge.of(), frozen) { PairedAs.Device(OTHER_DEVICE) }.send(job(NoticeAction.REPLY, "hi"))
-        assertEquals(SendOutcome.Final(NotSent.UNCERTAIN), outcome)
+        assertEquals(SendOutcome.Final(NotSent.PAIRING_CHANGED), outcome)
+        assertTrue(frozen.bodies.isEmpty())
+    }
+
+    /** `DeviceAuth` refused a token of another pairing: dropped, without asking the Keystore again. */
+    @Test
+    fun aTokenOfAnotherDeviceEndsAsPairingChangedEvenWhenThePairingCannotBeRead() {
+        var paired: PairedAs = PairedAs.Device(DEVICE)
+        val bridge = FakeBridge {
+            paired = PairedAs.Unknown
+            throw DeviceAuthException.OtherDevice()
+        }
+        assertEquals(SendOutcome.Final(NotSent.PAIRING_CHANGED), OutboxSender(bridge, frozen) { paired }.send(job(NoticeAction.REPLY, "hi")))
     }
 
     /** Its key deleted mid-sign-in by a forget: not a failure that would bring the old conversation back. */
