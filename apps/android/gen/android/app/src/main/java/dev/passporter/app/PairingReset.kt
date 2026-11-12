@@ -13,8 +13,8 @@ import dev.passporter.recorder.Recorder
 
 /**
  * Drops what the app keeps for one pairing, once the pairing or the bridge
- * changes: on *Change address* ([ShellPlugin.restart]) and after every
- * pairing and forget ([PassporterApplication]'s pairing listener). Agent
+ * changes: after every pairing and forget ([PassporterApplication]'s
+ * pairing listener), *Change address* included ([ShellPlugin.restart]). Agent
  * ids repeat across bridges (`w1:p1`), so none of it may reach the next
  * one:
  *

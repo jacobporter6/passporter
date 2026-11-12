@@ -24,21 +24,25 @@ sealed interface Incoming {
     /** Decrypted, but not UTF-8 text: dropped. */
     data object NotText : Incoming
 
-    /** The app holds no registration (it was unpaired since): dropped. */
+    /**
+     * The app holds no registration for the device it is paired as now
+     * (it was unpaired, or paired anew and the keys are not replaced yet): dropped.
+     */
     data object NotRegistered : Incoming
 }
 
 /**
  * Turns a push message from the distributor into notifications: only one
  * the connector decrypted with this app's Web Push keys (RFC 8291), and
- * only while the app holds a registration (unpairing drops it). Everything
+ * only while the app holds a registration for the device it is paired as
+ * now (unpairing and a new pairing drop it). Everything
  * it needs travels in the message, so it works under Doze, with no network,
  * and it takes no lock a slow sign-in could hold.
  */
 class IncomingPush(
     /** Shows a decrypted payload (`NoticeNotifier.show`). */
     private val show: (String) -> NoticeOutcome,
-    /** Whether the app holds a registration ([PushStore]). */
+    /** Whether the app holds a registration ([PushStore]) made for the device it is paired as now. */
     private val registered: () -> Boolean,
 ) {
     /** Shows [message], or says why not. Never logs or returns its content. */

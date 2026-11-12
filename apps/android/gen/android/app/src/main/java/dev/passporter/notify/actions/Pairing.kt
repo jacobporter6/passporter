@@ -9,17 +9,19 @@ import dev.passporter.device.DeviceId
 
 /**
  * The device this app is paired as now ([DeviceAuth.status]), or `null`:
- * unpaired, or the Keystore failed. Blocking (Keystore work): never on the
- * main thread. Tests replace it.
+ * unpaired, or the Keystore failed. Blocking (a Keystore look-up; it never
+ * waits for a sign-in). Tests replace it, and put [currentDevice] back.
  */
-internal var pairedDevice: (Context) -> DeviceId? = { context ->
+internal var pairedDevice: (Context) -> DeviceId? = ::currentDevice
+
+/** [pairedDevice] in the app: [DeviceAuth.status]. */
+internal fun currentDevice(context: Context): DeviceId? =
     try {
         DeviceAuth.get(context).status().deviceId
     } catch (e: DeviceAuthException) {
         Log.w("PassporterNotify", "could not read the pairing: ${e.code}")
         null
     }
-}
 
 /**
  * The device a notification's action intents were made for, stamped on

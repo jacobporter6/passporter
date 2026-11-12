@@ -40,6 +40,7 @@ import dev.passporter.notify.actions.NotSent
 import dev.passporter.notify.actions.Outbox
 import dev.passporter.notify.actions.OutboxJob
 import dev.passporter.notify.actions.Reconciler
+import dev.passporter.notify.actions.currentDevice
 import dev.passporter.notify.actions.pairedDevice
 import dev.passporter.notify.notice
 import org.json.JSONObject
@@ -48,6 +49,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -74,6 +76,11 @@ class CarFlowTest {
                 CarReplyWorker::class.java.name -> CarReplyWorker(appContext, workerParameters, bridge)
                 else -> null
             }
+    }
+
+    @After
+    fun restore() {
+        pairedDevice = ::currentDevice
     }
 
     @Before

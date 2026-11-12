@@ -41,6 +41,8 @@ class SessionToken internal constructor(
     val deviceName: String?,
     /** When it expires, on the [DeviceAuth] clock (`SystemClock.elapsedRealtime`). */
     internal val expiresAtMs: Long,
+    /** The device it was made for. */
+    internal val device: DeviceId,
 ) {
     /** The `Authorization` header value. */
     fun authorization(): String = "Bearer $value"
@@ -193,14 +195,17 @@ class DeviceAuth internal constructor(
     /**
      * An authenticated request to the bridge with a [scope] token: [path] is
      * absolute (`/v1/...`), [jsonBody] goes as `application/json` (not with
-     * [Method.GET]). A 401 is
+     * [Method.GET]). With [device], it goes only as that device: a token of
+     * any other pairing (one made after a new pairing that raced the
+     * caller's own check) is refused as [DeviceAuthException.NotPaired]
+     * before anything is sent. A 401 is
      * retried once with a fresh token. Any answer the bridge gives is
      * returned as is; only failing to get a token throws.
      *
      * @throws DeviceAuthException as [token], [DeviceAuthException.Unreachable],
      *   or [DeviceAuthException.InvalidInput] when [path] is not absolute.
      */
-    fun send(scope: Scope, method: Method, path: String, jsonBody: String? = null): HttpResponse {
+    fun send(scope: Scope, method: Method, path: String, jsonBody: String? = null, device: DeviceId? = null): HttpResponse {
         if (jsonBody != null && !method.hasBody) throw DeviceAuthException.InvalidInput("body for ${method.name}")
         val bridge = origin() ?: throw DeviceAuthException.NoBridge()
         val url = try {
@@ -208,12 +213,16 @@ class DeviceAuth internal constructor(
         } catch (e: IllegalArgumentException) {
             throw DeviceAuthException.InvalidInput("path")
         }
-        val first = token(scope)
+        val first = token(scope, device)
         val response = sendWith(first, method, url, jsonBody)
         if (response.status != 401) return response
         invalidate(first)
-        return sendWith(token(scope), method, url, jsonBody)
+        return sendWith(token(scope, device), method, url, jsonBody)
     }
+
+    /** [token] for [scope], if it was made for [device] (when given). */
+    private fun token(scope: Scope, device: DeviceId?): SessionToken =
+        token(scope).also { if (device != null && it.device != device) throw DeviceAuthException.NotPaired() }
 
     private fun sendWith(token: SessionToken, method: Method, url: String, jsonBody: String?): HttpResponse {
         val headers = buildMap {
@@ -288,7 +297,7 @@ class DeviceAuth internal constructor(
         if (grant.scope != scope) throw DeviceAuthException.BadResponse("granted ${grant.scope.wire}, asked ${scope.wire}")
         // Counted from before the request, so the cache never outlives the token.
         val lifetimeMs = grant.expiresInSecs.coerceAtMost(MAX_LIFETIME_SECS) * 1000
-        return SessionToken(grant.token, scope, grant.deviceName, asked + lifetimeMs)
+        return SessionToken(grant.token, scope, grant.deviceName, asked + lifetimeMs, record.deviceId)
     }
 
     /** Deletes the key [alias], best effort: a key left behind is unused, not a risk. */

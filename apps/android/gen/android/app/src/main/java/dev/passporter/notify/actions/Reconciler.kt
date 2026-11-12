@@ -172,7 +172,7 @@ class ReconcileWorker internal constructor(
         val shown = Reconciler.shown(applicationContext)
         if (shown.isEmpty()) return Result.success()
         val response = try {
-            bridge.send(Method.GET, "/v1/agents", null)
+            bridge.send(Method.GET, "/v1/agents", null, null)
         } catch (e: DeviceAuthException) {
             Log.i(TAG, "no agent list to reconcile with: ${e.code}")
             return Result.success()

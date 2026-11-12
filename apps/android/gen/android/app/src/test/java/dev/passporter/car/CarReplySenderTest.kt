@@ -62,7 +62,7 @@ class CarReplySenderTest {
     @Test
     fun theCarBridgeAlwaysSignsInWithACarScope() {
         val scopes = mutableListOf<Scope>()
-        val bridge = CarBridge { scope, _, _, _ -> scopes += scope; HttpResponse(200, carReply("Sent.")) }
+        val bridge = CarBridge { scope, _, _, _, _ -> scopes += scope; HttpResponse(200, carReply("Sent.")) }
         CarReplySender(bridge) { DEVICE }.send(carJob())
         assertEquals(listOf(Scope.CAR), scopes)
     }

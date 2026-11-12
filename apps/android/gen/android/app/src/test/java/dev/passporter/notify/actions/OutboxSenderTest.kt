@@ -2,6 +2,7 @@ package dev.passporter.notify.actions
 
 import dev.passporter.notify.DEVICE
 import dev.passporter.device.DeviceAuthException
+import dev.passporter.device.DeviceId
 import dev.passporter.device.HttpResponse
 import dev.passporter.device.Method
 import dev.passporter.notify.OTHER_DEVICE
@@ -220,11 +221,35 @@ class OutboxSenderTest {
     fun anAnswerOfAnotherPairingIsNeverSent() {
         for (paired in listOf(OTHER_DEVICE, null)) {
             val bridge = FakeBridge.of()
-            frozen.put(KEY, "{}")
             val outcome = OutboxSender(bridge, frozen) { paired }.send(job(NoticeAction.REPLY, "hi"))
             assertEquals(SendOutcome.Final(NotSent.PAIRING_CHANGED), outcome)
             assertTrue("$paired: nothing asked", bridge.requests.isEmpty())
-            assertTrue("$paired: the frozen body goes", frozen.bodies.isEmpty())
         }
+    }
+
+    @Test
+    fun everyRequestGoesOnlyAsTheJobsDevice() {
+        val bridge = FakeBridge.of()
+        send(bridge, job(NoticeAction.ALLOW_ONCE))
+        assertEquals(List(3) { DEVICE }, bridge.devices)
+    }
+
+    /** Paired anew between the check and the request: `DeviceAuth` refuses the new pairing's token. */
+    @Test
+    fun aPairingThatChangesMidAttemptStillSendsNothing() {
+        var paired: DeviceId? = DEVICE
+        val bridge = FakeBridge {
+            paired = OTHER_DEVICE
+            throw DeviceAuthException.NotPaired()
+        }
+        assertEquals(SendOutcome.Final(NotSent.PAIRING_CHANGED), OutboxSender(bridge, frozen) { paired }.send(job(NoticeAction.REPLY, "hi")))
+    }
+
+    /** Its body went out before the pairing changed: it may have arrived, so it is not said to be unsent. */
+    @Test
+    fun anAnswerOfAnotherPairingWhoseBodyWasSentMayHaveArrived() {
+        frozen.put(KEY, "{}")
+        val outcome = OutboxSender(FakeBridge.of(), frozen) { OTHER_DEVICE }.send(job(NoticeAction.REPLY, "hi"))
+        assertEquals(SendOutcome.Final(NotSent.UNCERTAIN), outcome)
     }
 }

@@ -18,12 +18,13 @@ import org.json.JSONObject
  * (design §6.6, §8), whatever the app put in the body.
  */
 internal class CarBridge(
-    private val auth: (Scope, Method, String, String?) -> HttpResponse,
+    private val auth: (Scope, Method, String, String?, DeviceId?) -> HttpResponse,
 ) : Bridge {
     /** Over the app's device identity ([DeviceAuth.send]). */
     constructor(context: Context) : this(DeviceAuth.get(context)::send)
 
-    override fun send(method: Method, path: String, json: String?): HttpResponse = auth(Scope.CAR, method, path, json)
+    override fun send(method: Method, path: String, json: String?, device: DeviceId?): HttpResponse =
+        auth(Scope.CAR, method, path, json, device)
 }
 
 /** Why the app itself answers the car, when the bridge's sentence is not there to read. */
@@ -102,9 +103,9 @@ class CarReplySender(
             CarOutcome.Trouble(CarTrouble.PAIRING_CHANGED)
         } else {
             try {
-                answer(bridge.send(Method.POST, job.path, job.body()))
+                answer(bridge.send(Method.POST, job.path, job.body(), job.device))
             } catch (e: DeviceAuthException) {
-                failure(e)
+                failure(job, e)
             }
         }
 
@@ -131,8 +132,10 @@ class CarReplySender(
         }
 
     /** A failure to get an answer at all, from [DeviceAuth]: as the shade's outbox treats it. */
-    private fun failure(e: DeviceAuthException): CarOutcome =
+    private fun failure(job: CarJob, e: DeviceAuthException): CarOutcome =
         when (e) {
+            // Paired anew between the check and the request.
+            is DeviceAuthException.NotPaired if job.device != paired() -> CarOutcome.Trouble(CarTrouble.PAIRING_CHANGED)
             is DeviceAuthException.Unreachable, is DeviceAuthException.ServerError, is DeviceAuthException.Refused,
             is DeviceAuthException.RateLimited,
             -> CarOutcome.Retry

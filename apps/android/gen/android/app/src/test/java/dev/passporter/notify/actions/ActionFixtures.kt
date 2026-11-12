@@ -1,5 +1,6 @@
 package dev.passporter.notify.actions
 
+import dev.passporter.device.DeviceId
 import dev.passporter.device.HttpResponse
 import dev.passporter.device.Method
 import dev.passporter.notify.DEVICE
@@ -34,9 +35,13 @@ data class Sent(val method: Method, val path: String, val body: String?)
 class FakeBridge(private val answer: (Sent) -> HttpResponse) : Bridge {
     val requests = mutableListOf<Sent>()
 
-    override fun send(method: Method, path: String, json: String?): HttpResponse {
+    /** The device each request was to go as. */
+    val devices = mutableListOf<DeviceId?>()
+
+    override fun send(method: Method, path: String, json: String?, device: DeviceId?): HttpResponse {
         val sent = Sent(method, path, json)
         requests += sent
+        devices += device
         return answer(sent)
     }
 

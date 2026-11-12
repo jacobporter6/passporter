@@ -67,8 +67,9 @@ class ShellPlugin(private val activity: Activity) : Plugin(activity) {
      * process drops the old bridge's IPC grant: Tauri cannot revoke a
      * capability.
      *
-     * The reset runs here as well as from the pairing listener, so a failed
-     * forget cannot skip it. The restart happens even if forgetting fails:
+     * The forget runs the reset through the pairing listener
+     * ([PassporterApplication]); if forgetting fails, the reset runs here
+     * instead, so it is never skipped. The restart happens even if forgetting fails:
      * the shell has already forgotten the bridge, and [DeviceAuth] ignores
      * a pairing made with another origin than the saved one.
      */
@@ -81,8 +82,8 @@ class ShellPlugin(private val activity: Activity) : Plugin(activity) {
                 DeviceAuth.get(app).forget()
             } catch (e: Exception) {
                 Log.e(TAG, "could not forget the pairing", e)
+                PairingReset.run(app)
             }
-            PairingReset.run(app)
             invoke.resolve()
             app.startActivity(Intent.makeRestartActivityTask(ComponentName(app, MainActivity::class.java)))
             Runtime.getRuntime().exit(0)

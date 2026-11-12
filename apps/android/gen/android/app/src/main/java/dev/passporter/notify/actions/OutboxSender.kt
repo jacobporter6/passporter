@@ -43,19 +43,19 @@ class OutboxSender(
         val outcome = try {
             attempt(job)
         } catch (e: DeviceAuthException) {
-            failure(e)
+            failure(job, e)
         }
         if (outcome !is SendOutcome.Retry && !stopped()) frozen.remove(job.key)
         return outcome
     }
 
     private fun attempt(job: OutboxJob): SendOutcome {
-        if (job.device != paired()) return SendOutcome.Final(NotSent.PAIRING_CHANGED)
+        if (job.device != paired()) return SendOutcome.Final(changed(job))
         val body = frozen.get(job.key) ?: when (val prepared = prepare(job)) {
             is Prepared.Body -> prepared.json.also { frozen.put(job.key, it) }
             is Prepared.Not -> return prepared.outcome
         }
-        return answer(job, bridge.send(Method.POST, ACTIONS, body))
+        return answer(job, bridge.send(Method.POST, ACTIONS, body, job.device))
     }
 
     private sealed interface Prepared {
@@ -66,7 +66,7 @@ class OutboxSender(
 
     private fun prepare(job: OutboxJob): Prepared {
         val request = job.request
-        val listed = bridge.send(Method.GET, AGENTS, null)
+        val listed = bridge.send(Method.GET, AGENTS, null, job.device)
         if (!listed.isSuccess) return Prepared.Not(unanswered(listed))
         val agents = BridgeState.agents(listed.body) ?: return Prepared.Not(SendOutcome.Final(NotSent.FAILED))
         val agent = agents.firstOrNull { it.id == request.agent }
@@ -95,7 +95,7 @@ class OutboxSender(
     /** The option of the current dialog that [job] means, or why there is none. */
     private fun choose(job: OutboxJob): Choice {
         val pending = requireNotNull(job.request.pending)
-        val read = bridge.send(Method.GET, "/v1/agents/${job.request.agent.value}/pending", null)
+        val read = bridge.send(Method.GET, "/v1/agents/${job.request.agent.value}/pending", null, job.device)
         if (read.status == 404) return Choice.Not(SendOutcome.Final(NotSent.AGENT_GONE))
         if (!read.isSuccess) return Choice.Not(unanswered(read))
         val dialog = when (val parsed = BridgeState.dialog(read.body)) {
@@ -171,9 +171,18 @@ class OutboxSender(
             null
         }
 
+    /**
+     * Why [job] of another pairing is not sent: [NotSent.PAIRING_CHANGED],
+     * or [NotSent.UNCERTAIN] once its body was sent (it may have arrived).
+     */
+    private fun changed(job: OutboxJob): NotSent =
+        if (frozen.get(job.key) != null) NotSent.UNCERTAIN else NotSent.PAIRING_CHANGED
+
     /** A failure to get an answer at all, from [dev.passporter.device.DeviceAuth]. */
-    private fun failure(e: DeviceAuthException): SendOutcome =
+    private fun failure(job: OutboxJob, e: DeviceAuthException): SendOutcome =
         when (e) {
+            // Paired anew between the check and the request.
+            is DeviceAuthException.NotPaired if job.device != paired() -> SendOutcome.Final(changed(job))
             // Refused: a sign-in the bridge lost (a restart mid-challenge, say).
             is DeviceAuthException.Unreachable, is DeviceAuthException.ServerError, is DeviceAuthException.Refused ->
                 SendOutcome.Retry(null)

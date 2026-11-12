@@ -123,7 +123,7 @@ class ReconcilerTest {
     @Test
     fun withoutAnAgentListItKeepsEverything() {
         show(notice())
-        assertEquals(ListenableWorker.Result.success(), run(Bridge { _, _, _ -> throw DeviceAuthException.NotPaired() }))
+        assertEquals(ListenableWorker.Result.success(), run(Bridge { _, _, _, _ -> throw DeviceAuthException.NotPaired() }))
         assertEquals(ListenableWorker.Result.success(), run(FakeBridge { HttpResponse(502, "") }))
         assertEquals(setOf("w1:p1"), tags())
     }

@@ -358,7 +358,7 @@ deciding it again. The bridge's own rules still apply on top
 | `failed` (herdr failed after sending) | *Not sure it arrived: open the app* (never resent) |
 | no answer, 5xx, 429, a sign-in the bridge refused | retried; after the last attempt *Couldn't reach the bridge: open the app*, or *Not sure it arrived* once the action itself was sent |
 | not paired or revoked | *Not paired: open the app* |
-| paired anew since you answered | nothing is sent; *Not paired: open the app* on its notification, if it still shows |
+| paired anew since you answered | nothing is sent; *Not paired: open the app* on its notification, if it still shows (*Not sure it arrived* if an earlier attempt sent it) |
 
 If news replaced the notification meanwhile (a new dialog, a new turn), the
 news stays and the older answer's outcome is not shown.
@@ -681,8 +681,10 @@ came to (`?device=dev-…` on its data; for a push, the device its keys
 were registered for), and each job keeps it: a tap, a car reply or a
 queued job made for another device than the one the app is paired as now
 sends nothing (`DeviceStamp`, `NotSent.PAIRING_CHANGED`,
-`CarTrouble.PAIRING_CHANGED`), and an old conversation is never brought
-back for it.
+`CarTrouble.PAIRING_CHANGED`; `DeviceAuth.send` also refuses a token of
+another pairing, should one be made between the check and the request),
+and an old conversation is never brought back for it. A push decrypted
+with an older pairing's keys (not yet replaced) is dropped unseen.
 
 Any app can send `MainActivity` the tap or shortcut intent, because a
 launcher activity is exported. The worst that does is open an agent's
@@ -704,8 +706,9 @@ registration and Android Auto can sign in with the app closed
   with a chosen scope, `app` or `car`), over the platform's
   `HttpsURLConnection` (no HTTP library in the APK), and caches each
   scope's token in memory until two minutes before it expires;
-- gives a sign-in (both tries) 30 seconds at most, cutting each request's
-  timeouts to what is left; `status`, `forget` and a cached token never
+- gives a sign-in (both tries) a 30-second budget: each request's connect
+  and read timeouts are cut to what is left, and none starts once it is
+  spent (one slow request can still overrun it); `status`, `forget` and a cached token never
   wait for a sign-in in flight, and a token made for a pairing forgotten
   meanwhile is not handed out;
 - forgets the pairing when the bridge answers `410 Gone` (revoked).

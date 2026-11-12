@@ -322,4 +322,15 @@ class DeviceAuthTest {
         bridge.intercept = { null }
         assertThrows(DeviceAuthException.NotPaired::class.java) { auth.token(Scope.APP) }
     }
+
+    /** A token of another pairing (made after a new pairing that raced the caller's check) is never used. */
+    @Test
+    fun sendGoesOnlyAsTheDeviceAsked() {
+        val id = auth.pair(code, null)
+        assertEquals(200, auth.send(Scope.APP, Method.GET, "/v1/agents", device = id).status)
+        val other = checkNotNull(DeviceId.parse("dev-fedcba9876543210"))
+        val asked = bridge.sent.size
+        assertThrows(DeviceAuthException.NotPaired::class.java) { auth.send(Scope.APP, Method.GET, "/v1/agents", device = other) }
+        assertEquals("nothing sent", asked, bridge.sent.size)
+    }
 }
