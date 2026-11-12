@@ -21,6 +21,7 @@ use super::state::{Outcome, Probe, Unavailable};
 use crate::api::{ApiClient, ApiError, TokenSource, Transport};
 use crate::pair::native;
 use crate::platform::{self, has, js_error_message, log_error};
+use crate::session;
 
 /// Length of a VAPID public key (65 bytes) in unpadded base64url.
 const VAPID_KEY_CHARS: usize = 87;
@@ -119,11 +120,11 @@ fn is_vapid_key(text: &str) -> bool {
 /// Why push can't work in this page, if it can't: checked in the app
 /// before the notice WASM is loaded. In the Android app it never does: the
 /// app has its own (`UnifiedPush`) subscription, so the page must not add a
-/// second one.
+/// second one ([`session::in_app_push`] says whether that one works).
 #[must_use]
 pub fn availability() -> Option<Unavailable> {
     if native::in_app() {
-        return Some(Unavailable::NativeApp);
+        return Some(session::in_app_push());
     }
     let Some(window) = web_sys::window() else {
         return Some(Unavailable::Unsupported);

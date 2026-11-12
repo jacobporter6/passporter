@@ -193,8 +193,12 @@ fn auth_error(code: Option<&str>, message: String) -> DeviceAuthError {
         Some("refused") => DeviceAuthError::Refused,
         Some("rateLimited") => DeviceAuthError::RateLimited,
         Some("tooManyDevices") => DeviceAuthError::TooManyDevices,
-        // The plugin already retried the Keystore once: what is left is final.
-        Some("keystore") => DeviceAuthError::Signing(message),
+        // A busy Keystore (the plugin already retried once) or a crash in
+        // the plugin may pass, so the session tries again, slowly, while
+        // the plugin still says it is paired. `notPaired` is not one: the
+        // plugin's status then says unpaired too, so the session cannot tell
+        // an unreadable bridge address from a lost key.
+        Some("keystore" | "internal") => DeviceAuthError::NativeUnavailable(message),
         Some("unreachable" | "serverError") => DeviceAuthError::Api(ApiError::Transport(message)),
         _ => DeviceAuthError::Api(ApiError::Decode(message)),
     }
@@ -215,16 +219,19 @@ mod tests {
         for (code, want) in cases {
             assert_eq!(auth_error(code, "m".to_owned()), want, "{code:?}");
         }
-        assert_eq!(
-            auth_error(Some("keystore"), "m".to_owned()),
-            DeviceAuthError::Signing("m".to_owned())
-        );
-        for retryable in ["unreachable", "serverError"] {
+        for passing in ["keystore", "internal"] {
+            assert_eq!(
+                auth_error(Some(passing), "m".to_owned()),
+                DeviceAuthError::NativeUnavailable("m".to_owned()),
+                "{passing}"
+            );
+        }
+        for retryable in ["unreachable", "serverError", "keystore", "internal"] {
             assert!(auth_error(Some(retryable), "m".to_owned()).is_retryable());
         }
         for final_ in [
             Some("badResponse"),
-            Some("internal"),
+            Some("storage"),
             Some("notPaired"),
             None,
         ] {

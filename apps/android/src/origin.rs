@@ -33,9 +33,10 @@ pub enum OriginError {
     /// cannot express. Use the bridge's DNS name.
     #[error("use the bridge's name, not an IPv6 address")]
     Ipv6,
-    /// A name that is not a plain DNS name (letters, digits, `-` and `.`
-    /// once in punycode), or a `localhost` name, which on the phone means
-    /// the phone itself (`tauri.localhost` is the app's own pages).
+    /// A name that is not an RFC 1123 host name (labels of letters, digits
+    /// and inner `-`, once in punycode, the last one starting with a
+    /// letter), or a `localhost` name, which on the phone means the phone
+    /// itself (`tauri.localhost` is the app's own pages).
     #[error("use the bridge's DNS name")]
     Host,
 }
@@ -101,17 +102,29 @@ impl BridgeOrigin {
     }
 }
 
-/// Whether `name` (already lowercased and punycoded by `url`) is a DNS name
-/// that can be a remote bridge: non-empty labels of letters, digits and
-/// `-`, and not `localhost` or under it.
+/// Whether `name` (already lowercased and punycoded by `url`) is a host
+/// name that can be a remote bridge: RFC 1123 labels (letters, digits and
+/// `-`, never first or last) with a last label that starts with a letter,
+/// and not `localhost` or under it.
+///
+/// The device plugin's Kotlin reads the saved origin back with the same
+/// rule (`BridgeOrigin.isBridgeHost`, behind `java.net.URI`, whose host
+/// grammar it is too), so native code finds every bridge the shell saves:
+/// `bridge-origins.json` holds the cases both check.
 fn is_dns_name(name: &str) -> bool {
-    let labels_ok = name.split('.').all(|label| {
+    let label_ok = |label: &str| {
         !label.is_empty()
+            && !label.starts_with('-')
+            && !label.ends_with('-')
             && label
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-    });
-    labels_ok && name != "localhost" && !name.ends_with(".localhost")
+    };
+    let top_ok = name
+        .rsplit('.')
+        .next()
+        .is_some_and(|top| top.starts_with(|c: char| c.is_ascii_alphabetic()));
+    name.split('.').all(label_ok) && top_ok && name != "localhost" && !name.ends_with(".localhost")
 }
 
 impl fmt::Display for BridgeOrigin {
@@ -194,9 +207,40 @@ mod tests {
             ("https://localhost:8443", OriginError::Host),
             ("https://tauri.localhost", OriginError::Host),
             ("https://bridge.localhost", OriginError::Host),
+            ("https://-bridge.example", OriginError::Host),
+            ("https://bridge-.example", OriginError::Host),
+            ("https://bridge.-example", OriginError::Host),
+            ("https://bridge.1lan", OriginError::Host),
+            ("https://bridge.example.", OriginError::Host),
         ];
         for (input, expected) in cases {
             assert_eq!(BridgeOrigin::parse(input), Err(expected), "{input:?}");
+        }
+    }
+
+    /// The cases the device plugin's Kotlin (`BridgeOriginTest`) checks too:
+    /// the shell saves only origins native code can read back.
+    #[test]
+    fn agrees_with_the_native_reader() {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Vectors {
+            accept: Vec<String>,
+            reject: Vec<String>,
+        }
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/plugins/device/android/src/test/resources/bridge-origins.json"
+        );
+        let text = std::fs::read_to_string(path).expect("vector file");
+        let vectors: Vectors = serde_json::from_str(&text).expect("vector json");
+        assert!(!vectors.accept.is_empty() && !vectors.reject.is_empty());
+        for input in vectors.accept {
+            // As saved: the origin, unchanged.
+            assert_eq!(origin(&input).to_string(), input, "{input:?}");
+        }
+        for input in vectors.reject {
+            assert!(BridgeOrigin::parse(&input).is_err(), "{input:?}");
         }
     }
 

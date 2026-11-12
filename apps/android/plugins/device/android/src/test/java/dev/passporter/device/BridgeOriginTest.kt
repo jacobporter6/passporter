@@ -2,6 +2,8 @@ package dev.passporter.device
 
 import java.io.File
 import java.nio.file.Files
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
@@ -26,6 +28,28 @@ class BridgeOriginTest {
             assertNull(bad, BridgeOrigin.parse(bad))
         }
     }
+
+    /**
+     * Shared with the shell's `origin.rs` test `agrees_with_the_native_reader`:
+     * every origin the shell may save is read back unchanged, and nothing
+     * the shell refuses is read at all.
+     */
+    @Test
+    fun agreesWithTheShell() {
+        val text = checkNotNull(javaClass.classLoader?.getResource("bridge-origins.json")).readText()
+        val vectors = JSONObject(text)
+        val accept = vectors.getJSONArray("accept").strings()
+        val reject = vectors.getJSONArray("reject").strings()
+        assertTrue(accept.isNotEmpty() && reject.isNotEmpty())
+        for (origin in accept) {
+            assertEquals(origin, origin, BridgeOrigin.parse(origin)?.toString())
+        }
+        for (bad in reject) {
+            assertNull(bad, BridgeOrigin.parse(bad))
+        }
+    }
+
+    private fun JSONArray.strings(): List<String> = List(length()) { getString(it) }
 
     @Test
     fun resolvesOnlyAbsolutePaths() {

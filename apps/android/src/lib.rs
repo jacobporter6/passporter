@@ -8,6 +8,7 @@
 //! that decide what is allowed are plain Rust, tested on any host; the
 //! Tauri wiring builds for Android only.
 
+pub mod connect;
 pub mod destination;
 pub mod navigation;
 pub mod origin;
