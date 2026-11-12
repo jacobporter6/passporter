@@ -206,6 +206,22 @@ class RecorderTest {
         assertEquals(EndReason.USER, recorder.status().takes.single().endedBy)
     }
 
+    @Test
+    fun discarding_all_ends_the_running_take_and_deletes_every_take() {
+        var idle = 0
+        val finished = recorder.start(tag, 60_000).also { input.write(5) }
+        recorder.stop(finished)
+        recorder.start(tag, 60_000)
+        input.write(5)
+        assertTrue(recorder.watchIdle { idle++ })
+        recorder.discardAll()
+        assertEquals(Snapshot(null, emptyList()), recorder.status())
+        assertFalse(focus.held)
+        assertEquals("the service is told", 1, idle)
+        assertTrue(File(dir, "recordings").list().orEmpty().isEmpty())
+        assertTrue("nothing is left for a new process", recorder().status().takes.isEmpty())
+    }
+
     internal class FakeClock : Clock {
         var elapsed = 5_000L
         var wall = 1_767_225_600_000L

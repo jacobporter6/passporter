@@ -1,7 +1,11 @@
 package dev.passporter.push
 
+import android.content.Context
 import android.util.Log
+import dev.passporter.device.DeviceAuth
+import dev.passporter.device.DeviceId
 import dev.passporter.notify.NoticeNotifier
+import dev.passporter.notify.actions.PairedAs
 import org.unifiedpush.android.connector.FailedReason
 import org.unifiedpush.android.connector.PushService
 import org.unifiedpush.android.connector.data.PushEndpoint
@@ -43,9 +47,13 @@ class PassporterPushService : PushService() {
     override fun onMessage(message: PushMessage, instance: String) {
         if (instance != PushWork.INSTANCE) return
         val store = PushWork.store(this)
+        // The keys that decrypted it were registered for the owner: the
+        // notices' actions answer as that device, and only while it is paired.
+        val owner = { store.load().owner?.let(DeviceId::parse) }
         val incoming = IncomingPush(
-            show = NoticeNotifier(this)::show,
-            registered = { store.load().registration != null },
+            show = NoticeNotifier(this, owner)::show,
+            // The saved device, not DeviceAuth.status: no Keystore call on the main thread.
+            registered = { IncomingPush.isCurrent(store.load(), savedPairing(this)) },
         ).handle(message)
         // Never the content: it is agent output.
         Log.i(PUSH_TAG, "push message: $incoming")
@@ -65,3 +73,7 @@ class PassporterPushService : PushService() {
         Log.w(PUSH_TAG, "the distributor refused to register: $reason")
     }
 }
+
+/** What the app is paired as, from the saved record alone ([DeviceAuth.savedDevice]): cheap, for the main thread. */
+private fun savedPairing(context: Context): PairedAs =
+    DeviceAuth.get(context).savedDevice()?.let(PairedAs::Device) ?: PairedAs.Nothing

@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import dev.passporter.notify.actions.pairedDevice
 import org.json.JSONObject
 import java.util.UUID
 
@@ -30,7 +31,8 @@ class SampleNoticeReceiver : BroadcastReceiver() {
             return
         }
         val ping = intent.getStringExtra(EXTRA_PING) ?: UUID.randomUUID().toString().replace("-", "")
-        val outcome = NoticeNotifier(context).show(message(ping, sample.notices))
+        // Answers as the device the app is paired as now, as a push to it would.
+        val outcome = NoticeNotifier(context) { pairedDevice(context).device }.show(message(ping, sample.notices))
         Log.i(TAG, "sample ${sample.wire}: $outcome")
     }
 

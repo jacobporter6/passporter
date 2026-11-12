@@ -2,10 +2,12 @@ package dev.passporter.recorder
 
 import android.content.Context
 import android.os.SystemClock
+import android.util.Log
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /** Runs work on the recorder's thread, now or later. */
 internal fun interface Scheduler {
@@ -139,6 +141,16 @@ class Recorder internal constructor(
         watchers.forEach { it() }
     }
 
+    /**
+     * Ends the running take, if any, and deletes every take: they were
+     * recorded for the bridge the app was paired with, and the PWA of
+     * another must never adopt them.
+     */
+    fun discardAll() {
+        val ids = synchronized(lock) { listOfNotNull(running?.id) + takes.map { it.id } }
+        ids.forEach(::cancel)
+    }
+
     /** Deletes finished take [id] once the PWA has stored it. A running take or an unknown id is left alone. */
     fun release(id: RecordingId) = synchronized(lock) {
         if (takes.removeAll { it.id == id }) store.delete(id)
@@ -239,6 +251,27 @@ class Recorder internal constructor(
                 )
             }.also { instance = it }
         }
+
+        /**
+         * [discardAll] on the app's recorder, on [worker], waiting at most
+         * [DISCARD_WAIT_MS] for it. If the recorder's thread is stuck (a
+         * microphone that does not stop), the take files are deleted
+         * directly instead, so none outlives the call. Blocking: never on
+         * the recorder's thread.
+         */
+        fun discardAll(context: Context) {
+            val app = context.applicationContext
+            try {
+                worker.submit { get(app).discardAll() }.get(DISCARD_WAIT_MS, TimeUnit.MILLISECONDS)
+            } catch (e: TimeoutException) {
+                Log.w(TAG, "the recorder is busy; deleting the takes directly", e)
+                File(app.noBackupFilesDir, DIR).listFiles()?.forEach { it.delete() }
+            }
+        }
+
+        private const val TAG = "PassporterRecorder"
+
+        private const val DISCARD_WAIT_MS = 5_000L
 
         /** Replaces the app's recorder, for tests. */
         internal fun install(recorder: Recorder?) {

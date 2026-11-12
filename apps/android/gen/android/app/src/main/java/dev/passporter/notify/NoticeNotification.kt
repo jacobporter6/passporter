@@ -15,6 +15,7 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import dev.passporter.app.MainActivity
 import dev.passporter.app.R
 import dev.passporter.car.CarActions
+import dev.passporter.device.DeviceId
 import dev.passporter.notify.actions.NoticeActions
 
 /**
@@ -121,8 +122,10 @@ object NoticeNotification {
      * it alerts even when it replaces the agent's last one. Its actions are
      * [NoticeActions]'s: what the notice can be answered with from the shade;
      * its invisible ones [CarActions]'s, for Android Auto, if it is announced.
+     * Both are made for [device], the pairing the notice came to; without
+     * one there are none, and a tap only opens the app.
      */
-    fun build(context: Context, notice: Notice, now: Long): Notification {
+    fun build(context: Context, notice: Notice, now: Long, device: DeviceId?): Notification {
         val agent = person(notice)
         val style = NotificationCompat.MessagingStyle(
             Person.Builder().setName(context.getString(R.string.notify_you)).build(),
@@ -142,8 +145,10 @@ object NoticeNotification {
             .setContentText(notice.decide?.let { context.getString(R.string.notify_decide, it) } ?: headline)
             // News that replaces the agent's last notification sounds again.
             .setOnlyAlertOnce(false)
-        NoticeActions.build(context, notice).forEach(builder::addAction)
-        CarActions.build(context, notice, now).forEach(builder::addInvisibleAction)
+        if (device != null) {
+            NoticeActions.build(context, notice, device).forEach(builder::addAction)
+            CarActions.build(context, notice, now, device).forEach(builder::addInvisibleAction)
+        }
         builder.addExtras(
             Bundle().apply {
                 question(notice)?.let { putString(EXTRA_QUESTION, it) }

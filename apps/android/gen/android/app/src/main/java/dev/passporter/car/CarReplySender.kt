@@ -3,11 +3,13 @@ package dev.passporter.car
 import android.content.Context
 import dev.passporter.device.DeviceAuth
 import dev.passporter.device.DeviceAuthException
+import dev.passporter.device.DeviceId
 import dev.passporter.device.HttpResponse
 import dev.passporter.device.Method
 import dev.passporter.device.Scope
 import dev.passporter.notify.PlainText
 import dev.passporter.notify.actions.Bridge
+import dev.passporter.notify.actions.PairedAs
 import org.json.JSONException
 import org.json.JSONObject
 
@@ -17,12 +19,13 @@ import org.json.JSONObject
  * (design §6.6, §8), whatever the app put in the body.
  */
 internal class CarBridge(
-    private val auth: (Scope, Method, String, String?) -> HttpResponse,
+    private val auth: (Scope, Method, String, String?, DeviceId?) -> HttpResponse,
 ) : Bridge {
     /** Over the app's device identity ([DeviceAuth.send]). */
     constructor(context: Context) : this(DeviceAuth.get(context)::send)
 
-    override fun send(method: Method, path: String, json: String?): HttpResponse = auth(Scope.CAR, method, path, json)
+    override fun send(method: Method, path: String, json: String?, device: DeviceId?): HttpResponse =
+        auth(Scope.CAR, method, path, json, device)
 }
 
 /** Why the app itself answers the car, when the bridge's sentence is not there to read. */
@@ -35,6 +38,13 @@ enum class CarTrouble {
 
     /** The app is not (or no longer) paired. */
     NOT_PAIRED,
+
+    /**
+     * The app was unpaired or paired anew since the car heard the notice
+     * ([CarJob.device]): the reply belongs to the old pairing, and is never
+     * sent to the new one.
+     */
+    PAIRING_CHANGED,
 
     /** The bridge stayed unreachable for every retry. */
     UNREACHABLE,
@@ -79,16 +89,31 @@ sealed interface CarOutcome {
  * `POST /v1/actions` holds: 2xx and 409 are final for the key, as are the
  * refusals (400, 403, 404, 422); 429 and 5xx decided nothing (503 is the
  * bridge saying herdr or its audit log was unavailable) and are retried
- * with the same body.
+ * with the same body. Every attempt first checks that the app is still
+ * paired as the job's device ([paired]); else nothing is sent
+ * ([CarTrouble.PAIRING_CHANGED]).
  */
-class CarReplySender(private val bridge: Bridge) {
+class CarReplySender(
+    private val bridge: Bridge,
+    /** What the app is paired as now (`dev.passporter.notify.actions.pairedDevice`). */
+    private val paired: () -> PairedAs,
+) {
     /** One attempt at [job]. Never throws. */
-    fun send(job: CarJob): CarOutcome =
-        try {
-            answer(bridge.send(Method.POST, job.path, job.body()))
-        } catch (e: DeviceAuthException) {
-            failure(e)
+    fun send(job: CarJob): CarOutcome {
+        val now = paired()
+        return if (now == PairedAs.Unknown) {
+            // Unsure (a busy Keystore): neither sent nor dropped yet.
+            CarOutcome.Retry
+        } else if (now.isNot(job.device)) {
+            CarOutcome.Trouble(CarTrouble.PAIRING_CHANGED)
+        } else {
+            try {
+                answer(bridge.send(Method.POST, job.path, job.body(), job.device))
+            } catch (e: DeviceAuthException) {
+                failure(job, e)
+            }
         }
+    }
 
     private fun answer(response: HttpResponse): CarOutcome {
         val status = response.status
@@ -113,17 +138,24 @@ class CarReplySender(private val bridge: Bridge) {
         }
 
     /** A failure to get an answer at all, from [DeviceAuth]: as the shade's outbox treats it. */
-    private fun failure(e: DeviceAuthException): CarOutcome =
-        when (e) {
+    private fun failure(job: CarJob, e: DeviceAuthException): CarOutcome {
+        // Unpaired or paired anew between the check and the request.
+        // A revocation (410) forgets the pairing itself: that one says not paired.
+        val changed = e is DeviceAuthException.OtherDevice ||
+            (e !is DeviceAuthException.Forgotten && paired().isNot(job.device))
+        if (changed) return CarOutcome.Trouble(CarTrouble.PAIRING_CHANGED)
+        return when (e) {
             is DeviceAuthException.Unreachable, is DeviceAuthException.ServerError, is DeviceAuthException.Refused,
             is DeviceAuthException.RateLimited,
             -> CarOutcome.Retry
             is DeviceAuthException.NotPaired, is DeviceAuthException.Forgotten, is DeviceAuthException.NoBridge ->
                 CarOutcome.Trouble(CarTrouble.NOT_PAIRED)
+            is DeviceAuthException.OtherDevice -> CarOutcome.Trouble(CarTrouble.PAIRING_CHANGED)
             is DeviceAuthException.TooManyDevices, is DeviceAuthException.BadResponse, is DeviceAuthException.Keystore,
             is DeviceAuthException.Storage, is DeviceAuthException.InvalidInput,
             -> CarOutcome.Trouble(CarTrouble.FAILED)
         }
+    }
 
     companion object {
         /**

@@ -1,6 +1,7 @@
 package dev.passporter.notify.actions
 
 import androidx.work.Data
+import dev.passporter.device.DeviceId
 import dev.passporter.notify.AgentId
 import dev.passporter.notify.PendingId
 
@@ -14,6 +15,7 @@ internal object OutboxData {
     private const val NAME = "name"
     private const val CREATED_AT = "createdAt"
     private const val ATTEMPTS = "attempts"
+    private const val DEVICE = "device"
 
     /** The input of [job], which has had [attempts] attempts. */
     fun write(job: OutboxJob, attempts: Int): Data =
@@ -25,10 +27,11 @@ internal object OutboxData {
             .putString(TEXT, job.text)
             .putString(NAME, job.name)
             .putLong(CREATED_AT, job.createdAt)
+            .putString(DEVICE, job.device.value)
             .putInt(ATTEMPTS, attempts)
             .build()
 
-    /** The job in [data], or `null` if it is not one (an older app's, say). */
+    /** The job in [data], or `null` if it is not one (an older app's, without a device, say). */
     fun read(data: Data): OutboxJob? {
         val action = data.getString(ACTION)?.let(NoticeAction::fromWire) ?: return null
         val agent = data.getString(AGENT)?.let(AgentId::parse) ?: return null
@@ -42,6 +45,7 @@ internal object OutboxData {
             text = text,
             name = data.getString(NAME) ?: return null,
             createdAt = data.getLong(CREATED_AT, 0),
+            device = data.getString(DEVICE)?.let(DeviceId::parse) ?: return null,
         )
     }
 

@@ -19,6 +19,12 @@ sealed class DeviceAuthException(
     class NotPaired : DeviceAuthException("notPaired", "this app is not paired")
 
     /**
+     * A request meant to go as one device ([DeviceAuth.send]'s `device`)
+     * while the app is paired as another (or not at all): nothing was sent.
+     */
+    class OtherDevice : DeviceAuthException("otherDevice", "the app is no longer paired as that device")
+
+    /**
      * The bridge does not know this device (`410 Gone`): revoked, or never
      * paired. The pairing has been forgotten here too.
      */

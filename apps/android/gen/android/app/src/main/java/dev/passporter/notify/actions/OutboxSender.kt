@@ -24,10 +24,14 @@ import org.json.JSONObject
  * lost answer is replayed by the bridge, never decided twice.
  *
  * Nothing is ever resent as something else: a 409 or a refusal is final.
+ * Every attempt first checks that the app is still paired as the job's
+ * device ([paired]); else nothing is sent ([NotSent.PAIRING_CHANGED]).
  */
 class OutboxSender(
     private val bridge: Bridge,
     private val frozen: FrozenBodies,
+    /** What the app is paired as now ([pairedDevice]). */
+    private val paired: () -> PairedAs,
 ) {
     /**
      * One attempt at [job]. Never throws. The frozen body is forgotten once
@@ -38,18 +42,23 @@ class OutboxSender(
         val outcome = try {
             attempt(job)
         } catch (e: DeviceAuthException) {
-            failure(e)
+            failure(job, e)
         }
         if (outcome !is SendOutcome.Retry && !stopped()) frozen.remove(job.key)
         return outcome
     }
 
     private fun attempt(job: OutboxJob): SendOutcome {
+        when (val now = paired()) {
+            // Unsure (a busy Keystore): neither sent nor dropped yet.
+            PairedAs.Unknown -> return SendOutcome.Retry(null)
+            else -> if (now.isNot(job.device)) return SendOutcome.Final(NotSent.PAIRING_CHANGED)
+        }
         val body = frozen.get(job.key) ?: when (val prepared = prepare(job)) {
             is Prepared.Body -> prepared.json.also { frozen.put(job.key, it) }
             is Prepared.Not -> return prepared.outcome
         }
-        return answer(job, bridge.send(Method.POST, ACTIONS, body))
+        return answer(job, bridge.send(Method.POST, ACTIONS, body, job.device))
     }
 
     private sealed interface Prepared {
@@ -60,7 +69,7 @@ class OutboxSender(
 
     private fun prepare(job: OutboxJob): Prepared {
         val request = job.request
-        val listed = bridge.send(Method.GET, AGENTS, null)
+        val listed = bridge.send(Method.GET, AGENTS, null, job.device)
         if (!listed.isSuccess) return Prepared.Not(unanswered(listed))
         val agents = BridgeState.agents(listed.body) ?: return Prepared.Not(SendOutcome.Final(NotSent.FAILED))
         val agent = agents.firstOrNull { it.id == request.agent }
@@ -89,7 +98,7 @@ class OutboxSender(
     /** The option of the current dialog that [job] means, or why there is none. */
     private fun choose(job: OutboxJob): Choice {
         val pending = requireNotNull(job.request.pending)
-        val read = bridge.send(Method.GET, "/v1/agents/${job.request.agent.value}/pending", null)
+        val read = bridge.send(Method.GET, "/v1/agents/${job.request.agent.value}/pending", null, job.device)
         if (read.status == 404) return Choice.Not(SendOutcome.Final(NotSent.AGENT_GONE))
         if (!read.isSuccess) return Choice.Not(unanswered(read))
         val dialog = when (val parsed = BridgeState.dialog(read.body)) {
@@ -166,8 +175,15 @@ class OutboxSender(
         }
 
     /** A failure to get an answer at all, from [dev.passporter.device.DeviceAuth]. */
-    private fun failure(e: DeviceAuthException): SendOutcome =
-        when (e) {
+    private fun failure(job: OutboxJob, e: DeviceAuthException): SendOutcome {
+        // Unpaired or paired anew between the check and the request (a
+        // key deleted mid-sign-in, a forgotten bridge): never the old
+        // conversation brought back as a failure.
+        // A revocation (410) forgets the pairing itself: that one says not paired.
+        val changed = e is DeviceAuthException.OtherDevice ||
+            (e !is DeviceAuthException.Forgotten && paired().isNot(job.device))
+        if (changed) return SendOutcome.Final(NotSent.PAIRING_CHANGED)
+        return when (e) {
             // Refused: a sign-in the bridge lost (a restart mid-challenge, say).
             is DeviceAuthException.Unreachable, is DeviceAuthException.ServerError, is DeviceAuthException.Refused ->
                 SendOutcome.Retry(null)
@@ -176,6 +192,7 @@ class OutboxSender(
                 SendOutcome.Final(NotSent.NOT_PAIRED)
             else -> SendOutcome.Final(NotSent.FAILED)
         }
+    }
 
     private companion object {
         const val AGENTS = "/v1/agents"

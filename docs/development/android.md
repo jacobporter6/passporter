@@ -333,8 +333,10 @@ herdr sees the pane).
 Each tap is a broadcast to `NoticeActionReceiver` (explicit, not exported;
 pending intents immutable except the two with a `RemoteInput`). It makes
 an `OutboxJob` with a fresh idempotency key, appends the answer to the
-conversation as your message with *Sending…* (and no actions, so it cannot
-be answered twice), and queues it:
+conversation as your message with *Sending…* (and none of the shade's
+actions, so it cannot be answered twice there; Android Auto's stay), and
+queues it. A tap made for another pairing than the app's now queues
+nothing (*Not paired: open the app*):
 
 | File | What |
 |---|---|
@@ -365,6 +367,7 @@ deciding it again. The bridge's own rules still apply on top
 | `failed` (herdr failed after sending) | *Not sure it arrived: open the app* (never resent) |
 | no answer, 5xx, 429, a sign-in the bridge refused | retried; after the last attempt *Couldn't reach the bridge: open the app*, or *Not sure it arrived* once the action itself was sent |
 | not paired or revoked | *Not paired: open the app* |
+| paired anew since you answered | nothing is sent; *Not paired: open the app* on its notification, if it still shows |
 
 If news replaced the notification meanwhile (a new dialog, a new turn), the
 news stays and the older answer's outcome is not shown.
@@ -375,8 +378,11 @@ reads `GET /v1/agents` (only if a notification is showing) and removes a
 dialog's notification once the agent is no longer blocked, a finished
 turn's once it is no longer unread, and any whose agent is gone (an
 agent herdr cannot tell about keeps its notification). An answer's
-notification is cleared once its job is no longer queued (a job lost
-while *Sending…*), and so are the frozen bodies of jobs that are gone. A
+notification still *Sending…* once its job is no longer queued (the
+app died between showing it and queueing it) says *Not sent: open the
+app*, never cleared as if sent; each tap schedules that check (and only that one) a little
+past its minute of grace, so it does not wait for the app to open. The
+frozen bodies of jobs that are gone are dropped. A
 final outcome (*Already answered*, *Not sure it arrived*, ...) stays until
 you dismiss or tap it, or news replaces it; if the notification was gone
 by then (swiped, or tapped into the app), only an outcome you must act on
@@ -459,7 +465,11 @@ through). If news replaced the conversation meanwhile, the news stays; if
 the conversation is gone (swiped, cleared as old news), the answer comes
 back while Android Auto projects; off the car only one you must act on
 comes back (refused, not sent, unsure, not paired), and off the car an
-answer never alerts. After a sent answer
+answer never alerts. The car's turn in the conversation no longer marks
+an answer from the shade still on its way, so that answer's outcome
+never replaces or clears the sentence you must hear (the cost: if that
+shade answer then fails, its outcome is not shown over the car's turn);
+an outcome already shown stays marked as one, not as news. After a sent answer
 the car's reply stays on the notification (Google's compliance asks for
 both car actions on a message the car should read); a second answer to
 the same dialog is read back as *The agent has moved on*.
@@ -557,7 +567,7 @@ decrypts each message (RFC 8291, `aes128gcm`, with Tink):
 
 | File | What |
 |---|---|
-| `PushRegistration.kt` | From the activity: on every resume and right after pairing, if paired and the bridge has push on (`GET /v1/push/key`, asked once per process), registers with the saved distributor, the phone's default one (Android may show a picker, once per pairing), or says that none is installed |
+| `PushRegistration.kt` | From the activity: on every resume and right after pairing, if paired and the bridge has push on (`GET /v1/push/key`, asked once per process), registers with the saved distributor, the phone's default one (Android may show a picker, once per pairing), or says that none is installed; the picker and that dialog wait until you have answered the notification permission's prompt, so two prompts never come at once |
 | `PassporterPushService.kt` | The connector's `PushService`, started by the distributor also with the app's process cold: messages go to `IncomingPush` at once, in the callback (local work only, never queued behind a bridge call); new endpoints and unregistrations go to `PushSync` on its worker thread |
 | `PushSync.kt`, `PushStore.kt`, `PushBridge.kt` | Keeps the bridge's copy in step: posts a new endpoint (`POST /v1/push/subscriptions`, app scope, through `DeviceAuth`), drops the one it replaces (again at the next sync if the bridge could not be told), keeps the distributor you chose, posts it once more in each new process (in case the bridge dropped it), and when the app is unpaired or paired anew (perhaps with another bridge) forgets the registration and leaves the distributor, which deletes the keys; a new pairing registers with new keys. The state of the last step is a `PushState` (`Subscribed`, `Refused` with the bridge's reason, `BridgeOff`, `RetryLater`, ...), logged under the tag `PassporterPush` |
 | `IncomingPush.kt` | A message the connector decrypted, while the app holds a registration, goes to `NoticeNotifier.show`. One it could not decrypt with the app's keys is dropped unseen, so only the bridge can make the app post a notice |
@@ -611,13 +621,19 @@ ignores every request until a bridge is paired.
 - **A rebuilt webview.** Android re-creates `MainActivity` for a
   configuration change the manifest does not list (a new font or display
   size, or a switch between left-to-right and right-to-left languages;
-  rotation and dark mode are listed, so they keep the webview). wry then builds a new webview and loads the first page
+  rotation and dark mode are listed, so they keep the webview), or after
+  destroying it in the background. A tap also makes a new `MainActivity`
+  in a live process: after Back finished the last one (Android 8 to 11),
+  or after a swipe from Recents while dictation kept the process. wry then
+  builds a new webview and loads the first page
   it was given at launch again (`FirstPage` in `destination.rs`). That page
   is the bridge's, except on the launch where you paired: there it is the
   Connect page, which the guard refuses once paired. So `WebViewBuilds`
   tells the shell about every webview after the process's first, and the
   shell then opens the bridge's start page (the Bridge page, if it does not
-  load). The guard is unchanged: the bridge needs no allowance. A process
+  load); then the tap that made the activity (`MainActivity.onCreate`, or a
+  new intent delivered before the webview was built), so the agent you
+  tapped opens last. The guard is unchanged: the bridge needs no allowance. A process
   Android ended in the background starts afresh from Recents, on the saved
   bridge.
 - **A link to another site** that you tap in the PWA (the link confirm's
@@ -657,13 +673,39 @@ asked for.
 *Change address* asks once more, then calls `forget_bridge`: the shell
 deletes the saved address and asks `ShellPlugin`, which forgets the
 native pairing (`DeviceAuth.forget`: the Keystore key, the device id and
-cached tokens) and restarts the app in a new process, on the Connect
+cached tokens), drops what the app kept for the old bridge (`PairingReset`,
+below), and restarts the app in a new process, on the Connect
 page. The restart is deliberate:
 Tauri cannot revoke the capability it granted to the old origin, so only a
 new process starts without it. The old bridge's data in the webview
 (its service worker cache, IndexedDB) stays under its own origin, which
 the app never opens again; clearing the app's storage removes it. The old
 bridge still lists the device until you revoke it there.
+
+**Nothing of one pairing reaches the next.** Agent ids repeat across
+bridges (`w1:p1`), so on *Change address*, and after every pairing and
+forget in the process (a listener `PassporterApplication` registers at
+process start), `PairingReset` cancels the queued answers of the shade
+and the car, forgets their frozen bodies, removes the agents'
+notifications (the recorder's own stays) and deletes the dictation takes
+nobody released, which the new bridge's PWA would otherwise adopt (so a
+new pairing, even with the same bridge, drops unsent dictation). As a
+second line, every action intent is stamped with the device the notice
+came to (`?device=dev-…` on its data; for a push, the device its keys
+were registered for), and each job keeps it: a tap, a car reply or a
+queued job made for another device than the one the app is paired as now
+sends nothing (`DeviceStamp`, `NotSent.PAIRING_CHANGED`,
+`CarTrouble.PAIRING_CHANGED`; `DeviceAuth.send` also refuses a token of
+another pairing, should one be made between the check and the request,
+as `OtherDevice`),
+and an old conversation is never brought back for it. When the app
+cannot tell what it is paired as (a busy Keystore just after boot), a
+job waits and retries rather than being dropped. A push decrypted
+with an older pairing's keys (not yet replaced) is dropped unseen; that
+check reads the saved device id (`DeviceAuth.savedDevice`), never the
+Keystore, since a push from cold arrives on the main thread. The reset
+also runs when the PWA forgets the pairing, so that drops unsent
+dictation too.
 
 Any app can send `MainActivity` the tap or shortcut intent, because a
 launcher activity is exported. The worst that does is open an agent's
@@ -685,6 +727,11 @@ registration and Android Auto can sign in with the app closed
   with a chosen scope, `app` or `car`), over the platform's
   `HttpsURLConnection` (no HTTP library in the APK), and caches each
   scope's token in memory until two minutes before it expires;
+- gives a sign-in (both tries) a 30-second budget: each request's connect
+  and read timeouts are cut to what is left, and none starts once it is
+  spent (one slow request can still overrun it); `status`, `forget` and a cached token never
+  wait for a sign-in in flight, and a token made for a pairing forgotten
+  meanwhile is not handed out;
 - forgets the pairing when the bridge answers `410 Gone` (revoked).
 
 The PWA reaches it through `plugin:device|status`, `pair`, `session` (a

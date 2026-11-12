@@ -5,6 +5,7 @@ import android.app.Notification
 import android.app.PendingIntent
 import android.content.ComponentName
 import androidx.core.app.NotificationCompat
+import dev.passporter.notify.DEVICE
 import dev.passporter.notify.NoticeNotification
 import dev.passporter.notify.NoticeState
 import dev.passporter.notify.notice
@@ -29,7 +30,7 @@ class NoticeActionsTest {
 
     @Test
     fun aDialogsActionsAreTheLowRiskAnswersWithoutSemantics() {
-        val notification = NoticeNotification.build(context, notice(), now = 1)
+        val notification = NoticeNotification.build(context, notice(), now = 1, device = DEVICE)
         val actions = actions(notification)
         assertEquals(listOf("Allow once", "Deny", "Deny with note"), actions.map { "${it.title}" })
         for (action in actions) {
@@ -48,7 +49,7 @@ class NoticeActionsTest {
     @Test
     fun aFinishedTurnsReplyTakesARemoteInputButLeavesTheSemanticReplyToTheCar() {
         val done = notice(state = NoticeState.FINISHED, pending = null)
-        val reply = actions(NoticeNotification.build(context, done, now = 1)).single()
+        val reply = actions(NoticeNotification.build(context, done, now = 1, device = DEVICE)).single()
         assertEquals("Reply", "${reply.title}")
         assertEquals(NotificationCompat.Action.SEMANTIC_ACTION_NONE, reply.semanticAction)
         assertTrue(reply.isAuthenticationRequired)
@@ -59,12 +60,12 @@ class NoticeActionsTest {
 
     @Test
     fun pendingIntentsAreExplicitBroadcastsImmutableUnlessTheyTakeText() {
-        val actions = actions(NoticeNotification.build(context, notice(), now = 1))
+        val actions = actions(NoticeNotification.build(context, notice(), now = 1, device = DEVICE))
         val component = ComponentName(context, NoticeActionReceiver::class.java)
         val expected = listOf(
-            "passporter://action/allow/w1%3Ap1/screen-2-ab" to true,
-            "passporter://action/deny/w1%3Ap1/screen-2-ab" to true,
-            "passporter://action/deny-note/w1%3Ap1/screen-2-ab" to false,
+            "passporter://action/allow/w1%3Ap1/screen-2-ab?device=dev-0123456789abcdef" to true,
+            "passporter://action/deny/w1%3Ap1/screen-2-ab?device=dev-0123456789abcdef" to true,
+            "passporter://action/deny-note/w1%3Ap1/screen-2-ab?device=dev-0123456789abcdef" to false,
         )
         for ((action, want) in actions.zip(expected)) {
             val shadow = shadowOf(requireNotNull(action.actionIntent))
