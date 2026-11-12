@@ -96,14 +96,15 @@ object Reconciler {
 
     /**
      * The news notifications on show. Those showing the progress of an
-     * answer ([ActionFeedback.EXTRA_JOB], see [answers]) or its outcome
+     * answer ([ActionFeedback.EXTRA_JOB] or, once the car spoke,
+     * [ActionFeedback.EXTRA_SPOKEN_OVER], see [answers]) or its outcome
      * ([ActionFeedback.EXTRA_OUTCOME], left to the person) are not news.
      */
     fun shown(context: Context): List<ShownNotice> =
         context.getSystemService(NotificationManager::class.java).activeNotifications.mapNotNull { posted ->
             val notification = posted.notification
             val extras = notification.extras
-            val answer = extras.containsKey(ActionFeedback.EXTRA_JOB) || extras.containsKey(ActionFeedback.EXTRA_OUTCOME)
+            val answer = ANSWER_EXTRAS.any(extras::containsKey)
             if (posted.id != NoticeNotification.ID || answer) {
                 return@mapNotNull null
             }
@@ -114,13 +115,15 @@ object Reconciler {
 
     /**
      * The agents whose notification shows the progress of an answer
-     * ([ActionFeedback.EXTRA_JOB]) posted before [before], with the job's
+     * ([ActionFeedback.EXTRA_JOB], or [ActionFeedback.EXTRA_SPOKEN_OVER])
+     * posted before [before], with the job's
      * key: a leftover once that job is no longer queued (lost: a settled
      * job's notification is gone or shows its outcome).
      */
     fun answers(context: Context, before: Long): Map<AgentId, String> =
         context.getSystemService(NotificationManager::class.java).activeNotifications.mapNotNull { posted ->
-            val key = posted.notification.extras.getString(ActionFeedback.EXTRA_JOB)
+            val extras = posted.notification.extras
+            val key = extras.getString(ActionFeedback.EXTRA_JOB) ?: extras.getString(ActionFeedback.EXTRA_SPOKEN_OVER)
             val agent = posted.tag?.let(AgentId::parse)
             if (posted.id != NoticeNotification.ID || key == null || agent == null || posted.postTime >= before) {
                 null
@@ -141,6 +144,9 @@ object Reconciler {
     internal const val LEFTOVERS_ONLY = "leftoversOnly"
 
     private const val TAG = "PassporterNotify"
+
+    /** The extras that mark a notification as an answer's, not news. */
+    private val ANSWER_EXTRAS = listOf(ActionFeedback.EXTRA_JOB, ActionFeedback.EXTRA_SPOKEN_OVER, ActionFeedback.EXTRA_OUTCOME)
 
     /** How old an answer's notification must be to count as a leftover: past its tap's queueing. */
     const val ANSWER_GRACE_MS = 60_000L

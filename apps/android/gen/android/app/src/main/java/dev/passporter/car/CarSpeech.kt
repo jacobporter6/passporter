@@ -38,9 +38,10 @@ import dev.passporter.notify.actions.ActionFeedback
  * bring a gone conversation back. The look and the post hold [NotificationLock].
  *
  * A repost is the car's turn in the conversation: it no longer shows an
- * answer from the shade on its way ([ActionFeedback.EXTRA_JOB] is dropped,
- * so that job's outcome cannot replace or clear what the driver must
- * hear), and keeps the mark of an outcome already shown
+ * answer from the shade on its way as such ([ActionFeedback.EXTRA_JOB]
+ * becomes [ActionFeedback.EXTRA_SPOKEN_OVER], so that job's being sent
+ * cannot clear what the driver must hear, and its not being sent only
+ * adds its reason), and keeps the mark of an outcome already shown
  * ([ActionFeedback.EXTRA_OUTCOME]), which is not news.
  */
 class CarSpeech(
@@ -88,7 +89,8 @@ class CarSpeech(
             .setContentText(status)
             .setOnlyAlertOnce(true)
             .setSilent(true)
-            .addExtras(base.extras.marks())
+            // The car said nothing: an answer from the shade on its way stays as it is.
+            .addExtras(base.extras.marks(spoken = false))
         copyActions(base, builder, visible = true)
         notify(request, builder)
     }
@@ -136,7 +138,7 @@ class CarSpeech(
                 // A new message: the car announces it. Off the car, back on the phone quietly.
                 .setOnlyAlertOnce(quiet)
                 .setSilent(quiet)
-            builder.addExtras(base?.extras?.marks() ?: Bundle().apply { stamp(request, name) })
+            builder.addExtras(base?.extras?.marks(spoken = true) ?: Bundle().apply { stamp(request, name) })
             if (base != null) {
                 copyActions(base, builder, visible = keepShadeActions)
             } else if (device != null) {
@@ -156,14 +158,19 @@ class CarSpeech(
 
     /**
      * What a repost keeps of this notice's extras: its question, stamp and
-     * agent name, and the mark of an outcome shown (not news). Not the mark
-     * of an answer from the shade on its way: see the class comment.
+     * agent name, the mark of an outcome shown (not news), and an answer
+     * from the shade on its way: as spoken over if the car [spoken] in the
+     * repost (see the class comment), else as it was.
      */
-    private fun Bundle.marks(): Bundle = Bundle().also { kept ->
+    private fun Bundle.marks(spoken: Boolean): Bundle = Bundle().also { kept ->
         getString(NoticeNotification.EXTRA_QUESTION)?.let { kept.putString(NoticeNotification.EXTRA_QUESTION, it) }
         kept.putLong(NoticeNotification.EXTRA_STAMP, getLong(NoticeNotification.EXTRA_STAMP))
         getString(NoticeNotification.EXTRA_AGENT_NAME)?.let { kept.putString(NoticeNotification.EXTRA_AGENT_NAME, it) }
         if (getBoolean(ActionFeedback.EXTRA_OUTCOME)) kept.putBoolean(ActionFeedback.EXTRA_OUTCOME, true)
+        getString(ActionFeedback.EXTRA_SPOKEN_OVER)?.let { kept.putString(ActionFeedback.EXTRA_SPOKEN_OVER, it) }
+        getString(ActionFeedback.EXTRA_JOB)?.let {
+            kept.putString(if (spoken) ActionFeedback.EXTRA_SPOKEN_OVER else ActionFeedback.EXTRA_JOB, it)
+        }
     }
 
     private fun Bundle.stamp(request: CarRequest, name: String) {

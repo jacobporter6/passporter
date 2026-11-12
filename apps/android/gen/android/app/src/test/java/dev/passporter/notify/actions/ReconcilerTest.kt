@@ -22,6 +22,7 @@ import dev.passporter.app.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -73,6 +74,12 @@ class ReconcilerTest {
     fun grant() {
         shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         NoticeNotification.createChannels(context)
+        pairedDevice = { PairedAs.Device(DEVICE) }
+    }
+
+    @After
+    fun restore() {
+        pairedDevice = ::currentDevice
     }
 
     private fun show(notice: Notice) {

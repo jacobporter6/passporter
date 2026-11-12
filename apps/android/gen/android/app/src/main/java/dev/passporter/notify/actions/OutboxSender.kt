@@ -17,7 +17,10 @@ import org.json.JSONObject
  * whose id must still be the notice's (else [NotSent.ALREADY_ANSWERED]). A
  * reply goes only while the agent is still ready and has not changed state
  * since the person replied (else [NotSent.MOVED_ON]); that is the stale
- * guard's "since you decided" for a reply, which names no dialog. `idle`
+ * guard's "since you decided" for a reply, which names no dialog. The
+ * agent's `statusSince` is on the bridge's clock and the reply's time on
+ * the phone's, so the reply's time is moved to the bridge's clock first
+ * ([bridgeTime]); `idle`
  * passes whenever it began: herdr turns `done` into `idle` when the pane is
  * looked at, which is no reason to drop a reply (docs/security.md, D20). The body
  * is then frozen ([FrozenBodies]) and every retry resends it as is, so a
@@ -30,6 +33,8 @@ import org.json.JSONObject
 class OutboxSender(
     private val bridge: Bridge,
     private val frozen: FrozenBodies,
+    /** The phone's clock (unix ms), as [OutboxJob.createdAt] was taken. */
+    private val now: () -> Long = System::currentTimeMillis,
     /** What the app is paired as now ([pairedDevice]). */
     private val paired: () -> PairedAs,
 ) {
@@ -75,7 +80,8 @@ class OutboxSender(
         val agent = agents.firstOrNull { it.id == request.agent }
             ?: return Prepared.Not(SendOutcome.Final(NotSent.AGENT_GONE))
         val kind = if (request.action == NoticeAction.REPLY) {
-            val changed = agent.status == AgentStatus.DONE && agent.statusSince > job.createdAt
+            val changed = agent.status == AgentStatus.DONE &&
+                agent.statusSince > bridgeTime(job.createdAt, listed) + CLOCK_TOLERANCE_MS
             if (!agent.status.isReady || changed) {
                 return Prepared.Not(SendOutcome.Final(NotSent.MOVED_ON))
             }
@@ -87,6 +93,17 @@ class OutboxSender(
             }
         }
         return Prepared.Body(ActionBody.json(job, agent.seq, kind))
+    }
+
+    /**
+     * [phoneTime] on the bridge's clock: shifted by how far the bridge's
+     * clock (the `Date` of [response], just received) is from the phone's
+     * now. Unshifted when the answer has no `Date`. It assumes the phone's
+     * clock did not jump between the tap and now.
+     */
+    private fun bridgeTime(phoneTime: Long, response: HttpResponse): Long {
+        val date = response.date ?: return phoneTime
+        return phoneTime + (date - now())
     }
 
     private sealed interface Choice {
@@ -196,6 +213,18 @@ class OutboxSender(
 
     private companion object {
         const val AGENTS = "/v1/agents"
+
+        /**
+         * How much later than the reply (on the bridge's clock) the agent's
+         * status must have changed for the reply to count as stale: `Date`
+         * has whole seconds, and the answer took a while to arrive, so the
+         * reply's time on the bridge's clock may be early by up to a second
+         * plus the answer's transfer time. A transfer slower than a second
+         * can call a fresh reply stale (refused, never sent wrongly); a turn
+         * both started and finished within this of the reply lets the reply
+         * through.
+         */
+        const val CLOCK_TOLERANCE_MS = 2_000L
         const val ACTIONS = "/v1/actions"
 
         /** The option ids a hook and the screen parser give a dialog's answers (`pending::parse`). */
