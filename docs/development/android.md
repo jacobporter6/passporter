@@ -358,8 +358,8 @@ look at the pane). "Since before you replied" compares on the bridge's
 clock: the reply's time is shifted by how far the bridge's `Date` header
 on that same `GET /v1/agents` is from the phone's clock, and the agent
 must have changed state more than 2 s after it (the header has whole
-seconds, and the answer takes a while to arrive) to count as moved on. The body is then frozen, and a retry
-resends it unchanged, so the bridge replays a lost answer instead of
+seconds, and the answer takes a while to arrive) to count as moved on.
+The body is then frozen, and a retry resends it unchanged, so the bridge replays a lost answer instead of
 deciding it again. The bridge's own rules still apply on top
 (`origin: "notification"`: no prompt into a dialog, no `!`/`/`/`#` prompt).
 
@@ -377,7 +377,7 @@ deciding it again. The bridge's own rules still apply on top
 If news replaced the notification meanwhile (a new dialog, a new turn), the
 news stays and the older answer's outcome is not shown. If Android Auto
 spoke in the conversation meanwhile, its words stay: a sent answer leaves
-them, and an answer not sent adds its reason under them
+them, and an answer not sent is repeated after them with its reason
 (`ActionFeedback.EXTRA_SPOKEN_OVER`).
 
 **Old news is cleared.** The bridge sends no "resolved" message, so when
@@ -398,7 +398,8 @@ by then (swiped, or tapped into the app), only an outcome you must act on
 on a notice that news replaced meanwhile queues nothing: each notification
 names its question (`EXTRA_QUESTION`: the pending id, or `turn`); nor
 does a tap whose notification is gone by the time it is shown as sending
-(a pairing reset cleared the shade between the tap and then).
+(a pairing reset, or old news cleared, between the tap and then), or one
+made before the app paired anew.
 
 Answers are ordinary WorkManager jobs, not expedited ones: an expedited job
 needs a foreground-service notification on Android 11 and older. A reply
@@ -844,8 +845,8 @@ permission alias `microphone`); a refusal reads "Allow it for Passporter
 in Android's settings" in the PWA. The plugin's manifest adds
 `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_MICROPHONE` and the service.
 Without `POST_NOTIFICATIONS` (Android 13+, asked once a bridge is
-connected or the app pairs) the service still records; Android then lists it only in the
-quick settings' active-apps list.
+connected or the app pairs) the service still records; Android then
+lists it only in the quick settings' active-apps list.
 
 ## What it installs, and where
 

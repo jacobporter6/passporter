@@ -457,7 +457,9 @@ class CarFlowTest {
         runQueued()
         ActionFeedback(context).notSent(shade, NotSent.UNREACHABLE)
         val after = requireNotNull(shown())
-        assertEquals("Passporter: Denied.", messages(after).last())
+        val said = messages(after)
+        assertEquals("Passporter: Denied.", said[said.size - 2])
+        assertEquals("the reason reads as the shade's answer's", "you: ${context.getString(R.string.notify_action_allow_once)}", said.last())
         assertEquals(context.getString(R.string.notify_not_sent_unreachable), subText(after))
         assertTrue(after.extras.getBoolean(ActionFeedback.EXTRA_OUTCOME))
         assertEquals("the car can still take it", 2, NotificationCompat.getInvisibleActions(after).size)
@@ -492,5 +494,19 @@ class CarFlowTest {
         assertEquals("Passporter: Denied.", messages(spoken).last())
         assertTrue(spoken.extras.getBoolean(ActionFeedback.EXTRA_OUTCOME))
         assertTrue("not news for the reconciler", Reconciler.shown(context).isEmpty())
+    }
+
+    /** Off the car, a car action says nothing: the shade's answer on its way keeps its mark, and its Sent clears the notification. */
+    @Test
+    fun offTheCarTheShadesAnswerStaysItsOwn() {
+        show(notice())
+        val shade = shadeAnswer()
+        projecting = false
+        fire(CarAction.REPLY, heard = "no")
+        val after = requireNotNull(shown())
+        assertEquals(shade.key, after.extras.getString(ActionFeedback.EXTRA_JOB))
+        assertFalse(after.extras.containsKey(ActionFeedback.EXTRA_SPOKEN_OVER))
+        ActionFeedback(context).sent(shade)
+        assertNull(shown())
     }
 }

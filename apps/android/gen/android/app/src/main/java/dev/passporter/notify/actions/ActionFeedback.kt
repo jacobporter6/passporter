@@ -35,8 +35,8 @@ import dev.passporter.notify.NotificationLock
  * the car has spoken in the conversation meanwhile
  * ([dev.passporter.car.CarSpeech]), the key moves to [EXTRA_SPOKEN_OVER]:
  * the job's [sent] then leaves what the driver must hear (only the mark
- * goes), and its [notSent] adds its reason under it, so the person still
- * learns to answer again. If news replaced the notification meanwhile (a
+ * goes), and its [notSent] repeats the shade's answer after it with its
+ * reason, so the person learns that answer did not go. If news replaced the notification meanwhile (a
  * new dialog, a new turn), the news stays as it is: whatever happened to the older answer, the news is what
  * matters now. A job's notification left over (its job lost) is cleared by
  * [Reconciler]. Every look-then-change holds [NotificationLock], as
@@ -108,9 +108,12 @@ class ActionFeedback(
             base == null -> if (reason in WORTH_RETURNING) {
                 repost(Conversation.of(job.request, job.name, null), answer(job.request.action, job.text), message(reason), Mark.Outcome)
             }
-            // The car spoke since: its words stay, the reason goes under them.
-            base.extras.getString(EXTRA_JOB) == job.key || base.extras.getString(EXTRA_SPOKEN_OVER) == job.key ->
+            base.extras.getString(EXTRA_JOB) == job.key ->
                 repost(Conversation.of(job.request, job.name, base), null, message(reason), Mark.Outcome)
+            // The car spoke since: its words stay; the shade's answer comes
+            // after them, so its reason reads as that answer's, not the car's.
+            base.extras.getString(EXTRA_SPOKEN_OVER) == job.key ->
+                repost(Conversation.of(job.request, job.name, base), answer(job.request.action, job.text), message(reason), Mark.Outcome)
             else -> Log.i(TAG, "not sent ($reason); newer news replaced its notification")
         }
     }

@@ -49,8 +49,11 @@ object PairingReset {
             listOf(Outbox.TAG, CarOutbox.TAG).map { work.cancelAllWorkByTag(it).result }.forEach { it.get() }
         }
         step("the frozen bodies") { PreferenceFrozenBodies(app).clear() }
-        step("the agents' notifications") { cancelNotices(app) }
-        step("the agents' shortcuts") { removeShortcuts(app) }
+        // One hold of the lock, so no notice is posted between the two.
+        synchronized(NotificationLock) {
+            step("the agents' notifications") { cancelNotices(app) }
+            step("the agents' shortcuts") { removeShortcuts(app) }
+        }
         step("the dictation takes") { Recorder.discardAll(app) }
     }
 

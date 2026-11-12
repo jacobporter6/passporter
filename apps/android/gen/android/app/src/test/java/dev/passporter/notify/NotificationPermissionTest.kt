@@ -1,9 +1,9 @@
 package dev.passporter.notify
 
 import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.ComponentActivity
 import dev.passporter.device.DeviceStatus
-import android.content.pm.PackageManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
