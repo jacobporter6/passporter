@@ -19,6 +19,9 @@ interface FrozenBodies {
 
     /** The keys with a frozen body, to prune those of jobs that are gone ([Reconciler]). */
     fun keys(): Set<String>
+
+    /** Forgets every body: the pairing changed, and every job is gone. */
+    fun clear()
 }
 
 /** [FrozenBodies] in app-private preferences (never backed up). */
@@ -37,6 +40,10 @@ internal class PreferenceFrozenBodies(context: Context) : FrozenBodies {
     }
 
     override fun keys(): Set<String> = preferences.all.keys.toSet()
+
+    override fun clear() {
+        preferences.edit().clear().commit()
+    }
 
     private companion object {
         const val FILE = "dev.passporter.notify.outbox"

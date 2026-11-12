@@ -41,6 +41,8 @@ class SessionToken internal constructor(
     val deviceName: String?,
     /** When it expires, on the [DeviceAuth] clock (`SystemClock.elapsedRealtime`). */
     internal val expiresAtMs: Long,
+    /** The device it was made for. */
+    internal val device: DeviceId,
 ) {
     /** The `Authorization` header value. */
     fun authorization(): String = "Bearer $value"
@@ -54,8 +56,11 @@ class SessionToken internal constructor(
  * The device key is a non-exportable P-256 key in the Android Keystore
  * ([KeystoreKeys]); the device id and the key's alias are in app-private,
  * never-backed-up storage. Everything here is blocking network or Keystore
- * work: call it from a worker thread, never the main thread. Calls are
- * serialized, so concurrent callers share one sign-in.
+ * work: call it from a worker thread, never the main thread. Sign-ins and
+ * pairings are serialized, so concurrent callers share one sign-in; a
+ * sign-in gives up after [SIGN_IN_DEADLINE_MS]. [status], [forget] and a
+ * cached [token] never wait for one: the record and the token cache have a
+ * lock of their own, never held across the network.
  *
  * ```kotlin
  * val auth = DeviceAuth.get(context)
@@ -70,12 +75,26 @@ class DeviceAuth internal constructor(
     private val transport: HttpTransport,
     private val now: () -> Long,
 ) {
-    private val lock = Any()
+    /** Serializes sign-ins and pairings: held across their network calls. */
+    private val signIn = Any()
+
+    /** Guards the record and [tokens]; held briefly, never across the network. */
+    private val state = Any()
     private val tokens = EnumMap<Scope, SessionToken>(Scope::class.java)
     private val listeners = CopyOnWriteArrayList<PairingListener>()
 
     /** Whether this app is paired with the saved bridge. */
-    fun status(): DeviceStatus = synchronized(lock) { DeviceStatus(record()?.deviceId) }
+    fun status(): DeviceStatus = synchronized(state) { DeviceStatus(record()?.deviceId) }
+
+    /**
+     * The device id saved for the saved bridge, without asking the Keystore
+     * whether its key still exists (as [status] does): two small file
+     * reads, for a check on the main thread. A key lost to a Keystore reset
+     * still counts here until [status] or a sign-in notices.
+     */
+    fun savedDevice(): DeviceId? = synchronized(state) {
+        store.load()?.takeIf { it.origin == origin() }?.deviceId
+    }
 
     /**
      * Calls [listener] after every [pair] that succeeds and every [forget]
@@ -102,7 +121,7 @@ class DeviceAuth internal constructor(
         return id
     }
 
-    private fun pairLocked(code: PairingCode, name: DeviceName?): DeviceId = synchronized(lock) {
+    private fun pairLocked(code: PairingCode, name: DeviceName?): DeviceId = synchronized(signIn) {
         val bridge = origin() ?: throw DeviceAuthException.NoBridge()
         val new = keystore { keys.create() }
         val paired = try {
@@ -111,17 +130,20 @@ class DeviceAuth internal constructor(
             discard(new.alias)
             throw e
         }
-        val previous = store.load()
-        try {
-            store.save(DeviceRecord(paired.deviceId, new.alias, bridge))
-        } catch (e: IOException) {
-            // The bridge now lists a device this app cannot use: it holds a
-            // slot until it is revoked there. Rare (storage full).
-            discard(new.alias)
-            throw DeviceAuthException.Storage(e)
+        val previous = synchronized(state) {
+            val previous = store.load()
+            try {
+                store.save(DeviceRecord(paired.deviceId, new.alias, bridge))
+            } catch (e: IOException) {
+                // The bridge now lists a device this app cannot use: it holds a
+                // slot until it is revoked there. Rare (storage full).
+                discard(new.alias)
+                throw DeviceAuthException.Storage(e)
+            }
+            tokens.clear()
+            previous
         }
         if (previous != null && previous.keyAlias != new.alias) discard(previous.keyAlias)
-        tokens.clear()
         paired.deviceId
     }
 
@@ -135,24 +157,32 @@ class DeviceAuth internal constructor(
      *   bridge no longer knows this device (the pairing is then forgotten
      *   here as well), or any other reason it failed.
      */
-    fun token(scope: Scope): SessionToken = synchronized(lock) {
-        tokens[scope]?.takeIf { it.expiresAtMs - now() > REFRESH_MARGIN_MS } ?: mint(scope)
+    fun token(scope: Scope): SessionToken =
+        cached(scope) ?: synchronized(signIn) { cached(scope) ?: mint(scope) }
+
+    /** The cached token for [scope], if it has more than [REFRESH_MARGIN_MS] left. */
+    private fun cached(scope: Scope): SessionToken? = synchronized(state) {
+        tokens[scope]?.takeIf { it.expiresAtMs - now() > REFRESH_MARGIN_MS }
     }
 
     /** A token for [scope] made now, never the cached one (which it replaces). */
-    fun freshToken(scope: Scope): SessionToken = synchronized(lock) { mint(scope) }
+    fun freshToken(scope: Scope): SessionToken = synchronized(signIn) { mint(scope) }
 
     /** Drops [rejected] from the cache, if it is still the cached token for its scope. */
-    fun invalidate(rejected: SessionToken) = synchronized(lock) {
+    fun invalidate(rejected: SessionToken) = synchronized(state) {
         if (tokens[rejected.scope] === rejected) tokens.remove(rejected.scope)
     }
 
     /** Seconds [token] has left, for callers that schedule a renewal. */
     fun secondsLeft(token: SessionToken): Long = ((token.expiresAtMs - now()) / 1000).coerceAtLeast(0)
 
-    /** Forgets the pairing: deletes the key, the record and every cached token. */
+    /**
+     * Forgets the pairing: deletes the key, the record and every cached
+     * token. It does not wait for a sign-in in flight, which then fails
+     * ([DeviceAuthException.NotPaired]) and caches nothing.
+     */
     fun forget() {
-        synchronized(lock) {
+        synchronized(state) {
             store.load()?.let { discard(it.keyAlias) }
             store.clear()
             tokens.clear()
@@ -175,14 +205,17 @@ class DeviceAuth internal constructor(
     /**
      * An authenticated request to the bridge with a [scope] token: [path] is
      * absolute (`/v1/...`), [jsonBody] goes as `application/json` (not with
-     * [Method.GET]). A 401 is
+     * [Method.GET]). With [device], it goes only as that device: a token of
+     * any other pairing (one made after a new pairing that raced the
+     * caller's own check) is refused as [DeviceAuthException.OtherDevice]
+     * before anything is sent. A 401 is
      * retried once with a fresh token. Any answer the bridge gives is
      * returned as is; only failing to get a token throws.
      *
      * @throws DeviceAuthException as [token], [DeviceAuthException.Unreachable],
      *   or [DeviceAuthException.InvalidInput] when [path] is not absolute.
      */
-    fun send(scope: Scope, method: Method, path: String, jsonBody: String? = null): HttpResponse {
+    fun send(scope: Scope, method: Method, path: String, jsonBody: String? = null, device: DeviceId? = null): HttpResponse {
         if (jsonBody != null && !method.hasBody) throw DeviceAuthException.InvalidInput("body for ${method.name}")
         val bridge = origin() ?: throw DeviceAuthException.NoBridge()
         val url = try {
@@ -190,12 +223,21 @@ class DeviceAuth internal constructor(
         } catch (e: IllegalArgumentException) {
             throw DeviceAuthException.InvalidInput("path")
         }
-        val first = token(scope)
+        val first = token(scope, device)
         val response = sendWith(first, method, url, jsonBody)
         if (response.status != 401) return response
         invalidate(first)
-        return sendWith(token(scope), method, url, jsonBody)
+        return sendWith(token(scope, device), method, url, jsonBody)
     }
+
+    /** [token] for [scope], if it was made for [device] (when given). */
+    private fun token(scope: Scope, device: DeviceId?): SessionToken =
+        try {
+            token(scope)
+        } catch (e: DeviceAuthException.NotPaired) {
+            if (device != null) throw DeviceAuthException.OtherDevice()
+            throw e
+        }.also { if (device != null && it.device != device) throw DeviceAuthException.OtherDevice() }
 
     private fun sendWith(token: SessionToken, method: Method, url: String, jsonBody: String?): HttpResponse {
         val headers = buildMap {
@@ -210,7 +252,7 @@ class DeviceAuth internal constructor(
         }
     }
 
-    /** The record, if it belongs to the saved bridge and its key still exists. Holds [lock]. */
+    /** The record, if it belongs to the saved bridge and its key still exists. Holds [state]. */
     private fun record(): DeviceRecord? {
         val record = store.load() ?: return null
         if (record.origin != origin()) return null
@@ -222,24 +264,44 @@ class DeviceAuth internal constructor(
         return record
     }
 
-    /** Signs in: challenge, signature, session. One retry on a 401 with a fresh challenge. Holds [lock]. */
+    /**
+     * Signs in: challenge, signature, session. One retry on a 401 with a
+     * fresh challenge, all within [SIGN_IN_DEADLINE_MS]. The token is
+     * cached only if the pairing it was made for is still the saved one.
+     * Holds [signIn].
+     */
     private fun mint(scope: Scope): SessionToken {
-        val record = record() ?: throw DeviceAuthException.NotPaired()
-        val client = BridgeClient(record.origin, transport)
-        try {
-            return try {
+        val record = synchronized(state) { record() } ?: throw DeviceAuthException.NotPaired()
+        val deadline = now() + SIGN_IN_DEADLINE_MS
+        val client = BridgeClient(record.origin, transport) { deadline - now() }
+        val token = try {
+            try {
                 mintOnce(client, record, scope)
             } catch (e: DeviceAuthException.Refused) {
                 // Usually a challenge lost to a bridge restart mid-sign-in.
                 mintOnce(client, record, scope)
             }
         } catch (e: DeviceAuthException.Forgotten) {
-            discard(record.keyAlias)
-            store.clear()
-            tokens.clear()
+            synchronized(state) {
+                if (isSaved(record)) {
+                    discard(record.keyAlias)
+                    store.clear()
+                    tokens.clear()
+                }
+            }
             throw e
         }
+        synchronized(state) {
+            // Forgotten or paired anew meanwhile: this token is the old pairing's.
+            if (!isSaved(record)) throw DeviceAuthException.NotPaired()
+            tokens[scope] = token
+        }
+        return token
     }
+
+    /** Whether [record] is still the saved pairing. Holds [state]. */
+    private fun isSaved(record: DeviceRecord): Boolean =
+        store.load()?.let { it.deviceId == record.deviceId && it.keyAlias == record.keyAlias && it.origin == record.origin } == true
 
     private fun mintOnce(client: BridgeClient, record: DeviceRecord, scope: Scope): SessionToken {
         val asked = now()
@@ -250,9 +312,7 @@ class DeviceAuth internal constructor(
         if (grant.scope != scope) throw DeviceAuthException.BadResponse("granted ${grant.scope.wire}, asked ${scope.wire}")
         // Counted from before the request, so the cache never outlives the token.
         val lifetimeMs = grant.expiresInSecs.coerceAtMost(MAX_LIFETIME_SECS) * 1000
-        val token = SessionToken(grant.token, scope, grant.deviceName, asked + lifetimeMs)
-        tokens[scope] = token
-        return token
+        return SessionToken(grant.token, scope, grant.deviceName, asked + lifetimeMs, record.deviceId)
     }
 
     /** Deletes the key [alias], best effort: a key left behind is unused, not a risk. */
@@ -295,6 +355,14 @@ class DeviceAuth internal constructor(
 
         /** Longer than any session the bridge grants (15 min); keeps the arithmetic sane. */
         private const val MAX_LIFETIME_SECS = 86_400L
+
+        /**
+         * The longest a sign-in (both tries) may take: past it, the next
+         * request is not made and the sign-in fails as
+         * [DeviceAuthException.Unreachable]. Each request's timeouts are cut
+         * to what is left of it.
+         */
+        const val SIGN_IN_DEADLINE_MS = 30_000L
 
         /** The pause before the one retry of a failed signature. */
         private const val SIGN_RETRY_MS = 1_000L

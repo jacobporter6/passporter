@@ -12,7 +12,7 @@ class PushRegistrationTest {
     /** Attaches in its constructor, before it has a context, as MainActivity does. */
     class AttachingActivity : ComponentActivity() {
         init {
-            PushRegistration.attachTo(this)
+            PushRegistration.attachTo(this, promptsHeld = { false })
         }
     }
 

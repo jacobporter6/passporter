@@ -8,6 +8,7 @@ import android.util.Log
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.pm.ShortcutManagerCompat
+import dev.passporter.device.DeviceId
 
 /** What [NoticeNotifier.show] did with a payload. */
 sealed interface NoticeOutcome {
@@ -36,8 +37,14 @@ sealed interface NoticeOutcome {
  *
  * Every notice of a new message is news and alerts ([NotificationPlanner]);
  * a message delivered twice is recognised by its ping ([RecentPings]).
+ * Its actions are made for [device], the pairing the message came to
+ * ([dev.passporter.notify.actions.DeviceStamp]); without one it has none.
  */
-class NoticeNotifier(context: Context) {
+class NoticeNotifier(
+    context: Context,
+    /** The device the push keys were registered for (`PushRecord.owner`). */
+    private val device: () -> DeviceId?,
+) {
     private val context = context.applicationContext
     private val manager = NotificationManagerCompat.from(this.context)
     private val pings = RecentPings(this.context)
@@ -69,12 +76,13 @@ class NoticeNotifier(context: Context) {
             val notices = NotificationPlanner.plan(message)
             NoticeNotification.createChannels(context)
             val now = System.currentTimeMillis()
+            val device = device()
             for ((posted, notice) in notices.withIndex()) {
                 ShortcutManagerCompat.pushDynamicShortcut(
                     context,
                     NoticeNotification.shortcut(context, notice),
                 )
-                val notification = NoticeNotification.build(context, notice, now)
+                val notification = NoticeNotification.build(context, notice, now, device)
                 try {
                     manager.notify(NoticeNotification.tag(notice.agentId), NoticeNotification.ID, notification)
                 } catch (_: SecurityException) {

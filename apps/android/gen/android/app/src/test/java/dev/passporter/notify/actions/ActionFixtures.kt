@@ -1,7 +1,9 @@
 package dev.passporter.notify.actions
 
+import dev.passporter.device.DeviceId
 import dev.passporter.device.HttpResponse
 import dev.passporter.device.Method
+import dev.passporter.notify.DEVICE
 import dev.passporter.notify.PendingId
 import dev.passporter.notify.agent
 
@@ -11,7 +13,7 @@ const val KEY = "00000000-0000-4000-8000-000000000001"
 /** A job of [action] on agent `w1:p1` (dialog `screen-2-ab` for an answer), taken at [createdAt]. */
 fun job(action: NoticeAction, text: String? = null, createdAt: Long = 2000): OutboxJob {
     val pending = if (action.answersDialog) PendingId.parse("screen-2-ab") else null
-    return OutboxJob(KEY, ActionRequest(action, agent("w1:p1"), pending), text, "widget", createdAt)
+    return OutboxJob(KEY, ActionRequest(action, agent("w1:p1"), pending), text, "widget", createdAt, DEVICE)
 }
 
 /** `GET /v1/agents` with `w1:p1` in [status], at seq 7 since [since]. */
@@ -33,9 +35,13 @@ data class Sent(val method: Method, val path: String, val body: String?)
 class FakeBridge(private val answer: (Sent) -> HttpResponse) : Bridge {
     val requests = mutableListOf<Sent>()
 
-    override fun send(method: Method, path: String, json: String?): HttpResponse {
+    /** The device each request was to go as. */
+    val devices = mutableListOf<DeviceId?>()
+
+    override fun send(method: Method, path: String, json: String?, device: DeviceId?): HttpResponse {
         val sent = Sent(method, path, json)
         requests += sent
+        devices += device
         return answer(sent)
     }
 
@@ -78,4 +84,6 @@ class MemoryFrozen : FrozenBodies {
     }
 
     override fun keys() = bodies.keys.toSet()
+
+    override fun clear() = bodies.clear()
 }

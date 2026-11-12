@@ -1,8 +1,10 @@
 package dev.passporter.notify.actions
 
+import dev.passporter.notify.DEVICE
 import dev.passporter.device.DeviceAuthException
 import dev.passporter.device.HttpResponse
 import dev.passporter.device.Method
+import dev.passporter.notify.OTHER_DEVICE
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -14,7 +16,7 @@ import java.io.IOException
 class OutboxSenderTest {
     private val frozen = MemoryFrozen()
 
-    private fun send(bridge: Bridge, job: OutboxJob) = OutboxSender(bridge, frozen).send(job)
+    private fun send(bridge: Bridge, job: OutboxJob) = OutboxSender(bridge, frozen) { PairedAs.Device(DEVICE) }.send(job)
 
     private fun body(kind: String, payload: String) =
         """{"idempotencyKey":"$KEY","agentId":"w1:p1","expectedSeq":7,"createdAt":2000,""" +
@@ -208,8 +210,76 @@ class OutboxSenderTest {
 
     @Test
     fun aStoppedAttemptKeepsItsFrozenBody() {
-        val outcome = OutboxSender(FakeBridge.of(), frozen).send(job(NoticeAction.ALLOW_ONCE)) { true }
+        val outcome = OutboxSender(FakeBridge.of(), frozen) { PairedAs.Device(DEVICE) }.send(job(NoticeAction.ALLOW_ONCE)) { true }
         assertEquals(SendOutcome.Sent, outcome)
         assertEquals("the rerun resends it", setOf(KEY), frozen.keys())
+    }
+
+    /** Paired anew (or unpaired) since the person answered: nothing reaches the bridge now paired. */
+    @Test
+    fun anAnswerOfAnotherPairingIsNeverSent() {
+        for (paired in listOf(PairedAs.Device(OTHER_DEVICE), PairedAs.Nothing)) {
+            val bridge = FakeBridge.of()
+            val outcome = OutboxSender(bridge, frozen) { paired }.send(job(NoticeAction.REPLY, "hi"))
+            assertEquals(SendOutcome.Final(NotSent.PAIRING_CHANGED), outcome)
+            assertTrue("$paired: nothing asked", bridge.requests.isEmpty())
+        }
+    }
+
+    @Test
+    fun everyRequestGoesOnlyAsTheJobsDevice() {
+        val bridge = FakeBridge.of()
+        send(bridge, job(NoticeAction.ALLOW_ONCE))
+        assertEquals(List(3) { DEVICE }, bridge.devices)
+    }
+
+    /** Paired anew between the check and the request: `DeviceAuth` refuses the new pairing's token. */
+    @Test
+    fun aPairingThatChangesMidAttemptStillSendsNothing() {
+        var paired: PairedAs = PairedAs.Device(DEVICE)
+        val bridge = FakeBridge {
+            paired = PairedAs.Device(OTHER_DEVICE)
+            throw DeviceAuthException.NotPaired()
+        }
+        assertEquals(SendOutcome.Final(NotSent.PAIRING_CHANGED), OutboxSender(bridge, frozen) { paired }.send(job(NoticeAction.REPLY, "hi")))
+    }
+
+    /** Even with a frozen body: it belongs to the old pairing, whose conversation is never brought back. */
+    @Test
+    fun anAnswerOfAnotherPairingWithAFrozenBodyIsDroppedAndItsBodyForgotten() {
+        frozen.put(KEY, "{}")
+        val outcome = OutboxSender(FakeBridge.of(), frozen) { PairedAs.Device(OTHER_DEVICE) }.send(job(NoticeAction.REPLY, "hi"))
+        assertEquals(SendOutcome.Final(NotSent.PAIRING_CHANGED), outcome)
+        assertTrue(frozen.bodies.isEmpty())
+    }
+
+    /** `DeviceAuth` refused a token of another pairing: dropped, without asking the Keystore again. */
+    @Test
+    fun aTokenOfAnotherDeviceEndsAsPairingChangedEvenWhenThePairingCannotBeRead() {
+        var paired: PairedAs = PairedAs.Device(DEVICE)
+        val bridge = FakeBridge {
+            paired = PairedAs.Unknown
+            throw DeviceAuthException.OtherDevice()
+        }
+        assertEquals(SendOutcome.Final(NotSent.PAIRING_CHANGED), OutboxSender(bridge, frozen) { paired }.send(job(NoticeAction.REPLY, "hi")))
+    }
+
+    /** Its key deleted mid-sign-in by a forget: not a failure that would bring the old conversation back. */
+    @Test
+    fun anyFailureAfterThePairingChangedEndsAsPairingChanged() {
+        var paired: PairedAs = PairedAs.Device(DEVICE)
+        val bridge = FakeBridge {
+            paired = PairedAs.Nothing
+            throw DeviceAuthException.Keystore(IllegalStateException("key gone"))
+        }
+        assertEquals(SendOutcome.Final(NotSent.PAIRING_CHANGED), OutboxSender(bridge, frozen) { paired }.send(job(NoticeAction.REPLY, "hi")))
+    }
+
+    /** A busy Keystore after boot cannot tell: the job waits rather than being dropped. */
+    @Test
+    fun anUnknownPairingIsRetried() {
+        val bridge = FakeBridge.of()
+        assertEquals(SendOutcome.Retry(null), OutboxSender(bridge, frozen) { PairedAs.Unknown }.send(job(NoticeAction.REPLY, "hi")))
+        assertTrue(bridge.requests.isEmpty())
     }
 }

@@ -24,6 +24,13 @@ enum class NotSent {
     /** The app is not (or no longer) paired. */
     NOT_PAIRED,
 
+    /**
+     * The app was unpaired or paired anew since the person answered
+     * ([OutboxJob.device]): the answer belongs to the old pairing, and is
+     * never sent to the new one.
+     */
+    PAIRING_CHANGED,
+
     /** The bridge stayed unreachable for every retry. */
     UNREACHABLE,
 

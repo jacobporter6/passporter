@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
 import dev.passporter.app.R
+import dev.passporter.device.DeviceId
 import dev.passporter.notify.Notice
 
 /**
@@ -29,7 +30,8 @@ import dev.passporter.notify.Notice
  * locked on any version, also when a watch or another app fires it.
  *
  * Every action is a broadcast to [NoticeActionReceiver], explicit and not
- * exported, with the [ActionRequest] as its data. The pending intents are
+ * exported, with the [ActionRequest] as its data, stamped with the device
+ * the notice came to ([DeviceStamp]). The pending intents are
  * immutable, except those with a `RemoteInput`, which Android must fill in
  * (mutable, so explicit).
  */
@@ -43,26 +45,26 @@ object NoticeActions {
     /** The agent's name, for the feedback in the notification. Display only. */
     const val EXTRA_NAME = "dev.passporter.notify.NAME"
 
-    /** The actions of [notice], in order. */
-    fun build(context: Context, notice: Notice): List<NotificationCompat.Action> =
+    /** The actions of [notice], which came to [device], in order. */
+    fun build(context: Context, notice: Notice, device: DeviceId): List<NotificationCompat.Action> =
         NoticeAction.of(notice).mapNotNull { action ->
-            ActionRequest.of(action, notice)?.let { action(context, it, notice.name) }
+            ActionRequest.of(action, notice)?.let { action(context, it, notice.name, device) }
         }
 
-    /** The explicit broadcast [request] sends. */
-    fun intent(context: Context, request: ActionRequest, name: String): Intent =
+    /** The explicit broadcast [request] sends, made for [device]. */
+    fun intent(context: Context, request: ActionRequest, name: String, device: DeviceId): Intent =
         Intent(context, NoticeActionReceiver::class.java)
             .setAction(INTENT_ACTION)
-            .setData(request.toUri())
+            .setData(DeviceStamp.stamp(request.toUri(), device))
             .putExtra(EXTRA_NAME, name)
 
-    private fun action(context: Context, request: ActionRequest, name: String): NotificationCompat.Action {
+    private fun action(context: Context, request: ActionRequest, name: String, device: DeviceId): NotificationCompat.Action {
         val action = request.action
         val mutability = if (action.takesText) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE
         val pendingIntent = PendingIntent.getBroadcast(
             context,
             0,
-            intent(context, request, name),
+            intent(context, request, name, device),
             mutability or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val builder = NotificationCompat.Action.Builder(null, context.getString(title(action)), pendingIntent)

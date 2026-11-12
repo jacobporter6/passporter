@@ -18,12 +18,17 @@ enum class Method(internal val hasBody: Boolean) {
     DELETE(true),
 }
 
-/** One HTTP request to the bridge. `toString` leaves the headers out: one may be a token. */
+/**
+ * One HTTP request to the bridge. `toString` leaves the headers out: one
+ * may be a token. [timeoutMs], if set, cuts the transport's connect and
+ * read timeouts to it.
+ */
 class HttpRequest(
     val method: String,
     val url: String,
     val headers: Map<String, String>,
     val body: String?,
+    val timeoutMs: Long? = null,
 ) {
     override fun toString() = "$method $url"
 }
@@ -51,8 +56,8 @@ internal class UrlConnectionTransport : HttpTransport {
             ?: throw IOException("not an https URL")
         try {
             connection.instanceFollowRedirects = false
-            connection.connectTimeout = CONNECT_TIMEOUT_MS
-            connection.readTimeout = READ_TIMEOUT_MS
+            connection.connectTimeout = cut(CONNECT_TIMEOUT_MS, request.timeoutMs)
+            connection.readTimeout = cut(READ_TIMEOUT_MS, request.timeoutMs)
             connection.requestMethod = request.method
             connection.useCaches = false
             request.headers.forEach(connection::setRequestProperty)
@@ -71,6 +76,10 @@ internal class UrlConnectionTransport : HttpTransport {
             connection.disconnect()
         }
     }
+
+    /** [default], or [limit] if that is shorter (at least 1 ms: 0 would mean no timeout). */
+    private fun cut(default: Int, limit: Long?): Int =
+        if (limit == null) default else limit.coerceIn(1, default.toLong()).toInt()
 
     private fun readLimited(stream: InputStream): String {
         val out = java.io.ByteArrayOutputStream()

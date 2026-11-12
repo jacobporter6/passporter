@@ -6,8 +6,10 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 import androidx.core.app.RemoteInput
 import dev.passporter.app.R
+import dev.passporter.device.DeviceId
 import dev.passporter.notify.AgentId
 import dev.passporter.notify.Notice
+import dev.passporter.notify.actions.DeviceStamp
 
 /**
  * The two actions Android Auto needs to take a messaging notification
@@ -31,7 +33,8 @@ import dev.passporter.notify.Notice
  * check (docs/development/android.md).
  *
  * Both go to [CarReplyReceiver], explicit and not exported, which acts
- * only while Android Auto projects ([CarProjection]). They do not ask to
+ * only while Android Auto projects ([CarProjection]), and only for the
+ * device the notice came to ([DeviceStamp]). They do not ask to
  * unlock (Android Auto runs them with the phone locked in the car): the
  * projection check and the car-scope session stand in for it.
  */
@@ -46,32 +49,35 @@ object CarActions {
     const val EXTRA_NAME = "dev.passporter.car.NAME"
 
     /**
-     * The car actions of [notice], posted at [stamp]: reply and
-     * mark-as-read if it is announced, else none.
+     * The car actions of [notice], posted at [stamp] for [device]: reply
+     * and mark-as-read if it is announced, else none.
      */
-    fun build(context: Context, notice: Notice, stamp: Long): List<NotificationCompat.Action> {
+    fun build(context: Context, notice: Notice, stamp: Long, device: DeviceId): List<NotificationCompat.Action> {
         val subject = CarSubject.of(notice)?.takeIf { notice.announce } ?: return emptyList()
-        return of(context, notice.agentId, subject, stamp, notice.name)
+        return of(context, notice.agentId, subject, stamp, notice.name, device)
     }
 
-    /** Reply and mark-as-read about [subject] of [agent], called [name], in the notice posted at [stamp]. */
-    fun of(context: Context, agent: AgentId, subject: CarSubject, stamp: Long, name: String): List<NotificationCompat.Action> =
-        CarAction.entries.map { action(context, CarRequest(it, agent, subject, stamp), name) }
+    /**
+     * Reply and mark-as-read about [subject] of [agent], called [name], in
+     * the notice posted at [stamp] for [device].
+     */
+    fun of(context: Context, agent: AgentId, subject: CarSubject, stamp: Long, name: String, device: DeviceId): List<NotificationCompat.Action> =
+        CarAction.entries.map { action(context, CarRequest(it, agent, subject, stamp), name, device) }
 
-    /** The explicit broadcast [request] sends. */
-    fun intent(context: Context, request: CarRequest, name: String): Intent =
+    /** The explicit broadcast [request] sends, made for [device]. */
+    fun intent(context: Context, request: CarRequest, name: String, device: DeviceId): Intent =
         Intent(context, CarReplyReceiver::class.java)
             .setAction(INTENT_ACTION)
-            .setData(request.toUri())
+            .setData(DeviceStamp.stamp(request.toUri(), device))
             .putExtra(EXTRA_NAME, name)
 
-    private fun action(context: Context, request: CarRequest, name: String): NotificationCompat.Action {
+    private fun action(context: Context, request: CarRequest, name: String, device: DeviceId): NotificationCompat.Action {
         val reply = request.action == CarAction.REPLY
         val mutability = if (reply) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE
         val pendingIntent = PendingIntent.getBroadcast(
             context,
             0,
-            intent(context, request, name),
+            intent(context, request, name, device),
             mutability or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         val title = if (reply) R.string.car_action_reply else R.string.car_action_mark_as_read

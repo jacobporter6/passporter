@@ -12,6 +12,7 @@ import androidx.work.Worker
 import androidx.work.WorkerParameters
 import dev.passporter.notify.actions.Bridge
 import dev.passporter.notify.actions.Outbox
+import dev.passporter.notify.actions.pairedDevice
 import java.util.concurrent.TimeUnit
 
 /**
@@ -78,18 +79,18 @@ class CarReplyWorker internal constructor(
         }
         val speech = CarSpeech(applicationContext)
         if (now() - job.heardAt > CarOutbox.MAX_AGE_MS) {
-            speech.trouble(job.request, job.name, job.utterance, CarTrouble.TOO_OLD)
+            speech.trouble(job.request, job.name, job.utterance, CarTrouble.TOO_OLD, job.device)
             return Result.success()
         }
-        val outcome = CarReplySender(bridge).send(job)
+        val outcome = CarReplySender(bridge) { pairedDevice(applicationContext) }.send(job)
         // Stopped meanwhile: WorkManager runs it again; nothing may show.
         if (isStopped) return Result.retry()
         when (outcome) {
             is CarOutcome.Spoken -> speech.answer(job, outcome.speech, outcome.sent)
-            is CarOutcome.Trouble -> speech.trouble(job.request, job.name, job.utterance, outcome.trouble)
+            is CarOutcome.Trouble -> speech.trouble(job.request, job.name, job.utterance, outcome.trouble, job.device)
             CarOutcome.Retry -> {
                 if (runAttemptCount + 1 < Outbox.MAX_ATTEMPTS) return Result.retry()
-                speech.trouble(job.request, job.name, job.utterance, CarTrouble.UNREACHABLE)
+                speech.trouble(job.request, job.name, job.utterance, CarTrouble.UNREACHABLE, job.device)
             }
         }
         return Result.success()

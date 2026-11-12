@@ -18,7 +18,7 @@ import org.robolectric.Shadows.shadowOf
 class NoticeNotifierTest {
     private val context: Application = RuntimeEnvironment.getApplication()
     private val manager = context.getSystemService(NotificationManager::class.java)
-    private val notifier = NoticeNotifier(context)
+    private val notifier = NoticeNotifier(context) { DEVICE }
 
     private fun blocked(ping: String = "ab") =
         """{"ping":"$ping","notices":[{"agentId":"w1:p1","name":"widget","state":"blocked",
@@ -54,7 +54,7 @@ class NoticeNotifierTest {
         assertEquals(
             "remembered across notifiers (a new process)",
             NoticeOutcome.Duplicate,
-            NoticeNotifier(context).show(blocked()),
+            NoticeNotifier(context) { DEVICE }.show(blocked()),
         )
     }
 

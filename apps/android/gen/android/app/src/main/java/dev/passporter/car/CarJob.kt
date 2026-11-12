@@ -2,6 +2,7 @@ package dev.passporter.car
 
 import android.net.Uri
 import androidx.work.Data
+import dev.passporter.device.DeviceId
 import org.json.JSONObject
 import java.util.UUID
 
@@ -22,6 +23,11 @@ data class CarJob(
     val name: String,
     /** When the car heard it (phone clock, unix ms): a reply too old is not sent ([CarOutbox.MAX_AGE_MS]). */
     val heardAt: Long,
+    /**
+     * The device the notice came to (`dev.passporter.notify.actions.DeviceStamp`):
+     * the reply is sent only while the app is still paired as it ([CarReplySender]).
+     */
+    val device: DeviceId,
 ) {
     init {
         require(request.action == CarAction.REPLY) { "a car job is a reply" }
@@ -43,9 +49,9 @@ data class CarJob(
     val path: String get() = "/v1/agents/${request.agent.value}/car-reply"
 
     companion object {
-        /** A new job for [request], with a fresh key. */
-        fun create(request: CarRequest, utterance: String, name: String, now: Long): CarJob =
-            CarJob(UUID.randomUUID().toString(), request, utterance, name, now)
+        /** A new job for [request], made for [device], with a fresh key. */
+        fun create(request: CarRequest, utterance: String, name: String, now: Long, device: DeviceId): CarJob =
+            CarJob(UUID.randomUUID().toString(), request, utterance, name, now, device)
     }
 }
 
@@ -56,6 +62,7 @@ internal object CarJobData {
     private const val UTTERANCE = "utterance"
     private const val NAME = "name"
     private const val HEARD_AT = "heardAt"
+    private const val DEVICE = "device"
 
     /** The input of [job]. */
     fun write(job: CarJob): Data =
@@ -66,6 +73,7 @@ internal object CarJobData {
             .putString(UTTERANCE, job.utterance)
             .putString(NAME, job.name)
             .putLong(HEARD_AT, job.heardAt)
+            .putString(DEVICE, job.device.value)
             .build()
 
     /** The job in [data], or `null` if it is not one. */
@@ -78,6 +86,7 @@ internal object CarJobData {
             utterance = data.getString(UTTERANCE) ?: return null,
             name = data.getString(NAME) ?: return null,
             heardAt = data.getLong(HEARD_AT, 0),
+            device = data.getString(DEVICE)?.let(DeviceId::parse) ?: return null,
         )
     }
 }

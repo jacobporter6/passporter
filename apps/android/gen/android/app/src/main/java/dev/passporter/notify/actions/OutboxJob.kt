@@ -1,5 +1,6 @@
 package dev.passporter.notify.actions
 
+import dev.passporter.device.DeviceId
 import dev.passporter.notify.AgentId
 import dev.passporter.notify.PendingId
 import dev.passporter.notify.PlainText
@@ -21,15 +22,20 @@ data class OutboxJob(
     val name: String,
     /** When the person acted (phone clock, unix ms): the action's `createdAt`. */
     val createdAt: Long,
+    /**
+     * The device the notice came to ([DeviceStamp]): the job is sent only
+     * while the app is still paired as it ([OutboxSender]).
+     */
+    val device: DeviceId,
 ) {
     init {
         require((text != null) == request.action.takesText) { "text exactly for text actions" }
     }
 
     companion object {
-        /** A new job for [request], with a fresh key. */
-        fun create(request: ActionRequest, text: String?, name: String, now: Long): OutboxJob =
-            OutboxJob(UUID.randomUUID().toString(), request, text, name, now)
+        /** A new job for [request], made for [device], with a fresh key. */
+        fun create(request: ActionRequest, text: String?, name: String, now: Long, device: DeviceId): OutboxJob =
+            OutboxJob(UUID.randomUUID().toString(), request, text, name, now, device)
     }
 }
 
@@ -50,6 +56,12 @@ enum class Unsendable {
 
     /** An answer to the same question is queued already (a second tap). */
     ALREADY_SENDING,
+
+    /**
+     * The notice came to another pairing than the app's now ([DeviceStamp]):
+     * the app was unpaired, or paired anew (perhaps with another bridge).
+     */
+    NOT_PAIRED,
 }
 
 /**

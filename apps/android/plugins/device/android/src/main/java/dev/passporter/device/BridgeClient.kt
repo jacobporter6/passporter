@@ -2,8 +2,16 @@ package dev.passporter.device
 
 import java.io.IOException
 
-/** The unauthenticated `/v1/auth/` calls, on the bridge at [origin]. */
-internal class BridgeClient(private val origin: BridgeOrigin, private val transport: HttpTransport) {
+/**
+ * The unauthenticated `/v1/auth/` calls, on the bridge at [origin]. With
+ * [remainingMs], each request's timeouts are cut to it, and none is made
+ * once it is spent ([DeviceAuthException.Unreachable]).
+ */
+internal class BridgeClient(
+    private val origin: BridgeOrigin,
+    private val transport: HttpTransport,
+    private val remainingMs: (() -> Long)? = null,
+) {
     fun pair(request: PairRequest): PairResponse = PairResponse.parse(post("/v1/auth/pair", request.toJson()))
 
     fun challenge(request: ChallengeRequest): ChallengeResponse =
@@ -14,9 +22,11 @@ internal class BridgeClient(private val origin: BridgeOrigin, private val transp
 
     /** One JSON `POST`; the body of a 2xx answer, or the refusal as a [DeviceAuthException]. */
     private fun post(path: String, body: String): String {
+        val timeoutMs = remainingMs?.invoke()
+        if (timeoutMs != null && timeoutMs <= 0) throw DeviceAuthException.Unreachable(IOException("sign-in took too long"))
         val response = try {
             transport.send(
-                HttpRequest("POST", origin.resolve(path), mapOf("Content-Type" to JSON, "Accept" to JSON), body),
+                HttpRequest("POST", origin.resolve(path), mapOf("Content-Type" to JSON, "Accept" to JSON), body, timeoutMs),
             )
         } catch (e: IOException) {
             throw DeviceAuthException.Unreachable(e)
