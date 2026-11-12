@@ -9,6 +9,7 @@ import dev.passporter.notify.OTHER_DEVICE
 import dev.passporter.notify.PendingId
 import dev.passporter.notify.actions.FakeBridge
 import dev.passporter.notify.actions.KEY
+import dev.passporter.notify.actions.PairedAs
 import dev.passporter.notify.actions.Sent
 import dev.passporter.notify.agent
 import org.json.JSONObject
@@ -37,7 +38,7 @@ fun carReply(speech: String, status: String = "sent"): String =
 class CarReplySenderTest {
     private fun send(job: CarJob = carJob(), answer: (Sent) -> HttpResponse): Pair<CarOutcome, FakeBridge> {
         val bridge = FakeBridge(answer)
-        return CarReplySender(bridge) { DEVICE }.send(job) to bridge
+        return CarReplySender(bridge) { PairedAs.Device(DEVICE) }.send(job) to bridge
     }
 
     @Test
@@ -63,7 +64,7 @@ class CarReplySenderTest {
     fun theCarBridgeAlwaysSignsInWithACarScope() {
         val scopes = mutableListOf<Scope>()
         val bridge = CarBridge { scope, _, _, _, _ -> scopes += scope; HttpResponse(200, carReply("Sent.")) }
-        CarReplySender(bridge) { DEVICE }.send(carJob())
+        CarReplySender(bridge) { PairedAs.Device(DEVICE) }.send(carJob())
         assertEquals(listOf(Scope.CAR), scopes)
     }
 
@@ -110,10 +111,17 @@ class CarReplySenderTest {
     /** Paired anew (or unpaired) since the car heard the notice: nothing reaches the bridge now paired. */
     @Test
     fun aReplyOfAnotherPairingIsNeverSent() {
-        for (paired in listOf(OTHER_DEVICE, null)) {
+        for (paired in listOf(PairedAs.Device(OTHER_DEVICE), PairedAs.Nothing)) {
             val bridge = FakeBridge { HttpResponse(200, carReply("Sent.")) }
             assertEquals(CarOutcome.Trouble(CarTrouble.PAIRING_CHANGED), CarReplySender(bridge) { paired }.send(carJob()))
             assertTrue("$paired: nothing asked", bridge.requests.isEmpty())
         }
+    }
+
+    @Test
+    fun anUnknownPairingIsRetried() {
+        val bridge = FakeBridge { HttpResponse(200, carReply("Sent.")) }
+        assertEquals(CarOutcome.Retry, CarReplySender(bridge) { PairedAs.Unknown }.send(carJob()))
+        assertTrue(bridge.requests.isEmpty())
     }
 }

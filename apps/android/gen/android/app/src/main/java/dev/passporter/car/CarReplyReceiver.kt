@@ -70,7 +70,8 @@ class CarReplyReceiver : BroadcastReceiver() {
             return
         }
         when (request.action) {
-            CarAction.REPLY -> if (device != null && device == pairedDevice(context)) {
+            // Unsure what it is paired as: the sender checks again.
+            CarAction.REPLY -> if (device != null && !pairedDevice(context).isNot(device)) {
                 reply(context, request, device, name, heard)
             } else {
                 Log.i(TAG, "ignored a car reply made for another pairing")

@@ -50,12 +50,7 @@ class PassporterPushService : PushService() {
         val owner = { store.load().owner?.let(DeviceId::parse) }
         val incoming = IncomingPush(
             show = NoticeNotifier(this, owner)::show,
-            // Keys of an older pairing (not yet replaced after a new one): its
-            // notices must not come back into the shade the pairing change cleared.
-            registered = {
-                val record = store.load()
-                record.registration != null && record.owner != null && record.owner == pairedDevice(this)?.value
-            },
+            registered = { IncomingPush.isCurrent(store.load(), pairedDevice(this)) },
         ).handle(message)
         // Never the content: it is agent output.
         Log.i(PUSH_TAG, "push message: $incoming")

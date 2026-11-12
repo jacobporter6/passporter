@@ -458,8 +458,9 @@ back while Android Auto projects; off the car only one you must act on
 comes back (refused, not sent, unsure, not paired), and off the car an
 answer never alerts. The car's turn in the conversation no longer marks
 an answer from the shade still on its way, so that answer's outcome
-never replaces or clears the sentence you must hear; an outcome already
-shown stays marked as one, not as news. After a sent answer
+never replaces or clears the sentence you must hear (the cost: if that
+shade answer then fails, its outcome is not shown over the car's turn);
+an outcome already shown stays marked as one, not as news. After a sent answer
 the car's reply stays on the notification (Google's compliance asks for
 both car actions on a message the car should read); a second answer to
 the same dialog is read back as *The agent has moved on*.
@@ -683,7 +684,9 @@ queued job made for another device than the one the app is paired as now
 sends nothing (`DeviceStamp`, `NotSent.PAIRING_CHANGED`,
 `CarTrouble.PAIRING_CHANGED`; `DeviceAuth.send` also refuses a token of
 another pairing, should one be made between the check and the request),
-and an old conversation is never brought back for it. A push decrypted
+and an old conversation is never brought back for it. When the app
+cannot tell what it is paired as (a busy Keystore just after boot), a
+job waits and retries rather than being dropped, and a push is shown. A push decrypted
 with an older pairing's keys (not yet replaced) is dropped unseen.
 
 Any app can send `MainActivity` the tap or shortcut intent, because a

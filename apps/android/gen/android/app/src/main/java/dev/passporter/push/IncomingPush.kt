@@ -1,6 +1,8 @@
 package dev.passporter.push
 
+import dev.passporter.device.DeviceId
 import dev.passporter.notify.NoticeOutcome
+import dev.passporter.notify.actions.PairedAs
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
@@ -51,6 +53,18 @@ class IncomingPush(
         val text = utf8(message.content) ?: return Incoming.NotText
         if (!registered()) return Incoming.NotRegistered
         return Incoming.Shown(show(text))
+    }
+
+    companion object {
+        /**
+         * Whether [record] holds a registration of the pairing the app has
+         * now ([paired]). Keys of an older one, not yet replaced after a new
+         * pairing, are not: their notices must not come back into the shade
+         * the pairing change cleared. When the app cannot tell (a busy
+         * Keystore after boot), a registration counts.
+         */
+        fun isCurrent(record: PushRecord, paired: PairedAs): Boolean =
+            record.registration != null && !paired.isNot(record.owner?.let(DeviceId::parse))
     }
 
     private fun utf8(bytes: ByteArray): String? = try {

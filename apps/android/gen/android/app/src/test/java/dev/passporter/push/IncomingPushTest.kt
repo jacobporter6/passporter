@@ -7,7 +7,10 @@ import dev.passporter.notify.DEVICE
 import dev.passporter.notify.NoticeNotification
 import dev.passporter.notify.NoticeNotifier
 import dev.passporter.notify.NoticeOutcome
+import dev.passporter.notify.OTHER_DEVICE
+import dev.passporter.notify.actions.PairedAs
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -70,5 +73,16 @@ class IncomingPushTest {
         assertTrue(garbage is Incoming.Shown && garbage.outcome is NoticeOutcome.Invalid)
         assertEquals(Incoming.NotText, incoming.handle(PushMessage(byteArrayOf(0xC3.toByte(), 0x28), true)))
         assertEquals(0, shown())
+    }
+
+    @Test
+    fun onlyTheCurrentPairingsKeysCount() {
+        val registration = requireNotNull(Registration.of("https://push.example/e", TestVector.uaPublic, TestVector.auth))
+        val mine = PushRecord(registration, owner = DEVICE.value)
+        assertTrue(IncomingPush.isCurrent(mine, PairedAs.Device(DEVICE)))
+        assertFalse("keys of an older pairing", IncomingPush.isCurrent(mine, PairedAs.Device(OTHER_DEVICE)))
+        assertFalse("unpaired", IncomingPush.isCurrent(mine, PairedAs.Nothing))
+        assertTrue("a busy Keystore cannot tell: shown", IncomingPush.isCurrent(mine, PairedAs.Unknown))
+        assertFalse("no registration", IncomingPush.isCurrent(PushRecord(), PairedAs.Device(DEVICE)))
     }
 }

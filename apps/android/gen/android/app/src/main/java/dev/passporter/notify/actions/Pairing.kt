@@ -7,20 +7,41 @@ import dev.passporter.device.DeviceAuth
 import dev.passporter.device.DeviceAuthException
 import dev.passporter.device.DeviceId
 
+/** What the app is paired as now, as far as it can tell ([pairedDevice]). */
+sealed interface PairedAs {
+    /** Paired as [id]. */
+    data class Device(
+        /** The device. */
+        val id: DeviceId,
+    ) : PairedAs
+
+    /** Not paired. */
+    data object Nothing : PairedAs
+
+    /** It could not tell (a busy Keystore just after boot, say): try again later. */
+    data object Unknown : PairedAs
+
+    /** The device, if paired. */
+    val device: DeviceId? get() = (this as? Device)?.id
+
+    /** Whether the app is known to be paired as anything but [device] (or not at all). */
+    fun isNot(device: DeviceId?): Boolean = this != Unknown && this.device != device
+}
+
 /**
- * The device this app is paired as now ([DeviceAuth.status]), or `null`:
- * unpaired, or the Keystore failed. Blocking (a Keystore look-up; it never
- * waits for a sign-in). Tests replace it, and put [currentDevice] back.
+ * What the app is paired as now ([DeviceAuth.status]). Blocking (a
+ * Keystore look-up; it never waits for a sign-in). Tests replace it, and
+ * put [currentDevice] back.
  */
-internal var pairedDevice: (Context) -> DeviceId? = ::currentDevice
+internal var pairedDevice: (Context) -> PairedAs = ::currentDevice
 
 /** [pairedDevice] in the app: [DeviceAuth.status]. */
-internal fun currentDevice(context: Context): DeviceId? =
+internal fun currentDevice(context: Context): PairedAs =
     try {
-        DeviceAuth.get(context).status().deviceId
+        DeviceAuth.get(context).status().deviceId?.let(PairedAs::Device) ?: PairedAs.Nothing
     } catch (e: DeviceAuthException) {
         Log.w("PassporterNotify", "could not read the pairing: ${e.code}")
-        null
+        PairedAs.Unknown
     }
 
 /**

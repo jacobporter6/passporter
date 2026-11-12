@@ -53,7 +53,8 @@ class NoticeActionReceiver : BroadcastReceiver() {
     private fun take(context: Context, request: ActionRequest, device: DeviceId?, name: String, typed: CharSequence?, locked: Boolean) {
         val feedback = ActionFeedback(context)
         if (locked) return feedback.refused(request, name, Unsendable.LOCKED)
-        if (device == null || device != pairedDevice(context)) return feedback.refused(request, name, Unsendable.NOT_PAIRED)
+        // Unsure what it is paired as (a busy Keystore): the sender checks again.
+        if (device == null || pairedDevice(context).isNot(device)) return feedback.refused(request, name, Unsendable.NOT_PAIRED)
         val text = if (request.action.takesText) {
             when (val cleaned = ReplyText.clean(typed, request.action)) {
                 is ReplyText.Result.Clean -> cleaned.text

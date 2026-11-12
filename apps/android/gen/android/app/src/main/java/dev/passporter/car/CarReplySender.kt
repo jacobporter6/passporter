@@ -9,6 +9,7 @@ import dev.passporter.device.Method
 import dev.passporter.device.Scope
 import dev.passporter.notify.PlainText
 import dev.passporter.notify.actions.Bridge
+import dev.passporter.notify.actions.PairedAs
 import org.json.JSONException
 import org.json.JSONObject
 
@@ -94,12 +95,16 @@ sealed interface CarOutcome {
  */
 class CarReplySender(
     private val bridge: Bridge,
-    /** The device the app is paired as now (`dev.passporter.notify.actions.pairedDevice`). */
-    private val paired: () -> DeviceId?,
+    /** What the app is paired as now (`dev.passporter.notify.actions.pairedDevice`). */
+    private val paired: () -> PairedAs,
 ) {
     /** One attempt at [job]. Never throws. */
-    fun send(job: CarJob): CarOutcome =
-        if (job.device != paired()) {
+    fun send(job: CarJob): CarOutcome {
+        val now = paired()
+        return if (now == PairedAs.Unknown) {
+            // Unsure (a busy Keystore): neither sent nor dropped yet.
+            CarOutcome.Retry
+        } else if (now.isNot(job.device)) {
             CarOutcome.Trouble(CarTrouble.PAIRING_CHANGED)
         } else {
             try {
@@ -108,6 +113,7 @@ class CarReplySender(
                 failure(job, e)
             }
         }
+    }
 
     private fun answer(response: HttpResponse): CarOutcome {
         val status = response.status
@@ -132,10 +138,11 @@ class CarReplySender(
         }
 
     /** A failure to get an answer at all, from [DeviceAuth]: as the shade's outbox treats it. */
-    private fun failure(job: CarJob, e: DeviceAuthException): CarOutcome =
-        when (e) {
-            // Paired anew between the check and the request.
-            is DeviceAuthException.NotPaired if job.device != paired() -> CarOutcome.Trouble(CarTrouble.PAIRING_CHANGED)
+    private fun failure(job: CarJob, e: DeviceAuthException): CarOutcome {
+        // Unpaired or paired anew between the check and the request.
+        // A revocation (410) forgets the pairing itself: that one says not paired.
+        if (e !is DeviceAuthException.Forgotten && paired().isNot(job.device)) return CarOutcome.Trouble(CarTrouble.PAIRING_CHANGED)
+        return when (e) {
             is DeviceAuthException.Unreachable, is DeviceAuthException.ServerError, is DeviceAuthException.Refused,
             is DeviceAuthException.RateLimited,
             -> CarOutcome.Retry
@@ -145,6 +152,7 @@ class CarReplySender(
             is DeviceAuthException.Storage, is DeviceAuthException.InvalidInput,
             -> CarOutcome.Trouble(CarTrouble.FAILED)
         }
+    }
 
     companion object {
         /**

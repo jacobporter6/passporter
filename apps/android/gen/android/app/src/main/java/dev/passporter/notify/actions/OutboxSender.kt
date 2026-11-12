@@ -1,7 +1,6 @@
 package dev.passporter.notify.actions
 
 import dev.passporter.device.DeviceAuthException
-import dev.passporter.device.DeviceId
 import dev.passporter.device.HttpResponse
 import dev.passporter.device.Method
 import org.json.JSONException
@@ -31,8 +30,8 @@ import org.json.JSONObject
 class OutboxSender(
     private val bridge: Bridge,
     private val frozen: FrozenBodies,
-    /** The device the app is paired as now ([pairedDevice]). */
-    private val paired: () -> DeviceId?,
+    /** What the app is paired as now ([pairedDevice]). */
+    private val paired: () -> PairedAs,
 ) {
     /**
      * One attempt at [job]. Never throws. The frozen body is forgotten once
@@ -50,7 +49,11 @@ class OutboxSender(
     }
 
     private fun attempt(job: OutboxJob): SendOutcome {
-        if (job.device != paired()) return SendOutcome.Final(changed(job))
+        when (val now = paired()) {
+            // Unsure (a busy Keystore): neither sent nor dropped yet.
+            PairedAs.Unknown -> return SendOutcome.Retry(null)
+            else -> if (now.isNot(job.device)) return SendOutcome.Final(changed(job))
+        }
         val body = frozen.get(job.key) ?: when (val prepared = prepare(job)) {
             is Prepared.Body -> prepared.json.also { frozen.put(job.key, it) }
             is Prepared.Not -> return prepared.outcome
@@ -179,10 +182,13 @@ class OutboxSender(
         if (frozen.get(job.key) != null) NotSent.UNCERTAIN else NotSent.PAIRING_CHANGED
 
     /** A failure to get an answer at all, from [dev.passporter.device.DeviceAuth]. */
-    private fun failure(job: OutboxJob, e: DeviceAuthException): SendOutcome =
-        when (e) {
-            // Paired anew between the check and the request.
-            is DeviceAuthException.NotPaired if job.device != paired() -> SendOutcome.Final(changed(job))
+    private fun failure(job: OutboxJob, e: DeviceAuthException): SendOutcome {
+        // Unpaired or paired anew between the check and the request (a
+        // key deleted mid-sign-in, a forgotten bridge): never the old
+        // conversation brought back as a failure.
+        // A revocation (410) forgets the pairing itself: that one says not paired.
+        if (e !is DeviceAuthException.Forgotten && paired().isNot(job.device)) return SendOutcome.Final(changed(job))
+        return when (e) {
             // Refused: a sign-in the bridge lost (a restart mid-challenge, say).
             is DeviceAuthException.Unreachable, is DeviceAuthException.ServerError, is DeviceAuthException.Refused ->
                 SendOutcome.Retry(null)
@@ -191,6 +197,7 @@ class OutboxSender(
                 SendOutcome.Final(NotSent.NOT_PAIRED)
             else -> SendOutcome.Final(NotSent.FAILED)
         }
+    }
 
     private companion object {
         const val AGENTS = "/v1/agents"

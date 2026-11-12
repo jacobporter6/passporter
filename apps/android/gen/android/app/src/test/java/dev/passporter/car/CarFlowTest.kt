@@ -39,6 +39,7 @@ import dev.passporter.notify.actions.NoticeAction
 import dev.passporter.notify.actions.NotSent
 import dev.passporter.notify.actions.Outbox
 import dev.passporter.notify.actions.OutboxJob
+import dev.passporter.notify.actions.PairedAs
 import dev.passporter.notify.actions.Reconciler
 import dev.passporter.notify.actions.currentDevice
 import dev.passporter.notify.actions.pairedDevice
@@ -94,7 +95,7 @@ class CarFlowTest {
         CarReplyReceiver.executor = Executor { it.run() }
         carProjection = { CarProjection { projecting } }
         NoticeActionReceiver.executor = Executor { it.run() }
-        pairedDevice = { DEVICE }
+        pairedDevice = { PairedAs.Device(DEVICE) }
     }
 
     private fun show(notice: Notice, now: Long = 1) {
@@ -413,7 +414,7 @@ class CarFlowTest {
     @Test
     fun aCarReplyMadeForAnotherPairingSendsNothing() {
         show(notice())
-        pairedDevice = { OTHER_DEVICE }
+        pairedDevice = { PairedAs.Device(OTHER_DEVICE) }
         fire(CarAction.REPLY, heard = "yes")
         assertTrue(queued().isEmpty())
         assertEquals(context.getString(R.string.car_trouble_not_paired), messages(requireNotNull(shown())).last().removePrefix("Passporter: "))

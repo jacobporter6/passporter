@@ -78,7 +78,7 @@ class OutboxWorkerTest {
         )
         NoticeNotification.createChannels(context)
         NoticeActionReceiver.executor = Executor { it.run() }
-        pairedDevice = { DEVICE }
+        pairedDevice = { PairedAs.Device(DEVICE) }
     }
 
     private fun show(notice: Notice) {
@@ -381,7 +381,7 @@ class OutboxWorkerTest {
     @Test
     fun aTapMadeForAnotherPairingQueuesNothing() {
         show(notice())
-        pairedDevice = { OTHER_DEVICE }
+        pairedDevice = { PairedAs.Device(OTHER_DEVICE) }
         tap(0)
         assertTrue(queued().isEmpty())
         val shown = requireNotNull(shown())
@@ -392,7 +392,7 @@ class OutboxWorkerTest {
     /** Queued before a new pairing, run after it (the reset failed): dropped, and the old conversation stays gone. */
     @Test
     fun aJobOfAnOldPairingIsDroppedUnseen() {
-        pairedDevice = { OTHER_DEVICE }
+        pairedDevice = { PairedAs.Device(OTHER_DEVICE) }
         val fake = FakeBridge.of()
         assertEquals(ListenableWorker.Result.success(), worker(fake, job(NoticeAction.REPLY, "hi")).doWork())
         assertTrue(fake.requests.isEmpty())
