@@ -18,10 +18,11 @@
 //!   spec). A runner killed without reporting (Ctrl-C, its tab closed)
 //!   ends the run as failed at the next poll, and the status file says so.
 //!   The runbook stays claimed (busy) for as long as its runner lives.
-//! - **Ending.** The `finish` audit line is written and the runbook
-//!   released *before* the ended run is published, so a client that sees
-//!   the end (on the stream or in the list) may run the runbook again at
-//!   once instead of being told it is still busy.
+//! - **Ending.** The `finish` audit line is written (best effort: a
+//!   failed append is logged) and the runbook released *before* the ended
+//!   run is published, so a client that sees the end (on the stream or in
+//!   the list) may run the runbook again at once instead of being told it
+//!   is still busy. A next run that starts in between stays the latest.
 //!
 //! [`RunbookSettings::start_wait`]: super::RunbookSettings::start_wait
 
@@ -58,7 +59,7 @@ pub(super) struct Watch {
     pub(super) pane: PaneId,
     pub(super) files: RunFiles,
 
-    /// The run as last published.
+    /// The run as last published (at the end: about to be).
     pub(super) run: RunbookRun,
     pub(super) timeout: Duration,
     /// The launch line to type first: for a fresh run only (a run picked up
@@ -138,7 +139,7 @@ impl Watch {
         // Free the runbook before saying the run ended: whoever sees the
         // end may run it again at once, and must not be told it is busy.
         drop(self.active);
-        runbooks.record(&self.run);
+        runbooks.record_end(&self.run);
     }
 
     /// The runner never claimed the run in time: claims it as failed, so it

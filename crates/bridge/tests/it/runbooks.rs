@@ -820,13 +820,13 @@ async fn a_run_seen_ending_may_run_again_at_once() {
             break;
         }
     }
-    // The end is published only once the runbook is free (and the end
-    // audited): a tap the moment the phone shows it is not refused as busy.
-    let (status, again) = f.run("Hello", &body(KEY2, "app")).await;
-    assert_eq!(status, 200, "{again:?}");
+    // The end is published only once it is audited and the runbook is
+    // free: a tap the moment the phone shows it is not refused as busy.
     assert!(
         f.runbook_lines().iter().any(|l| l["phase"] == "finish"),
         "audited before it was published"
     );
+    let (status, again) = f.run("Hello", &body(KEY2, "app")).await;
+    assert_eq!(status, 200, "{again:?}");
     f.bridge.stop().await.expect("clean stop");
 }
