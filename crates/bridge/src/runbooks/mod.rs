@@ -213,12 +213,31 @@ impl Runbooks {
             .cloned()
     }
 
-    /// Stores `run` as its runbook's latest and tells the stream.
+    /// Stores `run` as its runbook's latest and tells the stream. The lock
+    /// is held while publishing, so the stream sees runs in the order they
+    /// are stored.
     fn record(&self, run: &RunbookRun) {
-        self.runs
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(run.runbook.clone(), run.clone());
+        let mut runs = self.runs.lock().unwrap_or_else(PoisonError::into_inner);
+        runs.insert(run.runbook.clone(), run.clone());
+        self.hub.publish(AgentEvent::RunbookUpdated {
+            run: Some(run.clone()),
+        });
+    }
+
+    /// Records a run's end, published by its watcher after it released the
+    /// runbook: only while this run is still the runbook's latest. The
+    /// next run may have started (and been recorded) in between, and a late
+    /// end must not hide it. Runs are told apart by `started_at` being
+    /// equal, never by which is larger: the wall clock may step back.
+    fn record_end(&self, run: &RunbookRun) {
+        let mut runs = self.runs.lock().unwrap_or_else(PoisonError::into_inner);
+        if runs
+            .get(&run.runbook)
+            .is_some_and(|known| known.started_at != run.started_at)
+        {
+            return;
+        }
+        runs.insert(run.runbook.clone(), run.clone());
         self.hub.publish(AgentEvent::RunbookUpdated {
             run: Some(run.clone()),
         });
@@ -717,9 +736,71 @@ fn status_for(result: &RunbookResult) -> StatusCode {
 
 #[cfg(test)]
 mod tests {
+    use herdr::FakeHerdr;
     use protocol::Timestamp;
 
     use super::*;
+    use crate::control::HerdrControl;
+
+    fn hello_run(started_at: u64, state: RunState) -> RunbookRun {
+        RunbookRun {
+            runbook: RunbookName::new("Hello").expect("name"),
+            state,
+            exit_code: None,
+            last_lines: Vec::new(),
+            message: None,
+            started_at: Timestamp::from_unix_millis(started_at),
+            finished_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_late_end_never_hides_the_next_run() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let control: Arc<dyn SpawnControl> = Arc::new(HerdrControl(Arc::new(FakeHerdr::new())));
+        let hub = Arc::new(Hub::new(16));
+        let runbooks = Runbooks::new(
+            RunbookSettings::new(Vec::new(), tmp.path()),
+            RunbookDeps {
+                tabs: Arc::new(Tabs::new(Arc::clone(&control), "spawn")),
+                control,
+                hub: Arc::clone(&hub),
+                audit: Arc::new(AuditLog::new(tmp.path().join("audit.jsonl"))),
+            },
+        );
+        let name = RunbookName::new("Hello").expect("name");
+        let mut feed = hub.subscribe();
+        assert!(matches!(feed.next().await, AgentEvent::Snapshot { .. }));
+        // The next run starts before the earlier run's watcher publishes
+        // that run's end; the clock stepped back in between.
+        runbooks.record(&hello_run(5, RunState::Running));
+        let next = hello_run(2, RunState::Running);
+        runbooks.record(&next);
+        runbooks.record_end(&hello_run(5, RunState::Exited));
+        assert_eq!(runbooks.latest(&name), Some(next));
+        // The next run's own end is recorded.
+        let ended = hello_run(2, RunState::Exited);
+        runbooks.record_end(&ended);
+        assert_eq!(runbooks.latest(&name), Some(ended));
+        let mut published = Vec::new();
+        for _ in 0..3 {
+            match feed.next().await {
+                AgentEvent::RunbookUpdated { run: Some(run) } => {
+                    published.push((run.started_at.unix_millis(), run.state));
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(
+            published,
+            [
+                (5, RunState::Running),
+                (2, RunState::Running),
+                (2, RunState::Exited)
+            ],
+            "the stale end is not published"
+        );
+    }
 
     #[test]
     fn the_launch_line_holds_only_shell_quoted_paths() {
@@ -737,15 +818,7 @@ mod tests {
 
     #[test]
     fn replays_say_so_and_rate_limits_are_transient() {
-        let run = RunbookRun {
-            runbook: RunbookName::new("R").expect("name"),
-            state: RunState::Running,
-            exit_code: None,
-            last_lines: Vec::new(),
-            message: None,
-            started_at: Timestamp::from_unix_millis(3),
-            finished_at: None,
-        };
+        let run = hello_run(3, RunState::Running);
         let replay = RunRequest::replayed(RunbookResult::Started {
             run,
             replayed: false,
