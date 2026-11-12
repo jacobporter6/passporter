@@ -18,6 +18,10 @@
 //!   spec). A runner killed without reporting (Ctrl-C, its tab closed)
 //!   ends the run as failed at the next poll, and the status file says so.
 //!   The runbook stays claimed (busy) for as long as its runner lives.
+//! - **Ending.** The `finish` audit line is written and the runbook
+//!   released *before* the ended run is published, so a client that sees
+//!   the end (on the stream or in the list) may run the runbook again at
+//!   once instead of being told it is still busy.
 //!
 //! [`RunbookSettings::start_wait`]: super::RunbookSettings::start_wait
 
@@ -67,7 +71,7 @@ pub(super) struct Watch {
 
 impl Watch {
     /// Launches (if asked), then follows the run until it ends; audits the
-    /// end and releases the runbook.
+    /// end, releases the runbook, and only then publishes the end.
     pub(super) async fn follow(mut self) {
         let runbooks = Arc::clone(&self.active.runbooks);
         let settings = &runbooks.settings;
@@ -114,12 +118,13 @@ impl Watch {
                 next.message = ending.message;
                 next.finished_at = Some(crate::registry::now());
             }
+            if next.is_finished() {
+                self.run = next;
+                break;
+            }
             if next != self.run {
                 self.run = next;
                 runbooks.record(&self.run);
-            }
-            if self.run.is_finished() {
-                break;
             }
         }
         tracing::info!(runbook = %self.run.runbook, state = ?self.run.state, exit_code = ?self.run.exit_code, "runbook run ended");
@@ -130,6 +135,10 @@ impl Watch {
             runbook: &self.run.runbook,
         };
         runbooks.audit_finish(&self.files, asked, &self.run).await;
+        // Free the runbook before saying the run ended: whoever sees the
+        // end may run it again at once, and must not be told it is busy.
+        drop(self.active);
+        runbooks.record(&self.run);
     }
 
     /// The runner never claimed the run in time: claims it as failed, so it
