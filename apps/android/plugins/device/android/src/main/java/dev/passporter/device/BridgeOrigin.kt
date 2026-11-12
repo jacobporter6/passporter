@@ -31,7 +31,9 @@ class BridgeOrigin private constructor(private val origin: String) {
 
         /**
          * [text] as an origin, or null. Only what the shell writes is
-         * accepted: `https`, a host, an optional port, and nothing else.
+         * accepted: `https`, a host the shell accepts (`isBridgeHost`), an
+         * optional port, and nothing else. `bridge-origins.json` holds the
+         * cases both sides check.
          */
         fun parse(text: String): BridgeOrigin? {
             val uri = try {
@@ -39,12 +41,35 @@ class BridgeOrigin private constructor(private val origin: String) {
             } catch (e: URISyntaxException) {
                 return null
             }
-            val plain = uri.scheme == "https" && uri.rawUserInfo == null && !uri.host.isNullOrEmpty() &&
+            val host = uri.host?.lowercase() ?: return null
+            val plain = uri.scheme == "https" && uri.rawUserInfo == null && isBridgeHost(host) &&
                 uri.rawPath.isNullOrEmpty() && uri.rawQuery == null && uri.rawFragment == null
             if (!plain) return null
             val port = if (uri.port == -1) "" else ":${uri.port}"
-            return BridgeOrigin("https://${uri.host.lowercase()}$port")
+            return BridgeOrigin("https://$host$port")
         }
+
+        /** An RFC 1123 label: letters, digits and inner `-`. */
+        private const val LABEL = "[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+
+        /** The last label also starts with a letter (an all-digit one would be an address). */
+        private const val TOP = "[a-z](?:[a-z0-9-]*[a-z0-9])?"
+
+        /** An IPv4 octet as the shell writes it: 0 to 255, no leading zero. */
+        private const val OCTET = "(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
+
+        private val HOST_NAME = Regex("(?:$LABEL\\.)*$TOP")
+        private val IPV4 = Regex("$OCTET(?:\\.$OCTET){3}")
+
+        /**
+         * Whether [host] (lowercase) is one the shell saves
+         * (`apps/android/src/origin.rs`, `is_dns_name`): an RFC 1123 host
+         * name that is not `localhost` or under it, or an IPv4 address in
+         * its plain dotted form.
+         */
+        private fun isBridgeHost(host: String): Boolean =
+            IPV4.matches(host) ||
+                (HOST_NAME.matches(host) && host != "localhost" && !host.endsWith(".localhost"))
 
         /** The origin the shell saved in [dataDir], or null before the app connects. */
         fun saved(dataDir: File): BridgeOrigin? = try {

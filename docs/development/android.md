@@ -82,10 +82,15 @@ It runs clippy on the shell and the plugins for the Android target, their
 Rust tests (also part of `just verify`), and Gradle's JVM unit tests (the
 app's `testUniversalDebugUnitTest`, in `gen/android/app/src/test/`, and each
 plugin's `testDebugUnitTest`, in `plugins/<name>/android/src/test/`). The
-JVM tests need the Kotlin files a build generates, so run `just android-build`
-once in a fresh checkout first. Nothing
-here needs a device. `just verify` and CI never touch the Android
-toolchain: on the host the crate builds without Tauri.
+JVM tests need the Kotlin files a build generates, so in a fresh checkout it
+runs `just android-build` once first. Nothing here needs a device.
+
+`just gate` runs it too (`just android-gate`) when the Android toolchain is
+installed (`cargo-tauri` and `$ANDROID_HOME/build-tools/37.0.0` once the
+`MISE_ENV=android` env is loaded), so the gate compiles the Tauri wiring and
+the Kotlin. Without the toolchain, as on CI, it prints
+`android: SKIPPED: no Android toolchain` and passes. `just verify` never
+touches the Android toolchain: on the host the crate builds without Tauri.
 
 ## Install on a phone
 
@@ -169,7 +174,7 @@ safe and the change out of commits (`SecurityConfigTest` rejects it on purpose).
 |---|---|
 | `src/lib.rs`, `src/shell.rs` | The Tauri app: the main window, the app commands (`connect`, `bridge`, `forget_bridge`), the navigation guard, the bridge capability. `shell.rs` builds for Android only |
 | `src/native.rs` | The Tauri plugin `passporter-shell`: registers the app's own Kotlin side (`ShellPlugin`, below) and talks to it. Android only |
-| `src/origin.rs`, `src/navigation.rs`, `src/store.rs`, `src/destination.rs` | The rules, in plain Rust tested on any host: what counts as a bridge origin, which pages the webview may show, where the origin is saved, which page the webview opens on, where a notification tap, the shortcut, a failed load or a rebuilt webview sends it |
+| `src/origin.rs`, `src/navigation.rs`, `src/store.rs`, `src/connect.rs`, `src/destination.rs` | The rules, in plain Rust tested on any host: what counts as a bridge origin (`plugins/device/android/src/test/resources/bridge-origins.json` holds the cases the Kotlin reader checks too), how connecting chooses the bridge, which pages the webview may show, where the origin is saved, which page the webview opens on, where a notification tap, the shortcut, a failed load or a rebuilt webview sends it |
 | `connect/` | The bundled pages (`frontendDist`): the Connect page (`index.html`) and the Bridge page (`bridge.html`) |
 | `gen/android/app/src/main/java/dev/passporter/app/` | `MainActivity` (wraps each new webview's client); `ShellPlugin` (the shell's Kotlin side: intents, restart), `ShellRequest` (what it asks the shell to show), `ShellWebViewClient` (wraps wry's client: refused links to the browser, failed loads, history), `WebViewBuilds` (tells the shell when wry rebuilds the webview), `BridgeShortcutActivity` (the shortcut's trampoline) |
 | `gen/android/app/src/main/java/dev/passporter/push/` | UnifiedPush registration and incoming notices ([Push](#push)) |
@@ -204,8 +209,9 @@ Only Passporter's own pages reach native IPC, by three fences:
    `recorder:default`.
    It is granted only on a WebView with `WEB_MESSAGE_LISTENER` (below).
 3. **App commands.** The app has no ACL manifest, so Tauri refuses its own
-   commands (`connect`, `bridge`, `forget_bridge`) to every remote page;
-   only the bundled pages can call them. The `passporter-shell` plugin has no
+   commands (`connect`, `bridge`, `forget_bridge`) to every message it
+   labels remote; only the bundled pages can call them (on an old WebView,
+   see below). The `passporter-shell` plugin has no
    permissions at all, so no page reaches its Kotlin commands (`watch`,
    `restart`); only Rust calls them.
 
@@ -235,11 +241,14 @@ while the Connect page is being replaced could even count as local. So the
 shell asks the device plugin about the feature before granting anything,
 and on an old WebView grants nothing: logcat says why, and the PWA keeps
 its device key in WebCrypto as in Chrome. The app never adds a local
-capability. The app commands still answer local pages on an old WebView:
-a message the bridge's page sends while the shell replaces it with the
-Bridge page can count as local. The bridge's own PWA sends none, but a
-bridge page can bring up the Bridge page by loading a URL that fails; the
-worst would be `forget_bridge`.
+capability. The app commands still answer messages labelled local, and on
+an old WebView a message a bridge page sends while the shell replaces it
+with the Bridge page can be one (a bridge page can bring up the Bridge page
+by loading a URL that fails). An ACL manifest would not help: the label is
+what is wrong. So on an old WebView `forget_bridge` refuses, and *Change
+address* says to update Android System WebView or to clear the app's
+storage instead; `connect` refuses anyway once a bridge is chosen, and
+`bridge` only reads the address.
 
 ## Notifications
 
@@ -581,7 +590,11 @@ proven to agree.
 
 Inside the app the PWA's notification switch stays off and says why
 (`Unavailable::NativeApp`): the webview has no Push API, and the app's own
-subscription is the one, so a phone never gets the same news twice.
+subscription is the one, so a phone never gets the same news twice. That
+subscription needs the native identity, so where the page signs in without
+it the switch says so instead: on a WebView too old for native IPC
+(`NativeOff`: update Android System WebView), or with a WebCrypto key paired
+before the native layer could be used (`PairInApp`: forget and pair again).
 
 Known gaps: forgetting the pairing from the phone leaves the distributor,
 so nothing reaches the phone, but the bridge keeps the old device's

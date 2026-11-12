@@ -18,6 +18,12 @@ pub enum Unavailable {
     /// The page runs in the Android app, whose `WebView` has no Push API:
     /// the app registers itself through `UnifiedPush` instead.
     NativeApp,
+    /// In the Android app without its native layer (a `WebView` too old for
+    /// it): no `UnifiedPush` either, since that needs the native identity.
+    NativeOff,
+    /// In the Android app, signed in with a browser key paired before the
+    /// app's native identity could be used: `UnifiedPush` needs the latter.
+    PairInApp,
 }
 
 impl Unavailable {
@@ -31,6 +37,13 @@ impl Unavailable {
             Self::BridgeOff => "Push is turned off on the bridge.",
             Self::NativeApp => {
                 "In the app, notifications come through UnifiedPush (ntfy), not this switch."
+            }
+            Self::NativeOff => {
+                "Notifications need the app's native features, which are off here \
+                 (an old Android System WebView?). Update it, then reopen the app."
+            }
+            Self::PairInApp => {
+                "Notifications need the app's own pairing: forget this phone, then pair it again."
             }
         }
     }
@@ -254,6 +267,8 @@ mod tests {
             PushState::Unavailable(Unavailable::Unsupported),
             PushState::Unavailable(Unavailable::Denied),
             PushState::Unavailable(Unavailable::NativeApp),
+            PushState::Unavailable(Unavailable::NativeOff),
+            PushState::Unavailable(Unavailable::PairInApp),
         ] {
             assert_eq!(state.toggle(), None, "{state:?}");
         }
@@ -324,6 +339,8 @@ mod tests {
             Unavailable::Denied,
             Unavailable::BridgeOff,
             Unavailable::NativeApp,
+            Unavailable::NativeOff,
+            Unavailable::PairInApp,
         ] {
             let state = PushState::Unavailable(why);
             assert!(!state.can_toggle(true));

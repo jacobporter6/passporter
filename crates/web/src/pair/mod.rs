@@ -11,7 +11,8 @@
 //! rest of the app (the device key signs every sign-in).
 //!
 //! In the Android app the key is the native layer's instead ([`native`]):
-//! the screen looks the same, and the page pairs through the plugin.
+//! the screen looks the same, the pair WASM pairs through the plugin, and
+//! the page then signs in with the native key.
 
 pub mod code;
 pub mod device;
