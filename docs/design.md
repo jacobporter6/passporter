@@ -3,9 +3,9 @@
 > Work from anywhere. A mobile-first, voice-first control surface for the coding
 > agents running in herdr on your dev machine.
 
-Status: **v0.1**. This document mixes what is built (the bridge and the PWA)
-with what is planned (the Android app, WebAuthn step-up); each section says
-which.
+Status: **v0.1**. This document mixes what is built (the bridge, the PWA and
+the Android app) with what is planned (WebAuthn step-up, several herdr
+sessions); each section says which.
 
 ---
 
@@ -97,7 +97,7 @@ Three deliverables:
 |---|---|---|
 | `crates/bridge` | Rust service (axum) on the dev machine. Wraps herdr + Claude transcripts into a small, typed, authenticated API. | systemd user unit (or any supervisor); reachable only through your HTTPS proxy |
 | `crates/web` | Mobile-first PWA, Rust compiled to WASM (Leptos). Works on its own in Chrome; also the UI inside the Android app. | served by the bridge |
-| `apps/android` (built: shell; plugins in progress) | Tauri 2 mobile shell around `crates/web` plus Kotlin plugins: notifications with inline reply, Android Auto messaging, UnifiedPush, recording that survives app kills. | sideloaded APK |
+| `apps/android` (built; device and car checks by a human pending) | Tauri 2 mobile shell around `crates/web` plus Kotlin plugins: notifications with inline reply, Android Auto messaging, UnifiedPush, recording that survives app kills. | sideloaded APK |
 
 Shared crates: `crates/protocol` (serde types compiled into both the bridge and
 the WASM frontend, so an API mismatch is a build error), `crates/herdr`
@@ -449,7 +449,7 @@ third-party push or CDN service; and **malicious content in agent output**
 |---|---|
 | Network | The bridge listens on loopback by default; the only way in is your HTTPS proxy (§3). Keep it reachable only over a VPN (Tailscale, WireGuard) where you can. Plain HTTP off loopback is refused unless explicitly opted into (insecure MVP mode). |
 | TLS | Required: pairing (WebCrypto), service workers, push and the mic need a secure context. Use a publicly trusted certificate (Tailscale's `*.ts.net`, Let's Encrypt) so nothing needs installing on the phone. A proxy on another host connects to the bridge over HTTPS with the bridge's own leaf (`[tls]`). |
-| Device pairing | `passporter pair` on the dev machine shows a one-time QR (5 min, single use). The phone generates a **non-extractable** P-256 keypair and registers the public key. In a browser it is a WebCrypto key in the PWA's IndexedDB. In the APK it is an Android Keystore key (StrongBox when the phone has one) owned by native code, which also pairs, signs in and caches tokens, so native features (notification replies, push registration and Android Auto, as they land) can authenticate with the app closed; the PWA in the APK asks the native layer for app-scope tokens over IPC and never gets a car token. Native IPC is granted only on a WebView that labels each frame's origin (`WEB_MESSAGE_LISTENER`); on an older one the app grants nothing and the PWA keeps a WebCrypto key, as in Chrome. The Keystore key needs no user authentication, so background replies work; biometric step-up is the planned Step-up below. Every session token comes from signing a server challenge. Tokens are short-lived (15 min) and refresh by signature. |
+| Device pairing | `passporter pair` on the dev machine shows a one-time QR (5 min, single use). The phone generates a **non-extractable** P-256 keypair and registers the public key. In a browser it is a WebCrypto key in the PWA's IndexedDB. In the APK it is an Android Keystore key (StrongBox when the phone has one) owned by native code, which also pairs, signs in and caches tokens, so native features (notification replies, push registration and Android Auto) can authenticate with the app closed; the PWA in the APK asks the native layer for app-scope tokens over IPC and never gets a car token. Native IPC is granted only on a WebView that labels each frame's origin (`WEB_MESSAGE_LISTENER`); on an older one the app grants nothing and the PWA keeps a WebCrypto key, as in Chrome. The Keystore key needs no user authentication, so background replies work; biometric step-up is the planned Step-up below. Every session token comes from signing a server challenge. Tokens are short-lived (15 min) and refresh by signature. |
 | Revocation | `passporter devices list / revoke <id>`. Revocation takes effect immediately and kills open WebSockets. |
 | Step-up (planned) | Elevated actions (*Always allow*, interrupt, any option tagged elevated) are to require device biometric unlock (WebAuthn user verification / BiometricPrompt). Not built yet: today they are refused, except raw keys and interrupt from the app, which go through without step-up (the keypad is the only way to answer a dialog, and an interrupt is one of its keys; see docs/security.md, known gaps). Never available from the car. |
 | Session scope | Every session has a scope chosen when it is made: `app` or `car`. The action origin is derived from it (a car session is always `car`; an app session's claim can only narrow), and car sessions reach only the car-safe endpoints (§6.6). |
@@ -470,12 +470,12 @@ third-party push or CDN service; and **malicious content in agent output**
 | Bridge | axum + tokio + tower-http, rusqlite, rustls | Small, typed, one static binary |
 | Validation | serde types in `crates/protocol`, strict deserialization (`deny_unknown_fields` on inbound) | Shared types on both ends; the compiler checks the contract |
 | Web | Leptos (CSR) → WASM, built with trunk; `web-sys`/`gloo` for browser APIs (IndexedDB, MediaRecorder, WebAuthn, Push) | Fine-grained reactivity without a virtual DOM; small bundle. Browser APIs are clunkier from Rust, which costs effort, not quality |
-| Android (shell built; plugins in progress) | Tauri 2 mobile + Kotlin plugins | Rust-native shell around the same Leptos UI; proper Kotlin plugin system |
+| Android (built) | Tauri 2 mobile + Kotlin plugins | Rust-native shell around the same Leptos UI; proper Kotlin plugin system |
 | Speech-to-text | whisper.cpp server (CUDA or CPU), local | Private. A GPU makes large models fast |
 | Push | Web Push (VAPID) in the PWA; UnifiedPush (e.g. ntfy) in the APK, with notices end-to-end encrypted | No content through third parties |
 | Summaries | `claude -p --model haiku` | Uses the existing login, no stored key |
 | Tests | cargo-nextest; a fake herdr (`FakeHerdr`) for integration tests; headless Chromium over CDP for E2E smoke tests (`just e2e`) | Everything but device and car behavior is verifiable in CI |
-| CI | `just gate` (fmt, clippy pedantic `-D warnings` on host + wasm, nextest, release build, PWA size budget, cargo deny) in GitHub Actions | One gate, locally and in CI |
+| CI | `just gate` (fmt, clippy pedantic `-D warnings` on host + wasm, nextest, release build, PWA size budget, cargo deny, and the Android checks where the Android toolchain is installed) in GitHub Actions | One gate, locally and in CI |
 
 ## 10. Status and roadmap
 

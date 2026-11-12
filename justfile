@@ -11,8 +11,9 @@ default:
 # Format check, lints (host + wasm), tests. Must pass before you open a PR.
 verify: fmt-check lint test
 
-# The full gate (CI runs this): verify + release build + PWA size budget + supply-chain audit.
-gate: verify build web-size audit
+# The full gate (CI runs this): verify + release build + PWA size budget + supply-chain audit,
+# plus the Android checks where the Android toolchain is installed.
+gate: verify build web-size audit android-gate
 
 fmt:
     cargo fmt --all
@@ -42,7 +43,13 @@ audit:
     cargo deny --locked check
 
 # Release build of the PWA into crates/web/dist (trunk runs wasm-bindgen and wasm-opt).
+# Panic locations name dependency and std sources by absolute path; mapping the
+# cargo home and the toolchain to fixed prefixes makes the WASM, and so the size
+# budget (`web-size`), the same on every machine.
 web-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=$(rustc --print sysroot)=/rustc"
     cd crates/web && trunk build --release --locked
 
 # Fail if the PWA's gzipped WASM is over budget (400 KiB).
@@ -131,12 +138,31 @@ android-test:
         echo "android: no Android toolchain; run just android-setup (docs/development/android.md)" >&2
         exit 1
     fi
+    # The app's JVM tests compile against Kotlin files that only a Tauri build
+    # generates: a fresh checkout builds the debug APK once first.
+    if [[ ! -f apps/android/gen/android/app/src/main/java/dev/passporter/app/generated/TauriActivity.kt ]]; then
+        just android-build
+    fi
     # tauri-build writes the Gradle include files the JVM tests need when it knows the project.
     TAURI_ANDROID_PROJECT_PATH="$PWD/apps/android/gen/android" TAURI_ANDROID_PACKAGE_UNESCAPED=dev.passporter.app \
         cargo clippy --package passporter-android --all-targets --locked --target aarch64-linux-android -- -D warnings
     cargo clippy --package tauri-plugin-device --package tauri-plugin-recorder --all-targets --locked --target aarch64-linux-android -- -D warnings
     cargo nextest run --package passporter-android --package tauri-plugin-device --locked
     cd apps/android/gen/android && ./gradlew --console=plain testUniversalDebugUnitTest :tauri-plugin-device:testDebugUnitTest :tauri-plugin-recorder:testDebugUnitTest
+
+# `android-test` where the Android toolchain is installed (`gate` runs this);
+# elsewhere, CI included, skipped with a message, like `e2e` without Chromium.
+android-gate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Without the toolchain, mise may not even resolve the Android env.
+    env=$(MISE_ENV=android mise env --shell bash 2>/dev/null) || env=""
+    eval "$env"
+    if ! command -v cargo-tauri >/dev/null || [[ ! -d "${ANDROID_HOME:-}/build-tools/37.0.0" ]]; then
+        echo "android: SKIPPED: no Android toolchain (just android-setup, docs/development/android.md)"
+        exit 0
+    fi
+    just android-test
 
 # Reclaim stale build output across worktrees (see crates/xtask).
 prune *args:

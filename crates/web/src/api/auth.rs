@@ -193,6 +193,11 @@ pub enum DeviceAuthError {
     /// The device key could not sign.
     #[error("this device could not sign: {0}")]
     Signing(String),
+    /// The Android app's native identity failed in a way that may pass: its
+    /// Keystore, its saved bridge address or the plugin itself. Worth
+    /// retrying, slowly.
+    #[error("the app's device identity is unavailable: {0}")]
+    NativeUnavailable(String),
     /// Anything else: no response, an unexpected status or body.
     #[error(transparent)]
     Api(#[from] ApiError),
@@ -203,7 +208,7 @@ impl DeviceAuthError {
     #[must_use]
     pub const fn is_retryable(&self) -> bool {
         match self {
-            Self::RateLimited => true,
+            Self::RateLimited | Self::NativeUnavailable(_) => true,
             Self::Api(error) => error.is_retryable(),
             Self::Refused | Self::Forgotten | Self::TooManyDevices | Self::Signing(_) => false,
         }

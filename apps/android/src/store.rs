@@ -7,8 +7,8 @@
 //! the webview and native sign-ins always talk to the same bridge, with or
 //! without the app running. Its test pins [`FILE_NAME`].
 
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -73,16 +73,21 @@ impl Store {
             })
     }
 
-    /// Saves `origin`, replacing any earlier one. The write is atomic: a
-    /// crash leaves the old file or the new one, never half of either.
+    /// Saves `origin`, replacing any earlier one. The write is atomic and
+    /// durable: the new text reaches the disk before it replaces the old
+    /// file, and the rename before this returns, so a crash or power loss
+    /// leaves the old file or the new one, never half of either.
     pub fn save(&self, origin: &BridgeOrigin) -> Result<(), StoreError> {
-        if let Some(dir) = self.path.parent() {
-            fs::create_dir_all(dir).map_err(|source| io_error("creating", dir, source))?;
-        }
+        let dir = self.path.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(dir).map_err(|source| io_error("creating", dir, source))?;
         let partial = self.path.with_extension("partial");
-        fs::write(&partial, format!("{origin}\n"))
+        write_synced(&partial, format!("{origin}\n").as_bytes())
             .map_err(|source| io_error("writing", &partial, source))?;
-        fs::rename(&partial, &self.path).map_err(|source| io_error("replacing", &self.path, source))
+        fs::rename(&partial, &self.path)
+            .map_err(|source| io_error("replacing", &self.path, source))?;
+        File::open(dir)
+            .and_then(|dir| dir.sync_all())
+            .map_err(|source| io_error("syncing", dir, source))
     }
 
     /// Deletes the saved origin, so the next launch opens the Connect page.
@@ -94,6 +99,13 @@ impl Store {
             Err(source) => Err(io_error("deleting", &self.path, source)),
         }
     }
+}
+
+/// Writes `bytes` to a new file at `path` and waits until they are on disk.
+fn write_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 fn io_error(action: &'static str, path: &Path, source: io::Error) -> StoreError {

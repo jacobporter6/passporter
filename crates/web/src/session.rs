@@ -21,15 +21,16 @@ use core::cell::{Cell, RefCell};
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use protocol::{DeviceName, PairingCode, SessionGrant};
+use protocol::{DeviceName, SessionGrant};
 
 use crate::api::auth::{DeviceAuthError, grant_token, sign_in};
 use crate::api::{ApiClient, BearerToken, FetchTransport, TokenSource};
 use crate::pair::device::{self, DeviceKey};
+use crate::pair::native;
 use crate::pair::scanner::sleep;
-use crate::pair::{self, native};
 use crate::platform;
 use crate::push;
+use crate::push::state::Unavailable;
 use crate::store::{Store, TokenKey};
 use crate::ui::AppState;
 
@@ -39,6 +40,9 @@ pub const RENEW_EARLY_SECS: u64 = 60;
 const MIN_RENEW_SECS: u64 = 30;
 /// Wait between attempts when the bridge cannot be reached.
 const RETRY_MS: i32 = 5_000;
+/// The longest wait between attempts while the Android app's native
+/// identity keeps failing ([`Attempt::Later`]).
+const MAX_BACKOFF_MS: i32 = 300_000;
 
 /// Where this device's identity lives. Generic over the browser key only
 /// so the choice ([`choose`]) is testable on the host.
@@ -75,11 +79,22 @@ fn choose<K>(native_paired: Option<bool>, browser: Option<K>) -> Option<Identity
     }
 }
 
+/// Why the push switch is off in the Android app ([`in_app_push`]), from
+/// whether its native layer is here (`None` before [`load`] has asked) and
+/// the identity in use.
+fn push_in_app<K>(native: Option<bool>, device: Option<&Identity<K>>) -> Unavailable {
+    match (native, device) {
+        (Some(false), _) => Unavailable::NativeOff,
+        (Some(true), Some(Identity::Browser(_))) => Unavailable::PairInApp,
+        _ => Unavailable::NativeApp,
+    }
+}
+
 thread_local! {
     /// The paired device's identity, once loaded or made.
     static DEVICE: RefCell<Option<Device>> = const { RefCell::new(None) };
     /// Whether the Android app's native identity is here, once [`load`] has
-    /// asked: new pairings then go through it ([`native_identity`]).
+    /// asked: Forget then clears it too ([`forget_device`]).
     static NATIVE: Cell<Option<bool>> = const { Cell::new(None) };
     /// Renewal generation: bumping it cancels the scheduled renewal and any
     /// retry loop.
@@ -155,6 +170,14 @@ pub fn api(app: AppState) -> ApiClient<FetchTransport, SessionToken> {
     ApiClient::new(FetchTransport, SessionToken(app))
 }
 
+/// Why the push switch is off in the Android app: notifications come
+/// through the app's own `UnifiedPush` subscription, which needs its native
+/// identity, so this says whether they can.
+#[must_use]
+pub fn in_app_push() -> Unavailable {
+    DEVICE.with_borrow(|device| push_in_app(NATIVE.get(), device.as_ref()))
+}
+
 /// Whether device keys can work here (`WebCrypto` needs a secure context).
 #[must_use]
 pub fn secure_context() -> bool {
@@ -163,15 +186,6 @@ pub fn secure_context() -> bool {
 
 fn current_device() -> Option<Device> {
     DEVICE.with_borrow(Clone::clone)
-}
-
-/// Whether pairing goes through the Android app's native layer: what
-/// [`load`] found, or, if pairing starts before it has asked, a fresh probe.
-pub async fn native_identity() -> bool {
-    match NATIVE.get() {
-        Some(native) => native,
-        None => native::probe().await.present(),
-    }
 }
 
 /// Loads credentials at startup: the pasted token, and in a secure context
@@ -235,14 +249,31 @@ pub async fn pasted_token(store: &Store) -> Option<BearerToken> {
 }
 
 /// What one sign-in attempt came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Attempt {
     Done,
+    /// Try again soon: the bridge could not be reached.
     Retry,
+    /// Try again, waiting longer each time: the native identity failed in
+    /// a way that may pass.
+    Later,
     Stop,
 }
 
-/// Signs in with the device key, retrying while the bridge is unreachable,
-/// and schedules the next renewal. Starts a new renewal generation, which
+impl Attempt {
+    /// How long to wait before the next attempt, given the wait before
+    /// this one (0 for the first); `None` to stop.
+    fn wait_after(self, last_ms: i32) -> Option<i32> {
+        match self {
+            Self::Retry => Some(RETRY_MS),
+            Self::Later => Some(last_ms.saturating_mul(2).clamp(RETRY_MS, MAX_BACKOFF_MS)),
+            Self::Done | Self::Stop => None,
+        }
+    }
+}
+
+/// Signs in with the device key, retrying while the bridge is unreachable
+/// (and, ever more slowly, while the native identity fails), and schedules the next renewal. Starts a new renewal generation, which
 /// cancels any older scheduled one. The first attempt is awaited; retries
 /// continue in the background.
 async fn renew(app: AppState) {
@@ -253,21 +284,22 @@ async fn renew(app: AppState) {
     GENERATION.set(generation);
     let first = attempt(app, generation).await;
     RENEWING.set(false);
-    if matches!(first, Attempt::Retry) {
-        spawn_local(retry(app, generation));
+    if let Some(wait_ms) = first.wait_after(0) {
+        spawn_local(retry(app, generation, wait_ms));
     }
 }
 
-async fn retry(app: AppState, generation: u32) {
+async fn retry(app: AppState, generation: u32, mut wait_ms: i32) {
     loop {
-        sleep(RETRY_MS).await;
+        sleep(wait_ms).await;
         if GENERATION.get() != generation || RENEWING.replace(true) {
             return;
         }
         let outcome = attempt(app, generation).await;
         RENEWING.set(false);
-        if !matches!(outcome, Attempt::Retry) {
-            return;
+        match outcome.wait_after(wait_ms) {
+            Some(next) => wait_ms = next,
+            None => return,
         }
     }
 }
@@ -294,6 +326,20 @@ async fn attempt(app: AppState, generation: u32) -> Attempt {
             set_credential(Credential::Device { name });
             schedule(app, generation, expires_in_secs);
             Attempt::Done
+        }
+        Err(DeviceAuthError::NativeUnavailable(message)) => {
+            leptos::logging::warn!("the app's device identity failed: {message}; retrying");
+            if !native::probe().await.maybe_paired() && GENERATION.get() == generation {
+                // The native layer says it is not paired: its key is gone,
+                // or it could not read the bridge's address. Show the app
+                // unpaired, so the user can pair again, but keep the
+                // identity and keep trying: a file that could not be read
+                // may be readable next time, and a success shows it paired.
+                app.token.set(None);
+                app.token_rejected.set(true);
+                set_credential(Credential::None);
+            }
+            Attempt::Later
         }
         Err(error) if error.is_retryable() => Attempt::Retry,
         Err(DeviceAuthError::Refused) => {
@@ -353,11 +399,10 @@ pub async fn adopt_device(app: AppState, key: DeviceKey) -> Result<(), String> {
     install(app, Identity::Browser(key)).await
 }
 
-/// Pairs through the Android app's native layer with `code`, then signs in
-/// with its key. Nothing changes if pairing fails. A browser key left from
-/// before is deleted: the native key replaces it.
-pub async fn pair_native(app: AppState, code: PairingCode) -> Result<(), String> {
-    native::pair(&code).await.map_err(pair::pairing_failure)?;
+/// Signs in with the Android app's native key, which the pair WASM has just
+/// paired ([`crate::pair::screen`]). A browser key left from before is
+/// deleted: the native key replaces it.
+pub async fn adopt_native(app: AppState) -> Result<(), String> {
     retire_previous(app);
     if let Err(error) = device::forget().await {
         leptos::logging::warn!("{error}");
@@ -495,6 +540,59 @@ mod tests {
             choose(Some(false), Some("key")),
             Some(Identity::Browser("key"))
         ));
+    }
+
+    #[test]
+    fn an_unreachable_bridge_is_retried_at_a_steady_pace() {
+        assert_eq!(Attempt::Retry.wait_after(0), Some(RETRY_MS));
+        assert_eq!(Attempt::Retry.wait_after(MAX_BACKOFF_MS), Some(RETRY_MS));
+    }
+
+    #[test]
+    fn a_failing_native_identity_is_retried_ever_more_slowly() {
+        let mut waits = Vec::new();
+        let mut last = 0;
+        for _ in 0..8 {
+            last = Attempt::Later.wait_after(last).expect("keeps trying");
+            waits.push(last);
+        }
+        assert_eq!(
+            waits,
+            [
+                5_000, 10_000, 20_000, 40_000, 80_000, 160_000, 300_000, 300_000
+            ]
+        );
+        // Back to the steady pace once the bridge is what fails.
+        assert_eq!(Attempt::Retry.wait_after(last), Some(RETRY_MS));
+    }
+
+    #[test]
+    fn done_and_stop_end_the_retries() {
+        assert_eq!(Attempt::Done.wait_after(RETRY_MS), None);
+        assert_eq!(Attempt::Stop.wait_after(RETRY_MS), None);
+    }
+
+    #[test]
+    fn in_the_app_push_says_whether_unified_push_can_work() {
+        let browser = Identity::Browser("key");
+        assert_eq!(
+            push_in_app(Some(true), Some(&Identity::<&str>::Native)),
+            Unavailable::NativeApp
+        );
+        // Not known yet, or nothing paired: the app's own pairing will be native.
+        assert_eq!(push_in_app::<()>(None, None), Unavailable::NativeApp);
+        assert_eq!(push_in_app::<()>(Some(true), None), Unavailable::NativeApp);
+        // A WebView too old for the native layer: no UnifiedPush at all.
+        assert_eq!(
+            push_in_app(Some(false), Some(&browser)),
+            Unavailable::NativeOff
+        );
+        assert_eq!(push_in_app::<()>(Some(false), None), Unavailable::NativeOff);
+        // A browser key from before the native layer could be used.
+        assert_eq!(
+            push_in_app(Some(true), Some(&browser)),
+            Unavailable::PairInApp
+        );
     }
 
     #[test]

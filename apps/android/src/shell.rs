@@ -5,9 +5,13 @@
 //! bundled pages or the paired origin ([`crate::navigation`]), and the
 //! bridge capability grants IPC to that exact origin only
 //! ([`BridgeOrigin::capability_pattern`]). The app defines no ACL manifest,
-//! so its own commands (`connect`, `bridge`, `forget_bridge`) answer bundled
-//! pages only: Tauri refuses app commands to any remote page that no
-//! capability names.
+//! so Tauri lets its own commands (`connect`, `bridge`, `forget_bridge`)
+//! answer only messages it labels local, from the bundled pages. On a
+//! `WebView` without `WEB_MESSAGE_LISTENER` that label is the URL the main
+//! frame last started loading, so a message a bridge page sends while the
+//! shell replaces it with the Bridge page can pass as local: there
+//! [`forget_bridge`] refuses ([`grant_ipc`] has the details), and `connect`
+//! refuses anyway once a bridge is chosen.
 //!
 //! The Kotlin side ([`crate::native`]) asks for the other screens: an agent
 //! on a notification tap, the bundled Bridge page from the launcher
@@ -22,6 +26,7 @@ use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_device::DeviceExt;
 
+use crate::connect::Connected;
 use crate::destination::{self, CONNECT_PAGE, FirstPage, Request};
 use crate::native::{self, NativeExt};
 use crate::navigation::Guard;
@@ -33,6 +38,11 @@ const MAIN: &str = "main";
 
 /// The runtime capability that lets the bridge's PWA reach native plugins.
 const BRIDGE_CAPABILITY: &str = "bridge";
+
+/// Why [`forget_bridge`] refuses on a `WebView` without
+/// `WEB_MESSAGE_LISTENER`, and what to do instead.
+const OLD_WEBVIEW_FORGET: &str = "This phone's Android System WebView is too old to change the \
+     bridge here. Update it, or clear Passporter's storage in Android's app settings to start over.";
 
 /// Shared between the `connect` command and the navigation guard.
 struct Shell {
@@ -184,10 +194,13 @@ enum GrantError {
 /// Tauri tells frames apart only on `WebView`s with `WEB_MESSAGE_LISTENER`
 /// (`WebView` 86 and later); on older ones every frame's message carries the
 /// main frame's URL, and only the PWA's CSP keeps foreign frames out.
-/// Messages sent while the Connect page is being replaced can even be
-/// labelled local. So nothing is granted without that feature (the PWA then
-/// keeps its device key in `WebCrypto`, as in Chrome), and the app never adds
-/// a local capability (docs/development/android.md, "How the shell works").
+/// Messages sent while the main frame changes pages can even be labelled
+/// local: the Connect page's while it is replaced by the bridge, or a bridge
+/// page's while the shell replaces it with the Bridge page. So nothing is
+/// granted without that feature (the PWA then keeps its device key in
+/// `WebCrypto`, as in Chrome), the app never adds a local capability, and
+/// [`forget_bridge`] refuses (docs/development/android.md, "How the shell
+/// works").
 fn grant_ipc(app: &AppHandle, origin: &BridgeOrigin) -> Result<(), GrantError> {
     if !app.device().webview_isolates_frames()? {
         return Err(GrantError::WebViewTooOld);
@@ -208,46 +221,28 @@ fn grant_ipc(app: &AppHandle, origin: &BridgeOrigin) -> Result<(), GrantError> {
 /// then replaces itself with that URL (`location.replace`), so Back never
 /// returns to it: history navigations skip the navigation guard.
 ///
-/// The bridge is chosen once per process: to change it, the Bridge page
-/// calls [`forget_bridge`], which restarts the app. The address is saved
-/// first, so a failure there changes nothing.
+/// The bridge is chosen once per process ([`crate::connect::connect`]): to
+/// change it, the Bridge page calls [`forget_bridge`], which restarts the
+/// app.
 #[tauri::command]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "Tauri hands command arguments over by value"
 )]
 fn connect(app: AppHandle, shell: State<'_, Shell>, address: &str) -> Result<String, String> {
-    let origin = BridgeOrigin::parse(address).map_err(|error| error.to_string())?;
     let _connecting = shell
         .connecting
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    if let Some(current) = shell.bridge.get() {
-        return Err(format!(
-            "already connected to {current}; change it from the Bridge page"
-        ));
-    }
-    shell
-        .store
-        .save(&origin)
-        .map_err(|error| format!("could not save the address: {error}"))?;
-    let url = origin.url().to_string();
-    // Granted last: Tauri cannot take a capability back, so no grant is
-    // made for an origin that did not become the bridge.
-    let granted = grant_ipc(&app, &origin);
-    shell
-        .bridge
-        .set(origin)
-        .map_err(|_| "already connected".to_owned())?;
-    match granted {
-        Ok(()) => {}
-        // Nothing was granted, and the PWA works without native plugins, as
-        // in Chrome. The bridge is chosen by now, so this is not an error:
-        // the next launch tries the grant again.
-        Err(error @ (GrantError::WebViewTooOld | GrantError::Probe(_))) => log_to_logcat(&error),
-        Err(error @ GrantError::Tauri(_)) => {
-            return Err(format!("could not allow the bridge: {error}"));
-        }
+    let Connected { url, grant } =
+        crate::connect::connect(&shell.store, &shell.bridge, address, |origin| {
+            grant_ipc(&app, origin)
+        })?;
+    // Nothing was granted, and the PWA works without native plugins, as in
+    // Chrome. The bridge is chosen by now, so this is not an error: the
+    // next launch tries the grant again.
+    if let Err(error) = grant {
+        log_to_logcat(&error);
     }
     Ok(url)
 }
@@ -264,7 +259,10 @@ fn bridge(shell: State<'_, Shell>) -> Option<String> {
 }
 
 /// Forgets the bridge, then restarts the app, which opens the Connect page.
-/// Answers the bundled Bridge page only.
+/// Answers the bundled Bridge page only, and only on a `WebView` that tells
+/// frames apart: on an older one a bridge page's message can be labelled
+/// local (see [`grant_ipc`]), and no script on the bridge may unpair the
+/// app. There, clearing the app's data starts over instead.
 ///
 /// The restart is the point: Tauri cannot take back the capability granted
 /// to the old origin, and the webview may hold its pages, so only a new
@@ -275,6 +273,17 @@ fn bridge(shell: State<'_, Shell>) -> Option<String> {
 /// main thread.
 #[tauri::command]
 async fn forget_bridge(app: AppHandle, shell: State<'_, Shell>) -> Result<(), String> {
+    // Fails closed: a WebView the plugin cannot check counts as old.
+    let isolated = app
+        .device()
+        .webview_isolates_frames()
+        .unwrap_or_else(|error| {
+            log_to_logcat(&error);
+            false
+        });
+    if !isolated {
+        return Err(OLD_WEBVIEW_FORGET.to_owned());
+    }
     shell
         .store
         .forget()
