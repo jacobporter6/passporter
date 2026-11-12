@@ -2,6 +2,9 @@ package dev.passporter.device
 
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.nio.file.Files
 import org.json.JSONObject
 import org.junit.After
@@ -42,8 +45,15 @@ class DeviceAuthTest {
         var issued = 0
         var unreachable = false
 
+        /**
+         * Runs first for each request (a slow bridge, a clock moving on);
+         * an answer it gives replaces the bridge's.
+         */
+        var intercept: (HttpRequest) -> HttpResponse? = { null }
+
         override fun send(request: HttpRequest): HttpResponse {
             sent += request
+            intercept(request)?.let { return it }
             if (unreachable) throw IOException("offline")
             refuse.removeFirstOrNull()?.let { return HttpResponse(it, "") }
             val body = JSONObject(request.body ?: "{}")
@@ -261,5 +271,75 @@ class DeviceAuthTest {
         } finally {
             dir.setWritable(true)
         }
+    }
+
+    @Test
+    fun aSignInGivesUpAtItsDeadlineAndCutsEachRequestsTimeouts() {
+        auth.pair(code, null)
+        bridge.intercept = { request ->
+            if (request.url.endsWith("/challenge")) clock += DeviceAuth.SIGN_IN_DEADLINE_MS
+            null
+        }
+        assertThrows(DeviceAuthException.Unreachable::class.java) { auth.token(Scope.APP) }
+        val challenge = bridge.sent.last()
+        assertTrue(challenge.url.endsWith("/challenge"))
+        assertEquals("the whole deadline is left for the first request", DeviceAuth.SIGN_IN_DEADLINE_MS, challenge.timeoutMs)
+        assertTrue("the pairing stays", auth.status().paired)
+        bridge.intercept = { null }
+        assertEquals("tok1", auth.token(Scope.APP).value)
+    }
+
+    @Test
+    fun statusAndForgetDoNotWaitForASignIn() {
+        auth.pair(code, null)
+        val asked = CountDownLatch(1)
+        val answer = CountDownLatch(1)
+        bridge.intercept = { request ->
+            if (request.url.endsWith("/session")) {
+                asked.countDown()
+                answer.await(5, TimeUnit.SECONDS)
+                // Signed before the pairing was forgotten: the bridge grants it.
+                HttpResponse(200, """{"token":"late","expiresInSecs":900,"scope":"app"}""")
+            } else {
+                null
+            }
+        }
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            val signIn = executor.submit<SessionToken> { auth.token(Scope.APP) }
+            assertTrue(asked.await(5, TimeUnit.SECONDS))
+            // The sign-in holds its lock across the network; these do not need it.
+            assertTrue(auth.status().paired)
+            auth.forget()
+            assertFalse(auth.status().paired)
+            answer.countDown()
+            val failure = assertThrows(java.util.concurrent.ExecutionException::class.java) { signIn.get(5, TimeUnit.SECONDS) }
+            assertTrue("a token of the forgotten pairing is not handed out", failure.cause is DeviceAuthException.NotPaired)
+        } finally {
+            answer.countDown()
+            executor.shutdownNow()
+        }
+        bridge.intercept = { null }
+        assertThrows(DeviceAuthException.NotPaired::class.java) { auth.token(Scope.APP) }
+    }
+
+    /** A token of another pairing (made after a new pairing that raced the caller's check) is never used. */
+    @Test
+    fun sendGoesOnlyAsTheDeviceAsked() {
+        val id = auth.pair(code, null)
+        assertEquals(200, auth.send(Scope.APP, Method.GET, "/v1/agents", device = id).status)
+        val other = checkNotNull(DeviceId.parse("dev-fedcba9876543210"))
+        val asked = bridge.sent.size
+        assertThrows(DeviceAuthException.OtherDevice::class.java) { auth.send(Scope.APP, Method.GET, "/v1/agents", device = other) }
+        assertEquals("nothing sent", asked, bridge.sent.size)
+    }
+
+    @Test
+    fun theSavedDeviceNeedsNoKeystore() {
+        assertNull(auth.savedDevice())
+        val id = auth.pair(code, null)
+        assertEquals(id, auth.savedDevice())
+        origin = BridgeOrigin.parse("https://other.example.org")
+        assertNull("another bridge's record", auth.savedDevice())
     }
 }

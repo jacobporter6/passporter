@@ -32,7 +32,7 @@ class OutboxWorker internal constructor(
         }
         val attempt = OutboxData.attempts(inputData) + runAttemptCount
         val feedback = ActionFeedback(applicationContext)
-        val outcome = OutboxSender(bridge, frozen).send(job, ::isStopped)
+        val outcome = OutboxSender(bridge, frozen) { pairedDevice(applicationContext) }.send(job, ::isStopped)
         // Stopped meanwhile: WorkManager ignores this run and runs the job
         // again, so nothing may show or settle (the frozen body stays).
         if (isStopped) return Result.retry()

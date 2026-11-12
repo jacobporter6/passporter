@@ -21,16 +21,30 @@ import java.io.File
  * prompt of the pairing scanner) asks. Android itself stops asking after
  * the person declines twice.
  *
+ * While its prompt shows ([asking]) other prompts wait, so two never come
+ * on one resume; [onAnswered] is called once the person has answered.
+ *
  * Create it while [activity] is being constructed or created: the request
  * must be registered before the activity starts.
  */
-class NotificationPermission(private val activity: ComponentActivity) {
-    // The answer needs no handling: notices are posted only when granted.
+class NotificationPermission(
+    private val activity: ComponentActivity,
+    /** Called on the main thread once the person answered the prompt, either way. */
+    private val onAnswered: () -> Unit,
+) {
+    // Notices are posted only when granted: the answer itself needs no handling.
     private val request =
-        activity.registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+        activity.registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            asking = false
+            onAnswered()
+        }
 
     /** Whether this activity asked already. */
     private var asked = false
+
+    /** Whether the prompt is up (asked, not answered yet). Main thread only. */
+    var asking = false
+        private set
 
     /** Asks if this Android needs it, the app is connected, and it was neither granted nor asked. */
     fun askIfDue() {
@@ -41,6 +55,7 @@ class NotificationPermission(private val activity: ComponentActivity) {
         val connected = File(activity.dataDir, BRIDGE_ORIGIN_FILE).isFile
         if (granted || !connected) return
         asked = true
+        asking = true
         request.launch(permission)
     }
 

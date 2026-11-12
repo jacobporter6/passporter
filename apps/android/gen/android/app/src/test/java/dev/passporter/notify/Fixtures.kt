@@ -1,5 +1,7 @@
 package dev.passporter.notify
 
+import dev.passporter.device.DeviceId
+
 /** A valid agent id; fails the test on a typo. */
 fun agent(raw: String): AgentId = requireNotNull(AgentId.parse(raw)) { raw }
 
@@ -26,3 +28,9 @@ fun notice(
 /** A message of [notices]. */
 fun messageOf(vararg notices: Notice, ping: String = "ab"): NoticeMessage =
     NoticeMessage(ping, notices.toList())
+
+/** The device the app is paired as in the tests, and the notices came to. */
+val DEVICE: DeviceId = requireNotNull(DeviceId.parse("dev-0123456789abcdef"))
+
+/** Another device: an older pairing's, or another bridge's. */
+val OTHER_DEVICE: DeviceId = requireNotNull(DeviceId.parse("dev-fedcba9876543210"))

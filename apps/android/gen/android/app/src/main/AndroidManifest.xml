@@ -18,7 +18,9 @@
 
     <!-- networkSecurityConfig turns cleartext off for every build type
          (it overrides usesCleartextTraffic) and trusts system CAs only. -->
+    <!-- PassporterApplication hears every pairing change, process-wide. -->
     <application
+        android:name=".PassporterApplication"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"

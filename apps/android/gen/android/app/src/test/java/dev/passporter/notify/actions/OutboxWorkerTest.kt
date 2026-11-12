@@ -1,5 +1,6 @@
 package dev.passporter.notify.actions
 
+import dev.passporter.notify.DEVICE
 import android.Manifest
 import android.app.Application
 import android.app.KeyguardManager
@@ -24,11 +25,13 @@ import dev.passporter.device.HttpResponse
 import dev.passporter.notify.Notice
 import dev.passporter.notify.NoticeNotification
 import dev.passporter.notify.NoticeState
+import dev.passporter.notify.OTHER_DEVICE
 import dev.passporter.notify.agent
 import dev.passporter.notify.notice
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -61,6 +64,11 @@ class OutboxWorkerTest {
             }
     }
 
+    @After
+    fun restore() {
+        pairedDevice = ::currentDevice
+    }
+
     @Before
     fun setUp() {
         shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
@@ -70,10 +78,11 @@ class OutboxWorkerTest {
         )
         NoticeNotification.createChannels(context)
         NoticeActionReceiver.executor = Executor { it.run() }
+        pairedDevice = { PairedAs.Device(DEVICE) }
     }
 
     private fun show(notice: Notice) {
-        manager.notify(NoticeNotification.tag(notice.agentId), NoticeNotification.ID, NoticeNotification.build(context, notice, 1))
+        manager.notify(NoticeNotification.tag(notice.agentId), NoticeNotification.ID, NoticeNotification.build(context, notice, 1, DEVICE))
     }
 
     private fun shown(): Notification? = shadowOf(manager).getNotification("w1:p1", NoticeNotification.ID)
@@ -357,6 +366,36 @@ class OutboxWorkerTest {
     fun anAnswerThatAlreadyLandedIsNotBroughtBackAsAlreadyAnswered() {
         val job = job(NoticeAction.ALLOW_ONCE)
         assertEquals(ListenableWorker.Result.success(), worker(FakeBridge.of(dialog = "null"), job).doWork())
+        assertNull(shown())
+    }
+
+    @Test
+    fun aTapSchedulesACheckForAnAnswerLostBeforeItWasQueued() {
+        show(notice())
+        tap(0)
+        val check = WorkManager.getInstance(context).getWorkInfosForUniqueWork(Reconciler.LEFTOVERS_NAME).get().single()
+        assertEquals(WorkInfo.State.ENQUEUED, check.state)
+        assertTrue("past the tap's grace", check.initialDelayMillis > Reconciler.ANSWER_GRACE_MS)
+    }
+
+    @Test
+    fun aTapMadeForAnotherPairingQueuesNothing() {
+        show(notice())
+        pairedDevice = { PairedAs.Device(OTHER_DEVICE) }
+        tap(0)
+        assertTrue(queued().isEmpty())
+        val shown = requireNotNull(shown())
+        assertEquals("Not paired: open the app", subText(shown))
+        assertNull(shown.extras.getString(ActionFeedback.EXTRA_JOB))
+    }
+
+    /** Queued before a new pairing, run after it (the reset failed): dropped, and the old conversation stays gone. */
+    @Test
+    fun aJobOfAnOldPairingIsDroppedUnseen() {
+        pairedDevice = { PairedAs.Device(OTHER_DEVICE) }
+        val fake = FakeBridge.of()
+        assertEquals(ListenableWorker.Result.success(), worker(fake, job(NoticeAction.REPLY, "hi")).doWork())
+        assertTrue(fake.requests.isEmpty())
         assertNull(shown())
     }
 }
