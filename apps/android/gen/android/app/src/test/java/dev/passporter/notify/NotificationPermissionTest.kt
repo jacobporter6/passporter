@@ -2,8 +2,11 @@ package dev.passporter.notify
 
 import android.Manifest
 import androidx.activity.ComponentActivity
+import android.content.pm.PackageManager
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -15,7 +18,8 @@ import java.io.File
 class NotificationPermissionTest {
     private val controller = Robolectric.buildActivity(ComponentActivity::class.java)
     private val activity = controller.get()
-    private val permission = NotificationPermission(activity)
+    private var answered = 0
+    private val permission = NotificationPermission(activity, onAnswered = { answered++ })
 
     init {
         controller.setup()
@@ -41,5 +45,23 @@ class NotificationPermissionTest {
         shadowOf(activity).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         permission.askIfDue()
         assertNull(lastRequested())
+    }
+
+    /** Other prompts (push's distributor picker) wait while it is up, and hear when it is answered. */
+    @Test
+    fun itSaysWhileItAsksAndWhenAnswered() {
+        connect()
+        assertFalse(permission.asking)
+        permission.askIfDue()
+        assertTrue(permission.asking)
+        val request = requireNotNull(shadowOf(activity).lastRequestedPermission)
+        @Suppress("DEPRECATION") // How Android delivers it; ComponentActivity hands it to the launcher.
+        activity.onRequestPermissionsResult(
+            request.requestCode,
+            request.requestedPermissions,
+            intArrayOf(PackageManager.PERMISSION_DENIED),
+        )
+        assertFalse(permission.asking)
+        assertEquals(1, answered)
     }
 }

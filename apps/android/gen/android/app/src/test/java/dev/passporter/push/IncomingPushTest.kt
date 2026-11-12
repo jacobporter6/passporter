@@ -3,6 +3,7 @@ package dev.passporter.push
 import android.Manifest
 import android.app.Application
 import android.app.NotificationManager
+import dev.passporter.notify.DEVICE
 import dev.passporter.notify.NoticeNotification
 import dev.passporter.notify.NoticeNotifier
 import dev.passporter.notify.NoticeOutcome
@@ -23,7 +24,7 @@ class IncomingPushTest {
     private val context: Application = RuntimeEnvironment.getApplication()
     private val manager = context.getSystemService(NotificationManager::class.java)
     private var registered = true
-    private val incoming = IncomingPush(NoticeNotifier(context)::show) { registered }
+    private val incoming = IncomingPush(NoticeNotifier(context) { DEVICE }::show) { registered }
 
     private val blocked =
         """{"ping":"0123456789abcdef0123456789abcdef","notices":[{"agentId":"w1:p1","name":"widget",

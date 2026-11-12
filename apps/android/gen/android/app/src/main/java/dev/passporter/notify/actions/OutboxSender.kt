@@ -1,6 +1,7 @@
 package dev.passporter.notify.actions
 
 import dev.passporter.device.DeviceAuthException
+import dev.passporter.device.DeviceId
 import dev.passporter.device.HttpResponse
 import dev.passporter.device.Method
 import org.json.JSONException
@@ -24,10 +25,14 @@ import org.json.JSONObject
  * lost answer is replayed by the bridge, never decided twice.
  *
  * Nothing is ever resent as something else: a 409 or a refusal is final.
+ * Every attempt first checks that the app is still paired as the job's
+ * device ([paired]); else nothing is sent ([NotSent.PAIRING_CHANGED]).
  */
 class OutboxSender(
     private val bridge: Bridge,
     private val frozen: FrozenBodies,
+    /** The device the app is paired as now ([pairedDevice]). */
+    private val paired: () -> DeviceId?,
 ) {
     /**
      * One attempt at [job]. Never throws. The frozen body is forgotten once
@@ -45,6 +50,7 @@ class OutboxSender(
     }
 
     private fun attempt(job: OutboxJob): SendOutcome {
+        if (job.device != paired()) return SendOutcome.Final(NotSent.PAIRING_CHANGED)
         val body = frozen.get(job.key) ?: when (val prepared = prepare(job)) {
             is Prepared.Body -> prepared.json.also { frozen.put(job.key, it) }
             is Prepared.Not -> return prepared.outcome

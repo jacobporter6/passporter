@@ -5,8 +5,11 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import androidx.core.app.RemoteInput
+import dev.passporter.device.DeviceId
+import dev.passporter.notify.actions.DeviceStamp
 import dev.passporter.notify.actions.ReplyText
 import dev.passporter.notify.actions.Unsendable
+import dev.passporter.notify.actions.pairedDevice
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 
@@ -20,7 +23,8 @@ import java.util.concurrent.Executors
  * a reply only says, quietly in the notification, to answer on the phone
  * ([CarSpeech.offTheCar]): the shade's own actions
  * ([dev.passporter.notify.actions.NoticeActions]) are the way there,
- * phone unlocked.
+ * phone unlocked. An action made for another pairing than the app's now
+ * ([DeviceStamp]) sends nothing either ([CarTrouble.PAIRING_CHANGED]).
  *
  * - [CarAction.REPLY]: the utterance, made fit for the bridge's
  *   `Utterance` (one line, no hidden characters, at most
@@ -44,6 +48,7 @@ class CarReplyReceiver : BroadcastReceiver() {
             Log.w(TAG, "ignored an intent that is not a car action")
             return
         }
+        val device = DeviceStamp.of(intent.data)
         val name = intent.getStringExtra(CarActions.EXTRA_NAME).orEmpty()
         val heard = if (request.action == CarAction.REPLY) heard(intent) else null
         val app = context.applicationContext
@@ -51,40 +56,45 @@ class CarReplyReceiver : BroadcastReceiver() {
         val pending: PendingResult? = goAsync()
         executor.execute {
             try {
-                take(app, request, name, heard)
+                take(app, request, device, name, heard)
             } finally {
                 pending?.finish()
             }
         }
     }
 
-    private fun take(context: Context, request: CarRequest, name: String, heard: CharSequence?) {
+    private fun take(context: Context, request: CarRequest, device: DeviceId?, name: String, heard: CharSequence?) {
         if (!carProjection(context).isProjecting()) {
             Log.i(TAG, "ignored a car action while Android Auto is not projecting")
             if (request.action == CarAction.REPLY) CarSpeech(context).offTheCar(request, name)
             return
         }
         when (request.action) {
-            CarAction.REPLY -> reply(context, request, name, heard)
+            CarAction.REPLY -> if (device != null && device == pairedDevice(context)) {
+                reply(context, request, device, name, heard)
+            } else {
+                Log.i(TAG, "ignored a car reply made for another pairing")
+                CarSpeech(context).trouble(request, name, null, CarTrouble.PAIRING_CHANGED, device)
+            }
             CarAction.MARK_AS_READ -> Log.i(TAG, "a conversation was read in the car")
         }
     }
 
-    private fun reply(context: Context, request: CarRequest, name: String, heard: CharSequence?) {
+    private fun reply(context: Context, request: CarRequest, device: DeviceId, name: String, heard: CharSequence?) {
         val utterance = when (val cleaned = ReplyText.clean(heard, singleLine = true, maxBytes = MAX_UTTERANCE_BYTES)) {
             is ReplyText.Result.Clean -> cleaned.text
             is ReplyText.Result.Problem -> {
                 val trouble = if (cleaned.problem == Unsendable.TOO_LONG) CarTrouble.TOO_LONG else CarTrouble.NOT_HEARD
-                return CarSpeech(context).trouble(request, name, null, trouble)
+                return CarSpeech(context).trouble(request, name, null, trouble, device)
             }
         }
-        val job = CarJob.create(request, utterance, name, System.currentTimeMillis())
+        val job = CarJob.create(request, utterance, name, System.currentTimeMillis(), device)
         try {
             CarOutbox.enqueue(context, job)
         } catch (e: Exception) {
             // WorkManager's database failed: say so rather than stay silent.
             Log.e(TAG, "could not queue a car reply", e)
-            CarSpeech(context).trouble(request, name, utterance, CarTrouble.FAILED)
+            CarSpeech(context).trouble(request, name, utterance, CarTrouble.FAILED, device)
         }
     }
 

@@ -26,13 +26,19 @@ import org.unifiedpush.android.connector.data.ResolvedDistributor
  * - with none installed, it says so once, in a dialog;
  * - after the pairing is forgotten, [PushSync] unregisters.
  *
+ * The picker and the dialog wait while another prompt is up ([promptsHeld]:
+ * the notification permission's); the next [refresh] shows them.
+ *
  * Removing Passporter inside the distributor lasts only until the app
  * next opens; Android's notification settings for the app are the way to
  * silence it.
  *
  * Attach it ([attachTo]) while the activity is being constructed or created.
  */
-class PushRegistration private constructor(private val activity: ComponentActivity) {
+class PushRegistration private constructor(
+    private val activity: ComponentActivity,
+    private val promptsHeld: () -> Boolean,
+) {
     /** Read once the activity is created: in its constructor it has no context yet. */
     private val app: Context by lazy { activity.applicationContext }
 
@@ -54,8 +60,12 @@ class PushRegistration private constructor(private val activity: ComponentActivi
         })
     }
 
-    /** Registers if the app is paired and the bridge has push on; unpaired, leaves. */
-    private fun refresh() {
+    /**
+     * Registers if the app is paired and the bridge has push on; unpaired,
+     * leaves. Runs on every resume and pairing; call it also when a prompt
+     * that held this one's back is answered.
+     */
+    fun refresh() {
         val app = app
         PushWork.run {
             when (val readiness = PushWork.sync(app).readiness()) {
@@ -109,18 +119,27 @@ class PushRegistration private constructor(private val activity: ComponentActivi
         preferences.edit().putBoolean(TOLD, true).apply()
     }
 
-    /** Runs [work] on the main thread if the activity is still there by then. */
+    /**
+     * Runs [work], a prompt, on the main thread if the activity is still
+     * there by then and no other prompt is up.
+     */
     private fun onActivity(work: () -> Unit) {
         activity.runOnUiThread {
-            if (!activity.isFinishing && !activity.isDestroyed) work()
+            when {
+                activity.isFinishing || activity.isDestroyed -> Unit
+                promptsHeld() -> Log.i(PUSH_TAG, "another prompt is up; push asks later")
+                else -> work()
+            }
         }
     }
 
     companion object {
-        /** Registers for push on [activity]'s behalf for as long as it lives. */
-        fun attachTo(activity: ComponentActivity) {
-            PushRegistration(activity)
-        }
+        /**
+         * Registers for push on [activity]'s behalf for as long as it lives;
+         * its prompts wait while [promptsHeld].
+         */
+        fun attachTo(activity: ComponentActivity, promptsHeld: () -> Boolean): PushRegistration =
+            PushRegistration(activity, promptsHeld)
 
         private const val PREFERENCES = "dev.passporter.push"
         private const val TOLD = "toldNoDistributor"

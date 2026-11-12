@@ -139,6 +139,16 @@ class Recorder internal constructor(
         watchers.forEach { it() }
     }
 
+    /**
+     * Ends the running take, if any, and deletes every take: they were
+     * recorded for the bridge the app was paired with, and the PWA of
+     * another must never adopt them.
+     */
+    fun discardAll() {
+        val ids = synchronized(lock) { listOfNotNull(running?.id) + takes.map { it.id } }
+        ids.forEach(::cancel)
+    }
+
     /** Deletes finished take [id] once the PWA has stored it. A running take or an unknown id is left alone. */
     fun release(id: RecordingId) = synchronized(lock) {
         if (takes.removeAll { it.id == id }) store.delete(id)
@@ -239,6 +249,17 @@ class Recorder internal constructor(
                 )
             }.also { instance = it }
         }
+
+        /**
+         * [discardAll] on the app's recorder, on [worker], waiting at most
+         * [DISCARD_WAIT_MS] for it. Blocking: never on the recorder's thread.
+         */
+        fun discardAll(context: Context) {
+            val app = context.applicationContext
+            worker.submit { get(app).discardAll() }.get(DISCARD_WAIT_MS, TimeUnit.MILLISECONDS)
+        }
+
+        private const val DISCARD_WAIT_MS = 5_000L
 
         /** Replaces the app's recorder, for tests. */
         internal fun install(recorder: Recorder?) {

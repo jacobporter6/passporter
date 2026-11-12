@@ -2,6 +2,7 @@ package dev.passporter.notify.actions
 
 import android.Manifest
 import android.app.Application
+import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import androidx.work.ListenableWorker
@@ -10,12 +11,15 @@ import androidx.work.WorkerParameters
 import androidx.work.testing.TestListenableWorkerBuilder
 import dev.passporter.device.DeviceAuthException
 import dev.passporter.device.HttpResponse
+import dev.passporter.notify.DEVICE
 import dev.passporter.notify.Notice
 import dev.passporter.notify.NoticeNotification
 import dev.passporter.notify.NoticeState
 import dev.passporter.notify.agent
 import dev.passporter.notify.notice
+import dev.passporter.app.R
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -71,7 +75,7 @@ class ReconcilerTest {
     }
 
     private fun show(notice: Notice) {
-        manager.notify(NoticeNotification.tag(notice.agentId), NoticeNotification.ID, NoticeNotification.build(context, notice, 1))
+        manager.notify(NoticeNotification.tag(notice.agentId), NoticeNotification.ID, NoticeNotification.build(context, notice, 1, DEVICE))
     }
 
     private val frozen = MemoryFrozen()
@@ -98,7 +102,7 @@ class ReconcilerTest {
         show(notice(agent = "w1:p3"))
         show(notice(agent = "w1:p4"))
         ActionFeedback(context).sending(
-            OutboxJob(KEY, ActionRequest(NoticeAction.DENY, agent("w1:p4"), notice().pendingId), null, "widget", 0),
+            OutboxJob(KEY, ActionRequest(NoticeAction.DENY, agent("w1:p4"), notice().pendingId), null, "widget", 0, DEVICE),
         )
         val list = """[
             {"id":"w1:p1","status":"blocked","seq":3,"statusSince":0},
@@ -125,7 +129,7 @@ class ReconcilerTest {
     }
 
     @Test
-    fun anAnswerWhoseJobIsGoneIsClearedAndItsFrozenBodyPruned() {
+    fun anAnswerWhoseJobIsGoneSaysItWasNotSentAndItsFrozenBodyIsPruned() {
         show(notice())
         ActionFeedback(context).sending(job(NoticeAction.ALLOW_ONCE))
         frozen.put(KEY, "{}")
@@ -137,9 +141,15 @@ class ReconcilerTest {
         run(bridge, queued = emptySet(), now = 0)
         assertEquals("a tap still being queued is left alone", setOf("w1:p1"), tags())
         run(bridge, queued = emptySet())
-        assertEquals(emptySet<String>(), tags())
+        // Lost before it was queued: the person must answer again, so it is not cleared as if sent.
+        val lost = requireNotNull(shadowOf(manager).getNotification("w1:p1", NoticeNotification.ID))
+        assertEquals(context.getString(R.string.notify_not_sent_failed), lost.extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString())
+        assertTrue("an outcome, left to the person", lost.extras.getBoolean(ActionFeedback.EXTRA_OUTCOME))
+        assertFalse(lost.extras.containsKey(ActionFeedback.EXTRA_JOB))
         assertEquals(emptySet<String>(), frozen.keys())
         assertTrue("no news on show: no request", bridge.requests.isEmpty())
+        run(bridge, queued = emptySet())
+        assertEquals("still shown", setOf("w1:p1"), tags())
     }
 
     @Test

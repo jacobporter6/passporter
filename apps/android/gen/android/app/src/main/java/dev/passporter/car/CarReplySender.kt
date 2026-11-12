@@ -3,6 +3,7 @@ package dev.passporter.car
 import android.content.Context
 import dev.passporter.device.DeviceAuth
 import dev.passporter.device.DeviceAuthException
+import dev.passporter.device.DeviceId
 import dev.passporter.device.HttpResponse
 import dev.passporter.device.Method
 import dev.passporter.device.Scope
@@ -35,6 +36,13 @@ enum class CarTrouble {
 
     /** The app is not (or no longer) paired. */
     NOT_PAIRED,
+
+    /**
+     * The app was unpaired or paired anew since the car heard the notice
+     * ([CarJob.device]): the reply belongs to the old pairing, and is never
+     * sent to the new one.
+     */
+    PAIRING_CHANGED,
 
     /** The bridge stayed unreachable for every retry. */
     UNREACHABLE,
@@ -79,15 +87,25 @@ sealed interface CarOutcome {
  * `POST /v1/actions` holds: 2xx and 409 are final for the key, as are the
  * refusals (400, 403, 404, 422); 429 and 5xx decided nothing (503 is the
  * bridge saying herdr or its audit log was unavailable) and are retried
- * with the same body.
+ * with the same body. Every attempt first checks that the app is still
+ * paired as the job's device ([paired]); else nothing is sent
+ * ([CarTrouble.PAIRING_CHANGED]).
  */
-class CarReplySender(private val bridge: Bridge) {
+class CarReplySender(
+    private val bridge: Bridge,
+    /** The device the app is paired as now (`dev.passporter.notify.actions.pairedDevice`). */
+    private val paired: () -> DeviceId?,
+) {
     /** One attempt at [job]. Never throws. */
     fun send(job: CarJob): CarOutcome =
-        try {
-            answer(bridge.send(Method.POST, job.path, job.body()))
-        } catch (e: DeviceAuthException) {
-            failure(e)
+        if (job.device != paired()) {
+            CarOutcome.Trouble(CarTrouble.PAIRING_CHANGED)
+        } else {
+            try {
+                answer(bridge.send(Method.POST, job.path, job.body()))
+            } catch (e: DeviceAuthException) {
+                failure(e)
+            }
         }
 
     private fun answer(response: HttpResponse): CarOutcome {

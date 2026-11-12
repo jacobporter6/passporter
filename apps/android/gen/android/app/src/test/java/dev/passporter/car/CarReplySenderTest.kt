@@ -1,9 +1,11 @@
 package dev.passporter.car
 
+import dev.passporter.notify.DEVICE
 import dev.passporter.device.DeviceAuthException
 import dev.passporter.device.HttpResponse
 import dev.passporter.device.Method
 import dev.passporter.device.Scope
+import dev.passporter.notify.OTHER_DEVICE
 import dev.passporter.notify.PendingId
 import dev.passporter.notify.actions.FakeBridge
 import dev.passporter.notify.actions.KEY
@@ -11,6 +13,7 @@ import dev.passporter.notify.actions.Sent
 import dev.passporter.notify.agent
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -23,7 +26,7 @@ fun carJob(
 ): CarJob {
     val subject = pending?.let { CarSubject.Dialog(requireNotNull(PendingId.parse(it))) } ?: CarSubject.Turn
     // Stamp 1: the notice CarFlowTest shows.
-    return CarJob(KEY, CarRequest(CarAction.REPLY, agent("w1:p1"), subject, 1), utterance, "widget", heardAt)
+    return CarJob(KEY, CarRequest(CarAction.REPLY, agent("w1:p1"), subject, 1), utterance, "widget", heardAt, DEVICE)
 }
 
 /** A bridge's `CarReply` body. */
@@ -34,7 +37,7 @@ fun carReply(speech: String, status: String = "sent"): String =
 class CarReplySenderTest {
     private fun send(job: CarJob = carJob(), answer: (Sent) -> HttpResponse): Pair<CarOutcome, FakeBridge> {
         val bridge = FakeBridge(answer)
-        return CarReplySender(bridge).send(job) to bridge
+        return CarReplySender(bridge) { DEVICE }.send(job) to bridge
     }
 
     @Test
@@ -60,7 +63,7 @@ class CarReplySenderTest {
     fun theCarBridgeAlwaysSignsInWithACarScope() {
         val scopes = mutableListOf<Scope>()
         val bridge = CarBridge { scope, _, _, _ -> scopes += scope; HttpResponse(200, carReply("Sent.")) }
-        CarReplySender(bridge).send(carJob())
+        CarReplySender(bridge) { DEVICE }.send(carJob())
         assertEquals(listOf(Scope.CAR), scopes)
     }
 
@@ -102,5 +105,15 @@ class CarReplySenderTest {
     fun signInFailuresAreRetriedOrFinalAsInTheShadesOutbox() {
         assertEquals(CarOutcome.Retry, send { throw DeviceAuthException.Unreachable(java.io.IOException("offline")) }.first)
         assertEquals(CarOutcome.Trouble(CarTrouble.NOT_PAIRED), send { throw DeviceAuthException.NotPaired() }.first)
+    }
+
+    /** Paired anew (or unpaired) since the car heard the notice: nothing reaches the bridge now paired. */
+    @Test
+    fun aReplyOfAnotherPairingIsNeverSent() {
+        for (paired in listOf(OTHER_DEVICE, null)) {
+            val bridge = FakeBridge { HttpResponse(200, carReply("Sent.")) }
+            assertEquals(CarOutcome.Trouble(CarTrouble.PAIRING_CHANGED), CarReplySender(bridge) { paired }.send(carJob()))
+            assertTrue("$paired: nothing asked", bridge.requests.isEmpty())
+        }
     }
 }

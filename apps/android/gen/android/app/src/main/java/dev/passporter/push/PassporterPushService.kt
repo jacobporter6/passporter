@@ -1,6 +1,7 @@
 package dev.passporter.push
 
 import android.util.Log
+import dev.passporter.device.DeviceId
 import dev.passporter.notify.NoticeNotifier
 import org.unifiedpush.android.connector.FailedReason
 import org.unifiedpush.android.connector.PushService
@@ -43,8 +44,11 @@ class PassporterPushService : PushService() {
     override fun onMessage(message: PushMessage, instance: String) {
         if (instance != PushWork.INSTANCE) return
         val store = PushWork.store(this)
+        // The keys that decrypted it were registered for the owner: the
+        // notices' actions answer as that device, and only while it is paired.
+        val owner = { store.load().owner?.let(DeviceId::parse) }
         val incoming = IncomingPush(
-            show = NoticeNotifier(this)::show,
+            show = NoticeNotifier(this, owner)::show,
             registered = { store.load().registration != null },
         ).handle(message)
         // Never the content: it is agent output.

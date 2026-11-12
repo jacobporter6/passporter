@@ -1,8 +1,10 @@
 package dev.passporter.notify.actions
 
+import dev.passporter.notify.DEVICE
 import dev.passporter.device.DeviceAuthException
 import dev.passporter.device.HttpResponse
 import dev.passporter.device.Method
+import dev.passporter.notify.OTHER_DEVICE
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -14,7 +16,7 @@ import java.io.IOException
 class OutboxSenderTest {
     private val frozen = MemoryFrozen()
 
-    private fun send(bridge: Bridge, job: OutboxJob) = OutboxSender(bridge, frozen).send(job)
+    private fun send(bridge: Bridge, job: OutboxJob) = OutboxSender(bridge, frozen) { DEVICE }.send(job)
 
     private fun body(kind: String, payload: String) =
         """{"idempotencyKey":"$KEY","agentId":"w1:p1","expectedSeq":7,"createdAt":2000,""" +
@@ -208,8 +210,21 @@ class OutboxSenderTest {
 
     @Test
     fun aStoppedAttemptKeepsItsFrozenBody() {
-        val outcome = OutboxSender(FakeBridge.of(), frozen).send(job(NoticeAction.ALLOW_ONCE)) { true }
+        val outcome = OutboxSender(FakeBridge.of(), frozen) { DEVICE }.send(job(NoticeAction.ALLOW_ONCE)) { true }
         assertEquals(SendOutcome.Sent, outcome)
         assertEquals("the rerun resends it", setOf(KEY), frozen.keys())
+    }
+
+    /** Paired anew (or unpaired) since the person answered: nothing reaches the bridge now paired. */
+    @Test
+    fun anAnswerOfAnotherPairingIsNeverSent() {
+        for (paired in listOf(OTHER_DEVICE, null)) {
+            val bridge = FakeBridge.of()
+            frozen.put(KEY, "{}")
+            val outcome = OutboxSender(bridge, frozen) { paired }.send(job(NoticeAction.REPLY, "hi"))
+            assertEquals(SendOutcome.Final(NotSent.PAIRING_CHANGED), outcome)
+            assertTrue("$paired: nothing asked", bridge.requests.isEmpty())
+            assertTrue("$paired: the frozen body goes", frozen.bodies.isEmpty())
+        }
     }
 }

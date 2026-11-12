@@ -21,14 +21,26 @@ import androidx.work.testing.SynchronousExecutor
 import androidx.work.testing.TestListenableWorkerBuilder
 import androidx.work.testing.WorkManagerTestInitHelper
 import dev.passporter.device.HttpResponse
+import dev.passporter.notify.DEVICE
 import dev.passporter.notify.Notice
 import dev.passporter.notify.NoticeNotification
 import dev.passporter.notify.NoticeState
+import dev.passporter.notify.OTHER_DEVICE
 import dev.passporter.notify.actions.Bridge
 import dev.passporter.notify.actions.FakeBridge
 import dev.passporter.notify.actions.NoticeActionReceiver
 import dev.passporter.notify.actions.NoticeActions
+import dev.passporter.app.R
+import dev.passporter.notify.PendingId
+import dev.passporter.notify.agent
+import dev.passporter.notify.actions.ActionFeedback
+import dev.passporter.notify.actions.ActionRequest
+import dev.passporter.notify.actions.NoticeAction
+import dev.passporter.notify.actions.NotSent
 import dev.passporter.notify.actions.Outbox
+import dev.passporter.notify.actions.OutboxJob
+import dev.passporter.notify.actions.Reconciler
+import dev.passporter.notify.actions.pairedDevice
 import dev.passporter.notify.notice
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -75,10 +87,11 @@ class CarFlowTest {
         CarReplyReceiver.executor = Executor { it.run() }
         carProjection = { CarProjection { projecting } }
         NoticeActionReceiver.executor = Executor { it.run() }
+        pairedDevice = { DEVICE }
     }
 
     private fun show(notice: Notice, now: Long = 1) {
-        manager.notify(NoticeNotification.tag(notice.agentId), NoticeNotification.ID, NoticeNotification.build(context, notice, now))
+        manager.notify(NoticeNotification.tag(notice.agentId), NoticeNotification.ID, NoticeNotification.build(context, notice, now, DEVICE))
     }
 
     private fun subText(notification: Notification) = notification.extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString()
@@ -388,5 +401,52 @@ class CarFlowTest {
         CarReplyReceiver().onReceive(context, forged)
         assertTrue(queued().isEmpty())
         assertEquals(before, shown())
+    }
+
+    @Test
+    fun aCarReplyMadeForAnotherPairingSendsNothing() {
+        show(notice())
+        pairedDevice = { OTHER_DEVICE }
+        fire(CarAction.REPLY, heard = "yes")
+        assertTrue(queued().isEmpty())
+        assertEquals(context.getString(R.string.car_trouble_not_paired), messages(requireNotNull(shown())).last().removePrefix("Passporter: "))
+    }
+
+    /** The shade's answer to the same dialog, tapped while the car's reply was queued. */
+    private fun shadeAnswer(): OutboxJob {
+        val allow = requireNotNull(NotificationCompat.getAction(requireNotNull(shown()), 0))
+        NoticeActionReceiver().onReceive(context, Intent(shadowOf(requireNotNull(allow.actionIntent)).savedIntent))
+        val key = requireNotNull(requireNotNull(shown()).extras.getString(ActionFeedback.EXTRA_JOB))
+        val request = ActionRequest(NoticeAction.ALLOW_ONCE, agent("w1:p1"), PendingId.parse("screen-2-ab"))
+        return OutboxJob(key, request, null, "widget", 0, DEVICE)
+    }
+
+    @Test
+    fun theShadesAnswerSettlingNeverWipesWhatTheDriverMustHear() {
+        show(notice())
+        fire(CarAction.REPLY, heard = "no")
+        val shade = shadeAnswer()
+        bridge = FakeBridge { HttpResponse(200, carReply("Denied.")) }
+        runQueued()
+        val spoken = requireNotNull(shown())
+        assertFalse("the car's turn no longer shows the shade's answer on its way", spoken.extras.containsKey(ActionFeedback.EXTRA_JOB))
+        ActionFeedback(context).sent(shade)
+        assertEquals(messages(spoken), messages(requireNotNull(shown())))
+        assertEquals("Passporter: Denied.", messages(requireNotNull(shown())).last())
+    }
+
+    @Test
+    fun anOutcomeKeepsTheCarActionsAndStaysOutOfTheNewsAfterTheCarSpeaks() {
+        show(notice())
+        fire(CarAction.REPLY, heard = "no")
+        val shade = shadeAnswer()
+        ActionFeedback(context).notSent(shade, NotSent.UNCERTAIN)
+        assertEquals("the car can still take it", 2, NotificationCompat.getInvisibleActions(requireNotNull(shown())).size)
+        bridge = FakeBridge { HttpResponse(200, carReply("Denied.")) }
+        runQueued()
+        val spoken = requireNotNull(shown())
+        assertEquals("Passporter: Denied.", messages(spoken).last())
+        assertTrue(spoken.extras.getBoolean(ActionFeedback.EXTRA_OUTCOME))
+        assertTrue("not news for the reconciler", Reconciler.shown(context).isEmpty())
     }
 }
