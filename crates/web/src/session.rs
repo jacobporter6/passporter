@@ -273,7 +273,8 @@ impl Attempt {
 }
 
 /// Signs in with the device key, retrying while the bridge is unreachable
-/// (and, ever more slowly, while the native identity fails), and schedules the next renewal. Starts a new renewal generation, which
+/// (and, ever more slowly, while the native identity fails), and
+/// schedules the next renewal. Starts a new renewal generation, which
 /// cancels any older scheduled one. The first attempt is awaited; retries
 /// continue in the background.
 async fn renew(app: AppState) {

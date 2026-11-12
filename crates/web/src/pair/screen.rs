@@ -162,8 +162,12 @@ async fn settle(promise: Option<Promise>) -> Result<(), String> {
 async fn pair(code: protocol::PairingCode) -> Result<(), String> {
     let host = host();
     if native::probe().await.present() {
+        // Nothing is paired unless the page is there to sign in with it.
+        let Some(host) = host else {
+            return settle(None).await;
+        };
         native::pair(&code).await.map_err(super::pairing_failure)?;
-        return settle(host.map(|host| host.adopt_native())).await;
+        return settle(Some(host.adopt_native())).await;
     }
     let new = device::generate().await.map_err(|e| e.to_string())?;
     let paired = pair_device(

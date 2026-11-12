@@ -194,8 +194,7 @@ pub enum DeviceAuthError {
     #[error("this device could not sign: {0}")]
     Signing(String),
     /// The Android app's native identity failed in a way that may pass: its
-    /// Keystore, its saved bridge address or the plugin itself. Worth
-    /// retrying, slowly.
+    /// Keystore, or the plugin itself. Worth retrying, slowly.
     #[error("the app's device identity is unavailable: {0}")]
     NativeUnavailable(String),
     /// Anything else: no response, an unexpected status or body.
