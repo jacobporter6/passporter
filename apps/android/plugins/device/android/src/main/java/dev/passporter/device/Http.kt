@@ -33,8 +33,12 @@ class HttpRequest(
     override fun toString() = "$method $url"
 }
 
-/** The bridge's answer: status, body (empty when there is none) and `Retry-After` in seconds. */
-class HttpResponse(val status: Int, val body: String, val retryAfterSecs: Long? = null) {
+/**
+ * The bridge's answer: status, body (empty when there is none),
+ * `Retry-After` in seconds, and its `Date` header as unix ms ([date]:
+ * the bridge's clock when it answered, to the second).
+ */
+class HttpResponse(val status: Int, val body: String, val retryAfterSecs: Long? = null, val date: Long? = null) {
     /** Whether the status is 2xx. */
     val isSuccess: Boolean get() = status in 200..299
 }
@@ -71,7 +75,8 @@ internal class UrlConnectionTransport : HttpTransport {
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
             val body = stream?.use(::readLimited) ?: ""
             val retryAfter = connection.getHeaderField("Retry-After")?.trim()?.toLongOrNull()
-            return HttpResponse(status, body, retryAfter)
+            val date = connection.getHeaderFieldDate("Date", NO_DATE).takeIf { it != NO_DATE }
+            return HttpResponse(status, body, retryAfter, date)
         } finally {
             connection.disconnect()
         }
@@ -97,5 +102,8 @@ internal class UrlConnectionTransport : HttpTransport {
         const val CONNECT_TIMEOUT_MS = 10_000
         const val READ_TIMEOUT_MS = 20_000
         const val MAX_BODY_BYTES = 1 shl 20
+
+        /** What `getHeaderFieldDate` returns for a missing or unreadable `Date`. */
+        const val NO_DATE = -1L
     }
 }

@@ -76,7 +76,12 @@ object NoticeNotification {
     fun tag(agent: AgentId): String = agent.value
 
     /** The conversation shortcut (and `LocusId`) of [agent]. */
-    fun shortcutId(agent: AgentId): String = "agent:${agent.value}"
+    fun shortcutId(agent: AgentId): String = SHORTCUT_PREFIX + agent.value
+
+    /** Whether [id] is an agent's conversation shortcut ([shortcutId]). */
+    fun isShortcutId(id: String): Boolean = id.startsWith(SHORTCUT_PREFIX)
+
+    private const val SHORTCUT_PREFIX = "agent:"
 
     /** Creates (or updates the names of) the channels; cheap to repeat. */
     fun createChannels(context: Context) {

@@ -29,6 +29,7 @@ import dev.passporter.notify.OTHER_DEVICE
 import dev.passporter.notify.agent
 import dev.passporter.notify.notice
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.After
@@ -397,5 +398,80 @@ class OutboxWorkerTest {
         assertEquals(ListenableWorker.Result.success(), worker(fake, job(NoticeAction.REPLY, "hi")).doWork())
         assertTrue(fake.requests.isEmpty())
         assertNull(shown())
+    }
+
+    /**
+     * A tap that passed its pairing check just before a pairing reset
+     * cleared the shade: nothing is shown or queued, so no old conversation
+     * comes back under a tag the new bridge's agent of the same id shares.
+     */
+    @Test
+    fun aTapRacingAPairingResetBringsNothingBack() {
+        show(notice())
+        val allow = actionIntent(0)
+        manager.cancelAll()
+        NoticeActionReceiver().onReceive(context, allow)
+        assertTrue(queued().isEmpty())
+        assertNull(shown())
+    }
+
+    /** An outcome of an old pairing never comes back, whatever its reason; its own conversation goes. */
+    @Test
+    fun noOutcomeOfAnOldPairingComesBack() {
+        val job = job(NoticeAction.ALLOW_ONCE)
+        pairedDevice = { PairedAs.Device(OTHER_DEVICE) }
+        ActionFeedback(context).notSent(job, NotSent.NOT_PAIRED)
+        assertNull("not brought back", shown())
+        pairedDevice = { PairedAs.Device(DEVICE) }
+        show(notice())
+        assertTrue(ActionFeedback(context).sending(job))
+        pairedDevice = { PairedAs.Device(OTHER_DEVICE) }
+        ActionFeedback(context).notSent(job, NotSent.UNREACHABLE)
+        assertNull("the reset missed it: it goes now", shown())
+    }
+
+    /** The new bridge's notice for an agent of the same id stays, whatever happens to an old answer. */
+    @Test
+    fun anOldPairingsOutcomeLeavesTheNewBridgesNoticeAlone() {
+        val job = job(NoticeAction.ALLOW_ONCE)
+        show(notice())
+        val news = requireNotNull(shown())
+        pairedDevice = { PairedAs.Device(OTHER_DEVICE) }
+        ActionFeedback(context).notSent(job, NotSent.PAIRING_CHANGED)
+        assertEquals(news, shown())
+    }
+
+    /** A revoked device is unpaired without a reset: its answer still says not paired. */
+    @Test
+    fun aRevokedDevicesAnswerSaysNotPaired() {
+        show(notice())
+        val job = job(NoticeAction.ALLOW_ONCE)
+        assertTrue(ActionFeedback(context).sending(job))
+        pairedDevice = { PairedAs.Nothing }
+        ActionFeedback(context).notSent(job, NotSent.NOT_PAIRED)
+        assertEquals("Not paired: open the app", subText(requireNotNull(shown())))
+    }
+
+    /** Paired anew between the tap's check and showing it: the new bridge's notice of the same id is left alone. */
+    @Test
+    fun aTapPairedAnewSinceItsCheckLeavesTheNewNoticeAlone() {
+        show(notice())
+        val news = requireNotNull(shown())
+        pairedDevice = { PairedAs.Device(OTHER_DEVICE) }
+        assertFalse(ActionFeedback(context).sending(job(NoticeAction.ALLOW_ONCE)))
+        assertEquals(news, shown())
+    }
+
+    /** Revoked (the app unpaired, no reset) with an answer queued: the sender's PAIRING_CHANGED still says not paired. */
+    @Test
+    fun aQueuedAnswerOfARevokedDeviceSaysNotPaired() {
+        show(notice())
+        val job = job(NoticeAction.ALLOW_ONCE)
+        assertTrue(ActionFeedback(context).sending(job))
+        pairedDevice = { PairedAs.Nothing }
+        val fake = FakeBridge.of()
+        assertEquals(ListenableWorker.Result.success(), worker(fake, job).doWork())
+        assertTrue(fake.requests.isEmpty())
+        assertEquals("Not paired: open the app", subText(requireNotNull(shown())))
     }
 }

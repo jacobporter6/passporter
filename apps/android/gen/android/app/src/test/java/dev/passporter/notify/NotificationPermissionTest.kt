@@ -1,11 +1,13 @@
 package dev.passporter.notify
 
 import android.Manifest
-import androidx.activity.ComponentActivity
 import android.content.pm.PackageManager
+import androidx.activity.ComponentActivity
+import dev.passporter.device.DeviceStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -13,6 +15,7 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import java.io.File
+import kotlin.concurrent.thread
 
 @RunWith(RobolectricTestRunner::class)
 class NotificationPermissionTest {
@@ -63,5 +66,57 @@ class NotificationPermissionTest {
         )
         assertFalse(permission.asking)
         assertEquals(1, answered)
+    }
+
+    /** On the pairing's own thread, as `DeviceAuth` tells its listeners. */
+    private fun pairingChanged(status: DeviceStatus) {
+        thread { permission.pairingListener.onPairingChanged(status) }.join()
+        shadowOf(activity.mainLooper).idle()
+    }
+
+    /** Pairing by typed code involves no resume: the pairing itself asks. */
+    @Test
+    fun itAsksOncePairedWithoutAResume() {
+        connect()
+        pairingChanged(DeviceStatus(DEVICE))
+        assertEquals(listOf(Manifest.permission.POST_NOTIFICATIONS), lastRequested())
+    }
+
+    @Test
+    fun forgettingThePairingAsksNothing() {
+        connect()
+        pairingChanged(DeviceStatus(null))
+        assertNull(lastRequested())
+    }
+
+    /** Asked on resume already: a pairing after it asks no second time. */
+    @Test
+    fun aPairingAfterTheResumeAskedAsksNoMore() {
+        connect()
+        permission.askIfDue()
+        val first = shadowOf(activity).lastRequestedPermission
+        pairingChanged(DeviceStatus(DEVICE))
+        assertSame(first, shadowOf(activity).lastRequestedPermission)
+    }
+
+    /** A pairing told after the activity went asks nothing of it. */
+    @Test
+    fun aPairingAfterTheActivityIsDestroyedAsksNothing() {
+        connect()
+        controller.pause().stop().destroy()
+        pairingChanged(DeviceStatus(DEVICE))
+        assertNull(lastRequested())
+    }
+
+    /** Paired while the person is in another app: no prompt over it; the next resume asks. */
+    @Test
+    fun aPairingWhileStoppedWaitsForTheResume() {
+        connect()
+        controller.pause().stop()
+        pairingChanged(DeviceStatus(DEVICE))
+        assertNull(lastRequested())
+        controller.start().resume()
+        permission.askIfDue()
+        assertEquals(listOf(Manifest.permission.POST_NOTIFICATIONS), lastRequested())
     }
 }
