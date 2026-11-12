@@ -461,4 +461,17 @@ class OutboxWorkerTest {
         assertFalse(ActionFeedback(context).sending(job(NoticeAction.ALLOW_ONCE)))
         assertEquals(news, shown())
     }
+
+    /** Revoked (the app unpaired, no reset) with an answer queued: the sender's PAIRING_CHANGED still says not paired. */
+    @Test
+    fun aQueuedAnswerOfARevokedDeviceSaysNotPaired() {
+        show(notice())
+        val job = job(NoticeAction.ALLOW_ONCE)
+        assertTrue(ActionFeedback(context).sending(job))
+        pairedDevice = { PairedAs.Nothing }
+        val fake = FakeBridge.of()
+        assertEquals(ListenableWorker.Result.success(), worker(fake, job).doWork())
+        assertTrue(fake.requests.isEmpty())
+        assertEquals("Not paired: open the app", subText(requireNotNull(shown())))
+    }
 }

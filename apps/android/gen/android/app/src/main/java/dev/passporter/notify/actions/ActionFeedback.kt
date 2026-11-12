@@ -36,8 +36,9 @@ import dev.passporter.notify.NotificationLock
  * ([dev.passporter.car.CarSpeech]), the key moves to [EXTRA_SPOKEN_OVER]:
  * the job's [sent] then leaves what the driver must hear (only the mark
  * goes), and its [notSent] repeats the shade's answer after it with its
- * reason, so the person learns that answer did not go. If news replaced the notification meanwhile (a
- * new dialog, a new turn), the news stays as it is: whatever happened to the older answer, the news is what
+ * reason, so the person learns that answer did not go. If news replaced
+ * the notification meanwhile (a new dialog, a new turn), the news stays
+ * as it is: whatever happened to the older answer, the news is what
  * matters now. A job's notification left over (its job lost) is cleared by
  * [Reconciler]. Every look-then-change holds [NotificationLock], as
  * [dev.passporter.notify.NoticeNotifier] does, so news posted meanwhile is
@@ -77,7 +78,8 @@ class ActionFeedback(
 
     /**
      * [job] reached the agent: its notification goes, unless the car spoke
-     * in it since; then the car's words stay, no longer marked as the job's.
+     * in it since; then the car's words stay, no longer marked as the job's
+     * (news again, so the reconciler clears them once the agent moves on).
      */
     fun sent(job: OutboxJob) = synchronized(NotificationLock) {
         val base = active(job.request.agent) ?: return@synchronized
@@ -96,7 +98,9 @@ class ActionFeedback(
      */
     fun notSent(job: OutboxJob, reason: NotSent) = synchronized(NotificationLock) {
         val base = active(job.request.agent)
-        if (reason == NotSent.PAIRING_CHANGED || pairedAsAnother(job)) {
+        // Not PAIRING_CHANGED alone: the sender says that for an unpaired app
+        // too (a revocation), which must still say not paired.
+        if (pairedAsAnother(job)) {
             if (base != null && jobOf(base) == job.key) {
                 manager.cancel(NoticeNotification.tag(job.request.agent), NoticeNotification.ID)
             }
@@ -130,7 +134,10 @@ class ActionFeedback(
             ?: base.extras.getString(NoticeNotification.EXTRA_AGENT_NAME).orEmpty()
         // The base shows, so its own state and question stand; these are never used.
         val conversation = Conversation(agent, name, base, NoticeState.FINISHED, NoticeNotification.TURN)
-        repost(conversation, null, message(NotSent.FAILED), Mark.Outcome)
+        // After the car's words, the reason must read as the shade's answer's.
+        val answer = context.getString(R.string.notify_your_shade_answer)
+            .takeIf { base.extras.getString(EXTRA_SPOKEN_OVER) == key }
+        repost(conversation, answer, message(NotSent.FAILED), Mark.Outcome)
     }
 
     /**

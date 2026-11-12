@@ -78,10 +78,14 @@ class NoticeNotifier(
             val now = System.currentTimeMillis()
             val device = device()
             for ((posted, notice) in notices.withIndex()) {
-                ShortcutManagerCompat.pushDynamicShortcut(
-                    context,
-                    NoticeNotification.shortcut(context, notice),
-                )
+                try {
+                    ShortcutManagerCompat.pushDynamicShortcut(context, NoticeNotification.shortcut(context, notice))
+                } catch (e: IllegalArgumentException) {
+                    // Refused (a pinned one Android will not re-enable, say): the notice still shows.
+                    Log.w(TAG, "could not push an agent's shortcut", e)
+                } catch (e: IllegalStateException) {
+                    Log.w(TAG, "could not push an agent's shortcut", e)
+                }
                 val notification = NoticeNotification.build(context, notice, now, device)
                 try {
                     manager.notify(NoticeNotification.tag(notice.agentId), NoticeNotification.ID, notification)

@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import dev.passporter.device.DeviceAuth
 import dev.passporter.device.PairingListener
@@ -48,9 +49,16 @@ class NotificationPermission(
             onAnswered()
         }
 
-    /** Asks once the app has paired (not when it forgets), on the main thread. */
+    /**
+     * Asks once the app has paired (not when it forgets), on the main
+     * thread, if the activity is in front; otherwise its next resume asks.
+     */
     internal val pairingListener = PairingListener { status ->
-        if (status.paired) activity.runOnUiThread(::askIfDue)
+        if (status.paired) {
+            activity.runOnUiThread {
+                if (activity.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) askIfDue()
+            }
+        }
     }
 
     init {

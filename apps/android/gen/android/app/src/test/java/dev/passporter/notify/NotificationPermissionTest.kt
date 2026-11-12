@@ -107,4 +107,16 @@ class NotificationPermissionTest {
         pairingChanged(DeviceStatus(DEVICE))
         assertNull(lastRequested())
     }
+
+    /** Paired while the person is in another app: no prompt over it; the next resume asks. */
+    @Test
+    fun aPairingWhileStoppedWaitsForTheResume() {
+        connect()
+        controller.pause().stop()
+        pairingChanged(DeviceStatus(DEVICE))
+        assertNull(lastRequested())
+        controller.start().resume()
+        permission.askIfDue()
+        assertEquals(listOf(Manifest.permission.POST_NOTIFICATIONS), lastRequested())
+    }
 }

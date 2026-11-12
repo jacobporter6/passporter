@@ -477,7 +477,9 @@ class CarFlowTest {
         assertTrue("not news", Reconciler.shown(context).isEmpty())
         ActionFeedback(context).lost(agent("w1:p1"), shade.key)
         val after = requireNotNull(shown())
-        assertEquals("Passporter: Denied.", messages(after).last())
+        val said = messages(after)
+        assertEquals("Passporter: Denied.", said[said.size - 2])
+        assertEquals("the reason reads as the shade's answer's", "you: ${context.getString(R.string.notify_your_shade_answer)}", said.last())
         assertEquals(context.getString(R.string.notify_not_sent_failed), subText(after))
     }
 
