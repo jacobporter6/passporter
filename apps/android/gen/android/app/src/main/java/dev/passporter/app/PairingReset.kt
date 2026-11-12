@@ -27,7 +27,8 @@ import dev.passporter.recorder.Recorder
  * - the agents' conversation shortcuts, dynamic and long-lived (the share
  *   sheet and the launcher keep the old agents' names, which are agent
  *   output, and a tap on one would open the new bridge's agent of the same
- *   id); the launcher's static *Bridge* shortcut stays;
+ *   id); one pinned to the home screen cannot be removed, so it is
+ *   disabled; the launcher's static *Bridge* shortcut stays;
  * - the dictation takes nobody has released ([Recorder.discardAll]),
  *   which the new bridge's PWA would adopt.
  *
@@ -63,18 +64,23 @@ object PairingReset {
 
     /**
      * Removes every agent's conversation shortcut ([NoticeNotification.isShortcutId]),
-     * cached long-lived ones included, under [NotificationLock] (which
-     * [dev.passporter.notify.NoticeNotifier] holds while it pushes them).
+     * cached long-lived ones included, and disables pinned ones, under
+     * [NotificationLock] (which [dev.passporter.notify.NoticeNotifier]
+     * holds while it pushes them; pushing one anew enables it again).
      */
     private fun removeShortcuts(context: Context) = synchronized(NotificationLock) {
-        val flags = ShortcutManagerCompat.FLAG_MATCH_DYNAMIC or ShortcutManagerCompat.FLAG_MATCH_CACHED
+        val flags = ShortcutManagerCompat.FLAG_MATCH_DYNAMIC or
+            ShortcutManagerCompat.FLAG_MATCH_CACHED or
+            ShortcutManagerCompat.FLAG_MATCH_PINNED
         val ids = ShortcutManagerCompat.getShortcuts(context, flags)
             .map { it.id }
             .filter(NoticeNotification::isShortcutId)
+            .distinct()
         if (ids.isEmpty()) return@synchronized
         ShortcutManagerCompat.removeDynamicShortcuts(context, ids)
         // The system's cached copies, kept for the conversations' notifications.
         ShortcutManagerCompat.removeLongLivedShortcuts(context, ids)
+        ShortcutManagerCompat.disableShortcuts(context, ids, context.getString(R.string.shortcut_agent_disabled))
     }
 
     private inline fun step(what: String, work: () -> Unit) {

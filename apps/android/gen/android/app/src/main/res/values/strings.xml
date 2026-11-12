@@ -8,6 +8,8 @@
     <!-- Launcher shortcut (res/xml/shortcuts.xml). -->
     <string name="shortcut_bridge_short">Bridge</string>
     <string name="shortcut_bridge_long">Bridge address</string>
+    <!-- A pinned agent shortcut of an earlier pairing (PairingReset). -->
+    <string name="shortcut_agent_disabled">This agent belongs to an earlier pairing</string>
 
     <!-- Agent notifications (dev.passporter.notify). -->
     <string name="notify_channel_needs_you">Needs you</string>

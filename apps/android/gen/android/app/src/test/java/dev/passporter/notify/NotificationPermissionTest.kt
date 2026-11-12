@@ -2,6 +2,7 @@ package dev.passporter.notify
 
 import android.Manifest
 import androidx.activity.ComponentActivity
+import dev.passporter.device.DeviceStatus
 import android.content.pm.PackageManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -12,7 +13,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
-import dev.passporter.device.DeviceStatus
 import org.robolectric.Shadows.shadowOf
 import java.io.File
 import kotlin.concurrent.thread

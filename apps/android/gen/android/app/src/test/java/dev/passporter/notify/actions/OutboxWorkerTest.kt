@@ -29,6 +29,7 @@ import dev.passporter.notify.OTHER_DEVICE
 import dev.passporter.notify.agent
 import dev.passporter.notify.notice
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.After
@@ -437,6 +438,27 @@ class OutboxWorkerTest {
         val news = requireNotNull(shown())
         pairedDevice = { PairedAs.Device(OTHER_DEVICE) }
         ActionFeedback(context).notSent(job, NotSent.PAIRING_CHANGED)
+        assertEquals(news, shown())
+    }
+
+    /** A revoked device is unpaired without a reset: its answer still says not paired. */
+    @Test
+    fun aRevokedDevicesAnswerSaysNotPaired() {
+        show(notice())
+        val job = job(NoticeAction.ALLOW_ONCE)
+        assertTrue(ActionFeedback(context).sending(job))
+        pairedDevice = { PairedAs.Nothing }
+        ActionFeedback(context).notSent(job, NotSent.NOT_PAIRED)
+        assertEquals("Not paired: open the app", subText(requireNotNull(shown())))
+    }
+
+    /** Paired anew between the tap's check and showing it: the new bridge's notice of the same id is left alone. */
+    @Test
+    fun aTapPairedAnewSinceItsCheckLeavesTheNewNoticeAlone() {
+        show(notice())
+        val news = requireNotNull(shown())
+        pairedDevice = { PairedAs.Device(OTHER_DEVICE) }
+        assertFalse(ActionFeedback(context).sending(job(NoticeAction.ALLOW_ONCE)))
         assertEquals(news, shown())
     }
 }

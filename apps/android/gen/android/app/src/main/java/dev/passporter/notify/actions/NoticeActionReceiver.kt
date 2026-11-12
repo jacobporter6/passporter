@@ -71,7 +71,7 @@ class NoticeActionReceiver : BroadcastReceiver() {
         // the job is queued, this check finds it lost and says so.
         Reconciler.checkLeftoversLater(context)
         if (!feedback.sending(job)) {
-            Log.i(TAG, "ignored a tap on a notice that newer news replaced")
+            Log.i(TAG, "ignored a tap on a notice that is gone or that newer news replaced")
             return
         }
         try {

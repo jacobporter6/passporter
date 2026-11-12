@@ -358,7 +358,7 @@ look at the pane). "Since before you replied" compares on the bridge's
 clock: the reply's time is shifted by how far the bridge's `Date` header
 on that same `GET /v1/agents` is from the phone's clock, and the agent
 must have changed state more than 2 s after it (the header has whole
-seconds) to count as moved on. The body is then frozen, and a retry
+seconds, and the answer takes a while to arrive) to count as moved on. The body is then frozen, and a retry
 resends it unchanged, so the bridge replays a lost answer instead of
 deciding it again. The bridge's own rules still apply on top
 (`origin: "notification"`: no prompt into a dialog, no `!`/`/`/`#` prompt).
@@ -699,7 +699,8 @@ process start), `PairingReset` cancels the queued answers of the shade
 and the car, forgets their frozen bodies, removes the agents'
 notifications (the recorder's own stays) and their conversation
 shortcuts (dynamic and the system's cached long-lived copies, so the
-launcher and the share sheet show no old agent) and deletes the dictation takes
+launcher and the share sheet show no old agent; one pinned to the home
+screen cannot be removed, so it is disabled) and deletes the dictation takes
 nobody released, which the new bridge's PWA would otherwise adopt (so a
 new pairing, even with the same bridge, drops unsent dictation). As a
 second line, every action intent is stamped with the device the notice

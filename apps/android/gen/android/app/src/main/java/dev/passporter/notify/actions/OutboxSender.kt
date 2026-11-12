@@ -217,10 +217,12 @@ class OutboxSender(
         /**
          * How much later than the reply (on the bridge's clock) the agent's
          * status must have changed for the reply to count as stale: `Date`
-         * has whole seconds and the answer took a while to arrive, so the
-         * reply's time on the bridge's clock may be up to about a second
-         * early. A turn both started and finished within this of the reply
-         * lets the reply through.
+         * has whole seconds, and the answer took a while to arrive, so the
+         * reply's time on the bridge's clock may be early by up to a second
+         * plus the answer's transfer time. A transfer slower than a second
+         * can call a fresh reply stale (refused, never sent wrongly); a turn
+         * both started and finished within this of the reply lets the reply
+         * through.
          */
         const val CLOCK_TOLERANCE_MS = 2_000L
         const val ACTIONS = "/v1/actions"

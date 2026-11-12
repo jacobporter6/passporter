@@ -45,7 +45,7 @@ import dev.passporter.notify.NotificationLock
  *
  * A tap with no notification behind it any more (cleared by a pairing
  * reset, say, between the tap's pairing check and [sending]) shows and
- * queues nothing; nor does an outcome come back for a job of another
+ * queues nothing; nor does a tap or an outcome for a job of another
  * pairing than the app's now ([paired], read under the lock): the
  * conversation belonged to the old bridge, and its tag may be the new
  * bridge's agent of the same id.
@@ -62,13 +62,15 @@ class ActionFeedback(
 
     /**
      * [job] is about to be queued: shown as sending, unless its notice is
-     * gone (cleared by a pairing reset, say) or was replaced by news
-     * meanwhile (another dialog, a new turn). Then nothing changes, and the
+     * gone (cleared by a pairing reset, say), was replaced by news
+     * meanwhile (another dialog, a new turn), or the app is paired as
+     * another device by now. Then nothing changes, and the
      * job must not be queued: `false`.
      */
     fun sending(job: OutboxJob): Boolean = synchronized(NotificationLock) {
         val base = active(job.request.agent)
-        if (base == null || !asks(base, job.request)) return false
+        // Paired anew since the tap's check: a notice showing now is the new bridge's.
+        if (base == null || !asks(base, job.request) || pairedAsAnother(job)) return false
         repost(Conversation.of(job.request, job.name, base), answer(job.request.action, job.text), R.string.notify_sending, Mark.Job(job.key))
         true
     }
@@ -88,13 +90,14 @@ class ActionFeedback(
 
     /**
      * [job] was not sent, for [reason]. For another pairing than the app's
-     * now, nothing comes back, and the job's own conversation, if it still
-     * shows, goes (the pairing reset missed it).
+     * now (paired anew, not merely unpaired: a revoked device says *Not
+     * paired*), nothing comes back, and the job's own conversation, if it
+     * still shows, goes (the pairing reset missed it).
      */
     fun notSent(job: OutboxJob, reason: NotSent) = synchronized(NotificationLock) {
         val base = active(job.request.agent)
-        if (reason == NotSent.PAIRING_CHANGED || paired().isNot(job.device)) {
-            if (base?.extras?.getString(EXTRA_JOB) == job.key) {
+        if (reason == NotSent.PAIRING_CHANGED || pairedAsAnother(job)) {
+            if (base != null && jobOf(base) == job.key) {
                 manager.cancel(NoticeNotification.tag(job.request.agent), NoticeNotification.ID)
             }
             return@synchronized
@@ -189,6 +192,16 @@ class ActionFeedback(
     /** Whether [notification] (news or an answer's progress) asks [request]'s question. */
     private fun asks(notification: Notification, request: ActionRequest): Boolean =
         notification.extras.getString(NoticeNotification.EXTRA_QUESTION) == request.question
+
+    /**
+     * Whether the app is paired as another device than [job]'s now. Not
+     * paired at all does not count: a revocation unpairs the app without
+     * a reset, and the person must be told.
+     */
+    private fun pairedAsAnother(job: OutboxJob): Boolean {
+        val now = paired()
+        return now is PairedAs.Device && now.isNot(job.device)
+    }
 
     /**
      * The key of the job still on its way that [notification] shows,
