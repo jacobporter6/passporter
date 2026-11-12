@@ -438,9 +438,45 @@ class CarFlowTest {
         runQueued()
         val spoken = requireNotNull(shown())
         assertFalse("the car's turn no longer shows the shade's answer on its way", spoken.extras.containsKey(ActionFeedback.EXTRA_JOB))
+        assertEquals(shade.key, spoken.extras.getString(ActionFeedback.EXTRA_SPOKEN_OVER))
         ActionFeedback(context).sent(shade)
-        assertEquals(messages(spoken), messages(requireNotNull(shown())))
-        assertEquals("Passporter: Denied.", messages(requireNotNull(shown())).last())
+        val after = requireNotNull(shown())
+        assertEquals(messages(spoken), messages(after))
+        assertEquals("Passporter: Denied.", messages(after).last())
+        assertFalse("settled: never found lost later", after.extras.containsKey(ActionFeedback.EXTRA_SPOKEN_OVER))
+        assertTrue(Reconciler.answers(context, Long.MAX_VALUE).isEmpty())
+    }
+
+    /** The shade's answer fails after the car spoke: the reason comes under the car's words, never silently lost. */
+    @Test
+    fun theShadesAnswerFailingAfterTheCarSpokeSaysSoUnderTheCarsWords() {
+        show(notice())
+        fire(CarAction.REPLY, heard = "no")
+        val shade = shadeAnswer()
+        bridge = FakeBridge { HttpResponse(200, carReply("Denied.")) }
+        runQueued()
+        ActionFeedback(context).notSent(shade, NotSent.UNREACHABLE)
+        val after = requireNotNull(shown())
+        assertEquals("Passporter: Denied.", messages(after).last())
+        assertEquals(context.getString(R.string.notify_not_sent_unreachable), subText(after))
+        assertTrue(after.extras.getBoolean(ActionFeedback.EXTRA_OUTCOME))
+        assertEquals("the car can still take it", 2, NotificationCompat.getInvisibleActions(after).size)
+    }
+
+    /** The shade's answer lost before it was queued, after the car spoke: the reconciler still finds it. */
+    @Test
+    fun theShadesAnswerLostAfterTheCarSpokeIsStillFound() {
+        show(notice())
+        fire(CarAction.REPLY, heard = "no")
+        val shade = shadeAnswer()
+        bridge = FakeBridge { HttpResponse(200, carReply("Denied.")) }
+        runQueued()
+        assertEquals(mapOf(agent("w1:p1") to shade.key), Reconciler.answers(context, Long.MAX_VALUE))
+        assertTrue("not news", Reconciler.shown(context).isEmpty())
+        ActionFeedback(context).lost(agent("w1:p1"), shade.key)
+        val after = requireNotNull(shown())
+        assertEquals("Passporter: Denied.", messages(after).last())
+        assertEquals(context.getString(R.string.notify_not_sent_failed), subText(after))
     }
 
     @Test

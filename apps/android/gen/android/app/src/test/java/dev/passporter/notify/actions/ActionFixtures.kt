@@ -50,17 +50,19 @@ class FakeBridge(private val answer: (Sent) -> HttpResponse) : Bridge {
 
     companion object {
         /**
-         * A bridge where `w1:p1` is [status] at [dialog], and actions get
-         * [action].
+         * A bridge where `w1:p1` is [status] at [dialog] since [since], and
+         * actions get [action]; its agent list is dated [date] (its `Date`
+         * header, bridge clock), if given.
          */
         fun of(
             status: String = "blocked",
             dialog: String = PERMISSION,
             since: Long = 1000,
             action: HttpResponse = HttpResponse(200, """{"status":"sent"}"""),
+            date: Long? = null,
         ) = FakeBridge { sent ->
             when (sent.path) {
-                "/v1/agents" -> HttpResponse(200, agents(status, since))
+                "/v1/agents" -> HttpResponse(200, agents(status, since), date = date)
                 "/v1/agents/w1:p1/pending" -> HttpResponse(200, dialog)
                 "/v1/actions" -> action
                 else -> HttpResponse(404, "")

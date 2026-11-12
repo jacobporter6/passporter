@@ -31,49 +31,82 @@ import dev.passporter.notify.NotificationLock
  *
  * While its job runs, the notification carries the job's key
  * ([EXTRA_JOB]); a final outcome is marked [EXTRA_OUTCOME] instead, and
- * stays until the person dismisses or taps it, or news replaces it. If news
- * replaced the notification meanwhile (a new dialog, a new turn), the news
- * stays as it is: whatever happened to the older answer, the news is what
+ * stays until the person dismisses or taps it, or news replaces it. Once
+ * the car has spoken in the conversation meanwhile
+ * ([dev.passporter.car.CarSpeech]), the key moves to [EXTRA_SPOKEN_OVER]:
+ * the job's [sent] then leaves what the driver must hear (only the mark
+ * goes), and its [notSent] adds its reason under it, so the person still
+ * learns to answer again. If news replaced the notification meanwhile (a
+ * new dialog, a new turn), the news stays as it is: whatever happened to the older answer, the news is what
  * matters now. A job's notification left over (its job lost) is cleared by
  * [Reconciler]. Every look-then-change holds [NotificationLock], as
  * [dev.passporter.notify.NoticeNotifier] does, so news posted meanwhile is
  * never overwritten.
+ *
+ * A tap with no notification behind it any more (cleared by a pairing
+ * reset, say, between the tap's pairing check and [sending]) shows and
+ * queues nothing; nor does an outcome come back for a job of another
+ * pairing than the app's now ([paired], read under the lock): the
+ * conversation belonged to the old bridge, and its tag may be the new
+ * bridge's agent of the same id.
  */
 class ActionFeedback(
     context: Context,
     private val now: () -> Long = System::currentTimeMillis,
+    /** What the app is paired as now ([pairedDevice]); blocking. */
+    private val paired: () -> PairedAs = { pairedDevice(context) },
 ) {
     private val context = context.applicationContext
     private val manager = NotificationManagerCompat.from(this.context)
     private val system = this.context.getSystemService(NotificationManager::class.java)
 
     /**
-     * [job] is about to be queued: shown as sending, unless its notice was
-     * replaced by news meanwhile (another dialog, a new turn). Then nothing
-     * changes, and the job must not be queued: `false`.
+     * [job] is about to be queued: shown as sending, unless its notice is
+     * gone (cleared by a pairing reset, say) or was replaced by news
+     * meanwhile (another dialog, a new turn). Then nothing changes, and the
+     * job must not be queued: `false`.
      */
     fun sending(job: OutboxJob): Boolean = synchronized(NotificationLock) {
         val base = active(job.request.agent)
-        if (base != null && !asks(base, job.request)) return false
+        if (base == null || !asks(base, job.request)) return false
         repost(Conversation.of(job.request, job.name, base), answer(job.request.action, job.text), R.string.notify_sending, Mark.Job(job.key))
         true
     }
 
-    /** [job] reached the agent. */
+    /**
+     * [job] reached the agent: its notification goes, unless the car spoke
+     * in it since; then the car's words stay, no longer marked as the job's.
+     */
     fun sent(job: OutboxJob) = synchronized(NotificationLock) {
-        if (isOwnedBy(job)) manager.cancel(NoticeNotification.tag(job.request.agent), NoticeNotification.ID)
+        val base = active(job.request.agent) ?: return@synchronized
+        when (job.key) {
+            base.extras.getString(EXTRA_JOB) -> manager.cancel(NoticeNotification.tag(job.request.agent), NoticeNotification.ID)
+            base.extras.getString(EXTRA_SPOKEN_OVER) -> repost(Conversation.of(job.request, job.name, base), null, null, null)
+            else -> Unit
+        }
     }
 
-    /** [job] was not sent, for [reason]. */
+    /**
+     * [job] was not sent, for [reason]. For another pairing than the app's
+     * now, nothing comes back, and the job's own conversation, if it still
+     * shows, goes (the pairing reset missed it).
+     */
     fun notSent(job: OutboxJob, reason: NotSent) = synchronized(NotificationLock) {
         val base = active(job.request.agent)
+        if (reason == NotSent.PAIRING_CHANGED || paired().isNot(job.device)) {
+            if (base?.extras?.getString(EXTRA_JOB) == job.key) {
+                manager.cancel(NoticeNotification.tag(job.request.agent), NoticeNotification.ID)
+            }
+            return@synchronized
+        }
         when {
             // Gone while sending (swiped, or tapped into the app): only an
             // outcome that needs the person comes back.
             base == null -> if (reason in WORTH_RETURNING) {
                 repost(Conversation.of(job.request, job.name, null), answer(job.request.action, job.text), message(reason), Mark.Outcome)
             }
-            base.extras.getString(EXTRA_JOB) == job.key ->
+            // The car spoke since: its words stay, the reason goes under them.
+            base.extras.getString(EXTRA_JOB) == job.key || base.extras.getString(EXTRA_SPOKEN_OVER) == job.key ->
                 repost(Conversation.of(job.request, job.name, base), null, message(reason), Mark.Outcome)
             else -> Log.i(TAG, "not sent ($reason); newer news replaced its notification")
         }
@@ -86,7 +119,7 @@ class ActionFeedback(
      * the person must answer again; anything else on show stays.
      */
     fun lost(agent: AgentId, key: String) = synchronized(NotificationLock) {
-        val base = active(agent)?.takeIf { it.extras.getString(EXTRA_JOB) == key } ?: return
+        val base = active(agent)?.takeIf { jobOf(it) == key } ?: return
         val name = base.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()
             ?: base.extras.getString(NoticeNotification.EXTRA_AGENT_NAME).orEmpty()
         // The base shows, so its own state and question stand; these are never used.
@@ -102,6 +135,7 @@ class ActionFeedback(
     fun refused(request: ActionRequest, name: String, reason: Unsendable) = synchronized(NotificationLock) {
         val base = active(request.agent) ?: return
         val mark = base.extras.getString(EXTRA_JOB)?.let(Mark::Job)
+            ?: base.extras.getString(EXTRA_SPOKEN_OVER)?.let(Mark::SpokenOver)
             ?: Mark.Outcome.takeIf { base.extras.getBoolean(EXTRA_OUTCOME) }
         // Newer news is reposted as it is, which only stops the spinner.
         val status = if (!asks(base, request)) {
@@ -122,6 +156,9 @@ class ActionFeedback(
     private sealed interface Mark {
         /** It shows the progress of the job keyed [key]. */
         data class Job(val key: String) : Mark
+
+        /** The car spoke over the progress of the job keyed [key] ([EXTRA_SPOKEN_OVER]). */
+        data class SpokenOver(val key: String) : Mark
 
         /** It shows a job's final outcome. */
         data object Outcome : Mark
@@ -153,7 +190,12 @@ class ActionFeedback(
     private fun asks(notification: Notification, request: ActionRequest): Boolean =
         notification.extras.getString(NoticeNotification.EXTRA_QUESTION) == request.question
 
-    private fun isOwnedBy(job: OutboxJob): Boolean = active(job.request.agent)?.extras?.getString(EXTRA_JOB) == job.key
+    /**
+     * The key of the job still on its way that [notification] shows,
+     * spoken over by the car or not.
+     */
+    private fun jobOf(notification: Notification): String? =
+        notification.extras.getString(EXTRA_JOB) ?: notification.extras.getString(EXTRA_SPOKEN_OVER)
 
     private fun active(agent: AgentId): Notification? {
         val tag = NoticeNotification.tag(agent)
@@ -202,6 +244,7 @@ class ActionFeedback(
         )
         when (mark) {
             is Mark.Job -> builder.addExtras(Bundle().apply { putString(EXTRA_JOB, mark.key) })
+            is Mark.SpokenOver -> builder.addExtras(Bundle().apply { putString(EXTRA_SPOKEN_OVER, mark.key) })
             Mark.Outcome -> builder.addExtras(Bundle().apply { putBoolean(EXTRA_OUTCOME, true) })
             null -> Unit
         }
@@ -233,6 +276,13 @@ class ActionFeedback(
     companion object {
         /** The extra that names the job whose progress a notification shows. */
         const val EXTRA_JOB = "dev.passporter.notify.JOB"
+
+        /**
+         * The extra that names the job whose progress a notification showed
+         * before the car spoke in it ([dev.passporter.car.CarSpeech]): its
+         * outcome may add a reason, never clear or replace the car's words.
+         */
+        const val EXTRA_SPOKEN_OVER = "dev.passporter.notify.SPOKEN_OVER"
 
         /** The extra that marks a notification showing an answer's final outcome. */
         const val EXTRA_OUTCOME = "dev.passporter.notify.OUTCOME"

@@ -263,7 +263,7 @@ turns a decrypted message into notifications:
 | `NotificationPlanner.kt` | Pure: which notices of a message to post (one per agent, unknown states skipped) |
 | `NoticeNotification.kt` | One `MessagingStyle` conversation per agent, with its shortcut and `LocusId`; channels *Needs you* (high, blocked agents) and *Finished* (default) |
 | `NoticeNotifier.kt`, `RecentPings.kt` | The entry point, `NoticeNotifier(context).show(payload)`, and the pings of recent messages |
-| `NotificationPermission.kt` | Asks for `POST_NOTIFICATIONS` (Android 13+) when you return to the app after connecting to a bridge |
+| `NotificationPermission.kt` | Asks for `POST_NOTIFICATIONS` (Android 13+) when you return to the app after connecting to a bridge, or as soon as the app pairs (pairing by typed code involves no return to the app) |
 
 **Only news disrupts.** The bridge sends a notice only for a new event,
 so every notice of a new message alerts, replacing the agent's last
@@ -277,9 +277,10 @@ percent-encoded path segment: read it with `NoticeNotification.agentToOpen`).
 
 A tap opens that agent's screen ([Links, taps and the Bridge
 page](#links-taps-and-the-bridge-page)); old news is cleared when you open
-the app ([Answering from the shade](#answering-from-the-shade)). Known gap:
-each agent's conversation shortcut stays; Android drops the oldest once
-the app reaches its shortcut limit.
+the app ([Answering from the shade](#answering-from-the-shade)). Each
+agent's conversation shortcut stays until the pairing changes
+(`PairingReset` removes them all); within one pairing, Android drops the
+oldest once the app reaches its shortcut limit.
 
 A debug build can post sample messages through the same path, from the dev
 machine with the phone on adb (`-n` targets the receiver, which only adb's
@@ -353,7 +354,11 @@ them, as the bridge's car replies do: the agent from `GET /v1/agents`, and
 for a dialog answer `GET /v1/agents/:id/pending`, which must still show the
 notice's dialog. A reply goes only while the agent is ready (`done`
 since before you replied, or `idle`: herdr marks a turn seen when you
-look at the pane). The body is then frozen, and a retry
+look at the pane). "Since before you replied" compares on the bridge's
+clock: the reply's time is shifted by how far the bridge's `Date` header
+on that same `GET /v1/agents` is from the phone's clock, and the agent
+must have changed state more than 2 s after it (the header has whole
+seconds) to count as moved on. The body is then frozen, and a retry
 resends it unchanged, so the bridge replays a lost answer instead of
 deciding it again. The bridge's own rules still apply on top
 (`origin: "notification"`: no prompt into a dialog, no `!`/`/`/`#` prompt).
@@ -367,10 +372,13 @@ deciding it again. The bridge's own rules still apply on top
 | `failed` (herdr failed after sending) | *Not sure it arrived: open the app* (never resent) |
 | no answer, 5xx, 429, a sign-in the bridge refused | retried; after the last attempt *Couldn't reach the bridge: open the app*, or *Not sure it arrived* once the action itself was sent |
 | not paired or revoked | *Not paired: open the app* |
-| paired anew since you answered | nothing is sent; *Not paired: open the app* on its notification, if it still shows |
+| paired anew since you answered | nothing is sent and nothing shown; its notification, if it still shows, goes |
 
 If news replaced the notification meanwhile (a new dialog, a new turn), the
-news stays and the older answer's outcome is not shown.
+news stays and the older answer's outcome is not shown. If Android Auto
+spoke in the conversation meanwhile, its words stay: a sent answer leaves
+them, and an answer not sent adds its reason under them
+(`ActionFeedback.EXTRA_SPOKEN_OVER`).
 
 **Old news is cleared.** The bridge sends no "resolved" message, so when
 the app comes to the foreground, and after an answer was sent, a worker
@@ -388,7 +396,9 @@ you dismiss or tap it, or news replaces it; if the notification was gone
 by then (swiped, or tapped into the app), only an outcome you must act on
 (*Not sure it arrived*, *Not sent*, *Not paired*, ...) comes back. A tap
 on a notice that news replaced meanwhile queues nothing: each notification
-names its question (`EXTRA_QUESTION`: the pending id, or `turn`).
+names its question (`EXTRA_QUESTION`: the pending id, or `turn`); nor
+does a tap whose notification is gone by the time it is shown as sending
+(a pairing reset cleared the shade between the tap and then).
 
 Answers are ordinary WorkManager jobs, not expedited ones: an expedited job
 needs a foreground-service notification on Android 11 and older. A reply
@@ -687,7 +697,9 @@ bridges (`w1:p1`), so on *Change address*, and after every pairing and
 forget in the process (a listener `PassporterApplication` registers at
 process start), `PairingReset` cancels the queued answers of the shade
 and the car, forgets their frozen bodies, removes the agents'
-notifications (the recorder's own stays) and deletes the dictation takes
+notifications (the recorder's own stays) and their conversation
+shortcuts (dynamic and the system's cached long-lived copies, so the
+launcher and the share sheet show no old agent) and deletes the dictation takes
 nobody released, which the new bridge's PWA would otherwise adopt (so a
 new pairing, even with the same bridge, drops unsent dictation). As a
 second line, every action intent is stamped with the device the notice
@@ -831,7 +843,7 @@ permission alias `microphone`); a refusal reads "Allow it for Passporter
 in Android's settings" in the PWA. The plugin's manifest adds
 `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_MICROPHONE` and the service.
 Without `POST_NOTIFICATIONS` (Android 13+, asked once a bridge is
-connected) the service still records; Android then lists it only in the
+connected or the app pairs) the service still records; Android then lists it only in the
 quick settings' active-apps list.
 
 ## What it installs, and where

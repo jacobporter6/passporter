@@ -3,6 +3,7 @@ package dev.passporter.app
 import android.app.NotificationManager
 import android.content.Context
 import android.util.Log
+import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.work.WorkManager
 import dev.passporter.car.CarOutbox
 import dev.passporter.notify.NoticeNotification
@@ -23,6 +24,10 @@ import dev.passporter.recorder.Recorder
  * - the agents' notifications, whose actions would answer the new bridge
  *   and whose news the reconciler would check against its agents (the
  *   dictation recorder's own notification stays);
+ * - the agents' conversation shortcuts, dynamic and long-lived (the share
+ *   sheet and the launcher keep the old agents' names, which are agent
+ *   output, and a tap on one would open the new bridge's agent of the same
+ *   id); the launcher's static *Bridge* shortcut stays;
  * - the dictation takes nobody has released ([Recorder.discardAll]),
  *   which the new bridge's PWA would adopt.
  *
@@ -44,6 +49,7 @@ object PairingReset {
         }
         step("the frozen bodies") { PreferenceFrozenBodies(app).clear() }
         step("the agents' notifications") { cancelNotices(app) }
+        step("the agents' shortcuts") { removeShortcuts(app) }
         step("the dictation takes") { Recorder.discardAll(app) }
     }
 
@@ -53,6 +59,22 @@ object PairingReset {
         manager.activeNotifications
             .filter { it.id == NoticeNotification.ID }
             .forEach { manager.cancel(it.tag, it.id) }
+    }
+
+    /**
+     * Removes every agent's conversation shortcut ([NoticeNotification.isShortcutId]),
+     * cached long-lived ones included, under [NotificationLock] (which
+     * [dev.passporter.notify.NoticeNotifier] holds while it pushes them).
+     */
+    private fun removeShortcuts(context: Context) = synchronized(NotificationLock) {
+        val flags = ShortcutManagerCompat.FLAG_MATCH_DYNAMIC or ShortcutManagerCompat.FLAG_MATCH_CACHED
+        val ids = ShortcutManagerCompat.getShortcuts(context, flags)
+            .map { it.id }
+            .filter(NoticeNotification::isShortcutId)
+        if (ids.isEmpty()) return@synchronized
+        ShortcutManagerCompat.removeDynamicShortcuts(context, ids)
+        // The system's cached copies, kept for the conversations' notifications.
+        ShortcutManagerCompat.removeLongLivedShortcuts(context, ids)
     }
 
     private inline fun step(what: String, work: () -> Unit) {

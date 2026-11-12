@@ -96,12 +96,45 @@ class OutboxSenderTest {
         for (bridge in listOf(
             FakeBridge.of(status = "working"),
             FakeBridge.of(status = "blocked"),
-            // Done again, but since after the reply: another turn.
-            FakeBridge.of(status = "done", since = 2001),
+            // Done again, but since well after the reply: another turn.
+            FakeBridge.of(status = "done", since = 5000),
         )) {
             assertEquals(SendOutcome.Final(NotSent.MOVED_ON), send(bridge, job(NoticeAction.REPLY, text = "go")))
             assertEquals(emptyList<String>(), bridge.actions)
         }
+    }
+
+    /** The reply's time (phone clock, 2000) and the agent's (bridge clock) are compared on the bridge's clock. */
+    private fun replyWithClocks(since: Long, bridgeAhead: Long, dateTruncation: Long = 0): SendOutcome {
+        val phoneNow = 60_000L
+        val bridge = FakeBridge.of(status = "done", dialog = "null", since = since, date = phoneNow + bridgeAhead - dateTruncation)
+        return OutboxSender(bridge, frozen, now = { phoneNow }) { PairedAs.Device(DEVICE) }.send(job(NoticeAction.REPLY, text = "go"))
+    }
+
+    @Test
+    fun aPhoneClockBehindTheBridgesNeverCallsAFreshReplyStale() {
+        val hour = 3_600_000L
+        // Done 5 s before the reply, on the bridge's clock an hour ahead.
+        assertEquals(SendOutcome.Sent, replyWithClocks(since = 2000 + hour - 5000, bridgeAhead = hour))
+        // Done just before the reply, with `Date` cut to the second below.
+        assertEquals(SendOutcome.Sent, replyWithClocks(since = 2000 + hour - 100, bridgeAhead = hour, dateTruncation = 999))
+        // Another turn done 5 s after the reply is still caught.
+        assertEquals(SendOutcome.Final(NotSent.MOVED_ON), replyWithClocks(since = 2000 + hour + 5000, bridgeAhead = hour))
+    }
+
+    @Test
+    fun aPhoneClockAheadOfTheBridgesNeverLetsAReplyIntoALaterTurn() {
+        val hour = 3_600_000L
+        // Another turn done 5 s after the reply, on the bridge's clock an hour behind.
+        assertEquals(SendOutcome.Final(NotSent.MOVED_ON), replyWithClocks(since = 2000 - hour + 5000, bridgeAhead = -hour))
+        assertEquals(SendOutcome.Sent, replyWithClocks(since = 2000 - hour - 5000, bridgeAhead = -hour))
+    }
+
+    @Test
+    fun withoutADateTheClocksAreTakenAsTheSame() {
+        val bridge = FakeBridge.of(status = "done", dialog = "null", since = 3000)
+        val sender = OutboxSender(bridge, frozen, now = { 60_000L }) { PairedAs.Device(DEVICE) }
+        assertEquals("within the tolerance", SendOutcome.Sent, sender.send(job(NoticeAction.REPLY, text = "go")))
     }
 
     @Test
