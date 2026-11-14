@@ -90,7 +90,6 @@ services:
       - --cache-file=/var/cache/ntfy/cache.db
       - --cache-duration=1h
       - --keepalive-interval=20s
-      - --log-level=error
     healthcheck:
       test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:{args.ntfy_port}/v1/health"]
       interval: 10s
