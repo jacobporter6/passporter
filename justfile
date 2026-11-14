@@ -9,7 +9,7 @@ default:
     @just --list
 
 # Format check, lints (host + wasm), tests. Must pass before you open a PR.
-verify: fmt-check lint test
+verify: fmt-check lint test deploy-test
 
 # The full gate (CI runs this): verify + release build + PWA size budget + supply-chain audit,
 # plus the Android checks where the Android toolchain is installed.
@@ -35,6 +35,10 @@ lint-wasm:
 
 test:
     cargo nextest run --workspace --all-features --locked --no-tests=warn
+
+# The deployment generator's tests (temporary files only; nothing starts).
+deploy-test:
+    python3 -I -B -m unittest discover -s deploy/session -p 'test_*.py'
 
 build:
     cargo build --workspace --release --locked
