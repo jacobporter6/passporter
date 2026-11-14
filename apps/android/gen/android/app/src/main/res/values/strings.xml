@@ -12,7 +12,7 @@
     <string name="push_builtin_ongoing">Listening for agent news</string>
     <string name="push_stopped_channel">Notification problems</string>
     <string name="push_stopped_title">Agent news stopped</string>
-    <string name="push_stopped_text">Your bridge no longer offers its built-in notifications. Tap to set them up again.</string>
+    <string name="push_stopped_text">Passporter stopped listening to your bridge. Tap to set notifications up again.</string>
     <string name="push_status_not_paired">Pair with your bridge to get agent news.</string>
     <string name="push_status_blocked">Notifications are off for Passporter in Android\'s settings.</string>
     <string name="push_status_builtin_connected">Connected to your bridge.</string>

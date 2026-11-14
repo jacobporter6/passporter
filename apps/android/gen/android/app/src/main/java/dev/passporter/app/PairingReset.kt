@@ -54,12 +54,13 @@ object PairingReset {
         // First, so no notice of the old pairing is shown after the shade is cleared.
         step("the built-in transport") {
             val receiver = BuiltInPush.receiver(app)
-            // Unless it is already the new pairing's (a refresh that ran first).
+            // Unless it is already the new pairing's (a refresh that ran first:
+            // its reset already ended the old stream, and the service reconnects).
             if (receiver.record().owner != DeviceAuth.get(app).savedDevice()?.value) {
                 NativePushService.stop(app)
                 receiver.reset()
-                NativeStatus.reset()
             }
+            NativeStatus.reset()
         }
         step("the queued answers") {
             val work = WorkManager.getInstance(app)

@@ -602,7 +602,10 @@ bridge holds the external registration.
   manager's (`DefaultKeyManager`, instance `passporter-builtin`), apart
   from the distributor registration's. A new pairing, or none, deletes
   them and the registration, so whatever the old pairing's bridge still
-  sends cannot be decrypted; `PairingReset` also stops the service.
+  sends cannot be decrypted; `PairingReset` also stops the service. A
+  stream still open when its registration is replaced (a refresh that
+  registered the new pairing first) is ended at once, and the service
+  reconnects with the new one.
 - **What is shown.** Only an envelope that verifies with the key the
   bridge named at registration, is for this registration, has not expired
   and decrypts with this app's keys, and only while the device it was

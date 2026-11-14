@@ -288,6 +288,33 @@ class NativeReceiverTest {
     }
 
     @Test
+    fun aNewPairingsRegistrationEndsTheStreamOfTheOldOne() {
+        receiver.register()
+        var reconnects = 0
+        receiver.onRegistrationChanged = { reconnects++ }
+        // A resume's refresh registers the new pairing first (before PairingReset runs).
+        bridge.device = device("dev-0000000000000002")
+        assertEquals(NativeState.Registered, receiver.register())
+        assertEquals("the service is told to end the old stream", 1, reconnects)
+    }
+
+    @Test
+    fun aStreamStopsReadingOnceItsRegistrationIsReplaced() {
+        receiver.register()
+        bridge.streams += stream(message("m1"), message("m2"))
+        var lines = 0
+        val outcome = receiver.listen({ true }, {}, {}) { work ->
+            work().also {
+                lines++
+                // The record changes under the open stream (a new pairing registered).
+                store.save(store.load().copy(registrationId = "00000000-0000-4000-8000-000000000005"))
+            }
+        }
+        assertEquals(NativeState.RetryLater, outcome)
+        assertEquals("the old stream's next line is not read", 1, lines)
+    }
+
+    @Test
     fun withoutARegistrationThereIsNothingToListenTo() {
         assertEquals(NativeState.NotPaired, receiver.listen({ true }, {}, {}))
         assertTrue(bridge.calls.isEmpty())

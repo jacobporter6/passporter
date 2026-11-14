@@ -19,6 +19,7 @@ import androidx.core.content.ContextCompat
 import dev.passporter.app.MainActivity
 import dev.passporter.app.R
 import java.util.concurrent.ThreadLocalRandom
+import org.unifiedpush.android.connector.UnifiedPush
 
 /**
  * Keeps the built-in transport's stream open while the app is closed and
@@ -91,10 +92,14 @@ class NativePushService : Service() {
             Log.w(PUSH_TAG, "Android refused the built-in transport's service: ${e.javaClass.simpleName}")
             running = false
             BuiltInPush.fallBack(this)
+            // Without a distributor to fall back to, nothing brings news: say so.
+            if (UnifiedPush.getSavedDistributor(this) == null) tellStopped()
             stopSelf()
             return
         }
         network.registerDefaultNetworkCallback(networkCallback)
+        // A registration replaced under the open stream (a new pairing) ends it.
+        BuiltInPush.receiver(this).onRegistrationChanged = ::wake
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -125,6 +130,7 @@ class NativePushService : Service() {
     }
 
     override fun onDestroy() {
+        BuiltInPush.receiver(this).onRegistrationChanged = null
         running = false
         wake()
         try {
@@ -155,7 +161,12 @@ class NativePushService : Service() {
                     // News arrives this way now: the external registration can go
                     // (kept until here, so a stream that never connects loses nothing).
                     val app = applicationContext
-                    PushWork.run { Log.i(PUSH_TAG, "external registration: ${PushWork.sync(app).leave()}") }
+                    PushWork.run {
+                        // Not if you switched to the ntfy app meanwhile.
+                        if (BuiltInPush.bringsNews(app)) {
+                            Log.i(PUSH_TAG, "external registration: ${PushWork.sync(app).leave()}")
+                        }
+                    }
                 },
                 guard = { work ->
                     val lock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_LOCK_TAG)
@@ -276,6 +287,6 @@ class NativePushService : Service() {
 class NativePushBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED && intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
-        if (BuiltInPush.active(context)) NativePushService.start(context)
+        if (BuiltInPush.active(context) && !NativePushService.start(context)) BuiltInPush.fallBack(context)
     }
 }

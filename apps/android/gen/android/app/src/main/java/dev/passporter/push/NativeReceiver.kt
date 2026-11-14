@@ -109,6 +109,14 @@ class NativeReceiver(
     /** Serializes changes of the record and the keys ([register] runs on two threads). */
     private val lock = Any()
 
+    /**
+     * Called when the registration is dropped or replaced ([reset]): the
+     * service ends the stream it is reading, which belongs to the old one
+     * (perhaps of another pairing), and reconnects with the new record.
+     */
+    @Volatile
+    var onRegistrationChanged: (() -> Unit)? = null
+
     /** Whether the bridge confirmed the registration in this process: registered once per process. */
     @Volatile
     private var confirmed = false
@@ -236,6 +244,7 @@ class NativeReceiver(
         }
         val left = store.load().forgotten()
         save(left)
+        onRegistrationChanged?.invoke()
         left
     }
 
@@ -301,7 +310,8 @@ class NativeReceiver(
             }
             connected()
             try {
-                while (running()) {
+                // Read only while the record is still the one this stream was opened for.
+                while (running() && store.load().registrationId == id && store.load().owner == owner.value) {
                     val line = stream.nextLine() ?: break
                     val outcome = guard { ingest(line) }
                     if (outcome !is Ingested.Ignored) Log.i(PUSH_TAG, "built-in message: $outcome")
