@@ -31,6 +31,8 @@
 //! vapid_key = "vapid.pem"             # default; relative to the config dir
 //! extra_hosts = ["push.example.org"]  # self-hosted push services (default none)
 //! ntfy_host = "ntfy.example.org"     # a self-hosted ntfy server, exact name (default none)
+//! native_ntfy = "127.0.0.1:2586"      # the built-in Android transport's private ntfy
+//!                                     # companion (crate::push::native); loopback only (default none)
 //! car_announce_done = "decide"        # default; Android Auto announces a finished agent only
 //!                                     # once its TL;DR has a Decide line ("always", "never")
 //! quiet_done_workspaces = ["agent-swarm"]  # finishes here never ping
@@ -289,6 +291,9 @@ impl RawSpawn {
 /// The `[push]` table: Web Push wake pings (see [`crate::push`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PushConfig {
+    /// The private ntfy companion of the built-in Android transport
+    /// ([`crate::push::native`]); loopback with a port, never exposed.
+    pub native_ntfy: Option<SocketAddr>,
     /// The VAPID contact push services see (`mailto:` or `https:`).
     pub subject: Subject,
     /// The VAPID private key (made by `passporter-bridge push-keygen`).
@@ -339,6 +344,7 @@ fn default_quiet_done_agent_prefixes() -> BTreeSet<String> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPush {
+    native_ntfy: Option<SocketAddr>,
     subject: Subject,
     vapid_key: Option<PathBuf>,
     #[serde(default)]
@@ -354,6 +360,12 @@ struct RawPush {
 
 impl RawPush {
     fn validate(self) -> Result<PushConfig, ParseError> {
+        if self
+            .native_ntfy
+            .is_some_and(|a| !a.ip().is_loopback() || a.port() == 0)
+        {
+            return Err(ParseError::NativeNtfyAddress);
+        }
         if let Some(bad) = self
             .quiet_done_agent_prefixes
             .iter()
@@ -362,6 +374,7 @@ impl RawPush {
             return Err(ParseError::QuietDonePrefix(bad.clone()));
         }
         Ok(PushConfig {
+            native_ntfy: self.native_ntfy,
             subject: self.subject,
             vapid_key: self
                 .vapid_key
@@ -647,6 +660,10 @@ pub enum ConfigError {
 /// Why config text is unusable.
 #[derive(Debug, thiserror::Error)]
 pub enum ParseError {
+    /// `push.native_ntfy` is not loopback, or has no port: the companion
+    /// has no authentication of its own, so only the bridge may reach it.
+    #[error("push.native_ntfy must be a loopback address with a nonzero port")]
+    NativeNtfyAddress,
     /// Not valid TOML for [`Config`]. Carries only the message and line,
     /// never the quoted source line, which could hold the token.
     #[error("invalid config TOML{}: {message}", line.map(|l| format!(" at line {l}")).unwrap_or_default())]
@@ -1701,5 +1718,26 @@ state_dir = "/home/me/.local/state/passporter"
     fn explicit_dir_wins() {
         let dir = Config::locate_dir(Some("/x/y".into())).expect("explicit");
         assert_eq!(dir, PathBuf::from("/x/y"));
+    }
+
+    #[test]
+    fn the_built_in_transports_companion_is_loopback_only() {
+        for address in ["0.0.0.0:2586", "192.0.2.1:2586", "127.0.0.1:0"] {
+            let text = format!(
+                "[push]\nsubject = \"mailto:ops@example.org\"\nnative_ntfy = \"{address}\"\n"
+            );
+            assert!(matches!(
+                Config::parse(&text),
+                Err(ParseError::NativeNtfyAddress)
+            ));
+        }
+        let config = Config::parse(
+            "[push]\nsubject = \"mailto:ops@example.org\"\nnative_ntfy = \"127.0.0.1:2586\"\n",
+        )
+        .expect("loopback");
+        assert_eq!(
+            config.push.expect("push").native_ntfy,
+            Some("127.0.0.1:2586".parse().expect("address"))
+        );
     }
 }

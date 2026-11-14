@@ -1,0 +1,5 @@
+{
+  "comment": "A built-in transport envelope (crates/bridge/src/push/native.rs) around the notice ciphertext of webpush-notice-vector.json, signed once by a throwaway key whose private half was discarded. Pinned by native.rs and opened by the Android app's NativeEnvelopeTest.",
+  "signer": "BNoGRre7AGCNieejfYJVFSaRAyLZ937hfS6m55F_zng8xh02DPQie4UYnGFEDa1kQcaDkLRGOywlHKDaMPezrQc",
+  "envelope": "{\"version\":1,\"registrationId\":\"2f1c7c2e-8a4b-4c1e-9d3f-5b6a7c8d9e0f\",\"expiresAt\":1900000000,\"body\":\"DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_e3ctcDLW4LAOM4rxK7hAJqj29tLlWDsyDoylO0u6lHaOHBzkhA2rfUEO-jBHAlFIaCvZauz6oyKpy8MWMUy2u4iWujpxSAuqQLaQiWzkKpK4iz3sdt65Vt5APaghuUpc75kzNDXks9XlJbYk3mAb0K3Jm-ogRC9DM1HNSeYstd92yM9fDEQrrA1D6Adl1aozW4G4CuhZcslh7HXrJdsu8A2HDBeeQ-D1e7xymp19zjmvLYxqrb69vRY5mpW1HET1iLx6Pq2M\",\"signature\":\"4oQgtHuMz9WnA7dde9ps4lJOQRV09yW6E77gKHNQXaYvuRxIpLa-HIEOFEinw5KpubsUzlyW3w_RQGmKKkhEYQ\"}"
+}

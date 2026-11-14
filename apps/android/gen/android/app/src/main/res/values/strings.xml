@@ -5,9 +5,39 @@
     <string name="push_no_distributor_title">Notifications need ntfy</string>
     <string name="push_no_distributor_message">To get agent news while Passporter is closed, install a UnifiedPush distributor such as ntfy (from F-Droid or Google Play), then open Passporter again.</string>
 
-    <!-- Launcher shortcut (res/xml/shortcuts.xml). -->
+    <!-- The built-in transport (dev.passporter.push.BuiltInPush) and the
+         notification setup (NotificationSetup). -->
+    <string name="push_builtin_channel">Connection to your bridge</string>
+    <string name="push_builtin_channel_description">Shown while Passporter keeps its connection to your bridge for agent news. You can hide this channel; news still arrives.</string>
+    <string name="push_builtin_ongoing">Listening for agent news</string>
+    <string name="push_stopped_channel">Notification problems</string>
+    <string name="push_stopped_title">Agent news stopped</string>
+    <string name="push_stopped_text">Passporter stopped listening to your bridge. Tap to set notifications up again.</string>
+    <string name="push_status_not_paired">Pair with your bridge to get agent news.</string>
+    <string name="push_status_blocked">Notifications are off for Passporter in Android\'s settings.</string>
+    <string name="push_status_builtin_connected">Connected to your bridge.</string>
+    <string name="push_status_builtin_connecting">Connecting to your bridge…</string>
+    <string name="push_status_clock_off">News arrives but is refused: this phone\'s clock is off. Check the date and time in Android\'s settings.</string>
+    <string name="push_status_builtin_retrying">Can\'t reach your bridge right now; retrying.</string>
+    <string name="push_status_external">News comes through the ntfy app.</string>
+    <string name="push_status_external_waiting">Waiting for the ntfy app to connect. Is it installed?</string>
+    <string name="push_status_external_fallback">News comes through the ntfy app: your bridge has no built-in notification service.</string>
+    <string name="push_status_none">Your bridge has no built-in notification service. Set up its companion, or install the ntfy app.</string>
+    <string name="push_setup_title">Notifications</string>
+    <string name="push_setup_retry">Retry</string>
+    <string name="push_setup_use_external">Use the ntfy app</string>
+    <string name="push_setup_use_builtin">Use built-in</string>
+    <string name="push_setup_open_settings">Open settings</string>
+    <string name="push_setup_allow_background">Allow</string>
+    <string name="push_setup_background">To get news while the phone sleeps, let Passporter run in the background (no battery restrictions). Without it Android may hold news back for minutes.</string>
+    <string name="push_background_title">Get news while the phone sleeps</string>
+    <string name="push_background_later">Later</string>
+
+    <!-- Launcher shortcuts (res/xml/shortcuts.xml). -->
     <string name="shortcut_bridge_short">Bridge</string>
     <string name="shortcut_bridge_long">Bridge address</string>
+    <string name="shortcut_notifications_short">Notifications</string>
+    <string name="shortcut_notifications_long">Notification setup</string>
     <!-- A pinned agent shortcut of an earlier pairing (PairingReset). -->
     <string name="shortcut_agent_disabled">This agent belongs to an earlier pairing</string>
 

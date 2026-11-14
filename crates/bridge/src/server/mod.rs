@@ -36,7 +36,7 @@ mod detach;
 mod headers;
 mod log;
 mod push;
-mod query;
+pub(crate) mod query;
 mod static_files;
 mod status;
 mod stream;
@@ -138,7 +138,7 @@ pub struct AppState {
     pub(crate) attachments: Arc<Attachments>,
     pub(crate) tldrs: Arc<Tldrs>,
     settings: Arc<ServerSettings>,
-    shutdown: Shutdown,
+    pub(crate) shutdown: Shutdown,
     files: StaticFiles,
     streams: OpenStreams,
 }
@@ -264,6 +264,7 @@ fn router(state: AppState) -> Router {
         .route("/runbooks", get(crate::runbooks::list))
         .route("/runbooks/{name}/run", post(crate::runbooks::run))
         .route("/push/key", get(push::key))
+        .route("/push/native", post(crate::push::native::register))
         .route(
             "/push/subscriptions",
             get(push::list)
@@ -295,6 +296,11 @@ fn router(state: AppState) -> Router {
         )
         .layer(require_auth.clone())
         .layer(timeout(photo_timeout));
+    // The built-in notification stream stays open for a session's
+    // lifetime: no request timeout (it ends itself, see `push::native`).
+    let native = Router::new()
+        .route("/push/native/{id}/stream", get(crate::push::native::stream))
+        .layer(require_auth.clone());
     // Starting an agent waits on herdr (shell, startup, first prompt): its
     // own timeout, past the handler's own answer deadline (merged into
     // `/agents`).
@@ -305,7 +311,8 @@ fn router(state: AppState) -> Router {
     Router::new()
         .nest(
             "/v1",
-            api.merge(chunks)
+            api.merge(native)
+                .merge(chunks)
                 .merge(photos)
                 .merge(spawns)
                 .layer(map_response(headers::no_store)),

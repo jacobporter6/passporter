@@ -8,6 +8,17 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <!-- Agent news (dev.passporter.notify); asked once a bridge is connected. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The built-in transport (dev.passporter.push.NativePushService): a
+         foreground service holding the stream from your bridge, restarted
+         after a reboot, waiting for a network, waking briefly per notice,
+         and asking (from its setup, on a tap) to be spared battery
+         optimization so Doze does not hold the stream. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Android Auto's connection provider, read to tell whether it projects
          (dev.passporter.car.AndroidAutoProjection). -->
     <queries>
@@ -39,7 +50,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
             <!-- Long-press the icon: "Bridge" opens the bundled Bridge page,
-                 through BridgeShortcutActivity, to change the address. -->
+                 through BridgeShortcutActivity, to change the address;
+                 "Notifications" opens the notification setup. -->
             <meta-data
                 android:name="android.app.shortcuts"
                 android:resource="@xml/shortcuts" />
@@ -65,6 +77,23 @@
         <meta-data
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc" />
+        <!-- The built-in transport's stream, and its restart after a reboot or an update. -->
+        <service
+            android:name="dev.passporter.push.NativePushService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps one connection to the user's own Passporter bridge to receive end-to-end encrypted agent notifications, without a cloud push service." />
+        </service>
+        <receiver
+            android:name="dev.passporter.push.NativePushBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
         <!-- UnifiedPush events (dev.passporter.push), from the connector's receiver. -->
         <service
             android:name="dev.passporter.push.PassporterPushService"

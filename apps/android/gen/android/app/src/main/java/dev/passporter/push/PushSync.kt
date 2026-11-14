@@ -33,6 +33,12 @@ sealed interface PushState {
 
     /** Could not reach the bridge, or it failed: the next step tries again. */
     data object RetryLater : PushState
+
+    /**
+     * The built-in transport brings the news ([BuiltInPush]): no external
+     * registration is kept, so the bridge sends each notice once.
+     */
+    data object Left : PushState
 }
 
 /** Whether to ask the distributor for an endpoint ([PushSync.readiness]). */
@@ -124,6 +130,29 @@ class PushSync(
                 PushState.NoEndpoint
             }
         }
+    }
+
+    /**
+     * The built-in transport took over: asks the bridge to drop what it
+     * holds of the external registration (what it does not answer for
+     * stays in [PushRecord.stale] for the next try), then leaves the
+     * distributor, which deletes the keys. The distributor you chose is
+     * kept, for switching back. Cheap when there is nothing to drop.
+     */
+    fun leave(): PushState {
+        val record = store.load()
+        val held = record.registration != null || record.subscribed != null
+        if (!held && record.stale.isEmpty()) return PushState.Left
+        val gone = listOfNotNull(record.subscribed?.registration?.endpoint, record.registration?.endpoint)
+        val left = dropStale(record.copy(registration = null, subscribed = null, stale = record.stale + gone))
+        if (held) {
+            Log.i(PUSH_TAG, "the built-in transport took over: unregistering from the distributor")
+            vapidKey = null
+            confirmed = false
+            unregister()
+        }
+        save(left)
+        return PushState.Left
     }
 
     /**

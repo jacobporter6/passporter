@@ -111,8 +111,8 @@ pub use policy::{
     step_up_reason,
 };
 pub use push::{
-    MAX_NOTICES, Notice, NoticeState, PushEndpoint, PushKey, PushMessage, PushPayload,
-    PushSubscriptions,
+    MAX_NOTICES, NativeRegister, NativeRegistration, Notice, NoticeState, PushEndpoint, PushKey,
+    PushMessage, PushPayload, PushSubscriptions,
 };
 pub use result::{ActionResult, RefusalReason};
 pub use runbook::{

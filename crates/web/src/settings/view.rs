@@ -6,18 +6,20 @@
 use core::cell::Cell;
 use core::time::Duration;
 
+use leptos::either::Either;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::JsValue;
 use web_sys::HtmlElement;
 
+use super::app_notifications::AppNotifications;
 use super::model::Snapshot;
 use super::prefs::Pref;
 use crate::extras::Ask;
 use crate::extras::mount::{self, Mounted};
 use crate::live::Conn;
 use crate::push::browser::PermissionPrompt;
-use crate::push::state::{Command, Outcome, PushState};
+use crate::push::state::{Command, Outcome, PushState, Unavailable};
 use crate::routes::AppRoute;
 use crate::session::{self, Credential};
 use crate::ui::format;
@@ -283,22 +285,30 @@ fn NotificationsGroup(snapshot: ReadSignal<Snapshot>) -> impl IntoView {
             push.update(|s| *s = s.finish(outcome));
         });
     };
+    // In the app the native layer brings notifications: its status, not the switch.
+    let in_app = Memo::new(move |_| shown.get() == PushState::Unavailable(Unavailable::NativeApp));
     view! {
         <h2 class="group-title">"Notifications"</h2>
-        <div class="group">
-            <label class="row row-switch">
-                <span class="row-label">"Blocked and done agents"</span>
-                <input
-                    type="checkbox"
-                    role="switch"
-                    class="switch"
-                    prop:checked=move || shown.get().is_checked(paired.get())
-                    disabled=move || !shown.get().can_toggle(paired.get())
-                    on:change=toggle
-                />
-            </label>
-        </div>
-        <p class="group-note">{move || shown.get().note(paired.get())}</p>
+        {move || if in_app.get() {
+            Either::Left(view! { <AppNotifications /> })
+        } else {
+            Either::Right(view! {
+                <div class="group">
+                    <label class="row row-switch">
+                        <span class="row-label">"Blocked and done agents"</span>
+                        <input
+                            type="checkbox"
+                            role="switch"
+                            class="switch"
+                            prop:checked=move || shown.get().is_checked(paired.get())
+                            disabled=move || !shown.get().can_toggle(paired.get())
+                            on:change=toggle.clone()
+                        />
+                    </label>
+                </div>
+                <p class="group-note">{move || shown.get().note(paired.get())}</p>
+            })
+        }}
     }
 }
 

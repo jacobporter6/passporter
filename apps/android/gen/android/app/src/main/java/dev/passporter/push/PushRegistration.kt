@@ -14,7 +14,8 @@ import org.unifiedpush.android.connector.data.ResolvedDistributor
 
 /**
  * Registers the app with the phone's UnifiedPush distributor (ntfy, say)
- * while it is paired, from the activity (design §6.6):
+ * while it is paired and the bridge's built-in transport is not the one
+ * ([BuiltInPush], tried first), from the activity (design §6.6):
  *
  * - whenever the activity resumes, and right after pairing, it asks
  *   [PushSync] whether to register (paired, and the bridge has push on)
@@ -38,6 +39,7 @@ import org.unifiedpush.android.connector.data.ResolvedDistributor
 class PushRegistration private constructor(
     private val activity: ComponentActivity,
     private val promptsHeld: () -> Boolean,
+    private val onBuiltIn: () -> Unit,
 ) {
     /** Read once the activity is created: in its constructor it has no context yet. */
     private val app: Context by lazy { activity.applicationContext }
@@ -68,6 +70,11 @@ class PushRegistration private constructor(
     fun refresh() {
         val app = app
         PushWork.run {
+            // The bridge's own transport first: with it, no distributor.
+            if (BuiltInPush.refresh(app) == Settled.BUILT_IN) {
+                onActivity(onBuiltIn)
+                return@run
+            }
             when (val readiness = PushWork.sync(app).readiness()) {
                 is Readiness.Register -> register(readiness.vapidKey)
                 else -> Log.i(PUSH_TAG, "not registering for push: $readiness")
@@ -136,10 +143,11 @@ class PushRegistration private constructor(
     companion object {
         /**
          * Registers for push on [activity]'s behalf for as long as it lives;
-         * its prompts wait while [promptsHeld].
+         * its prompts wait while [promptsHeld]. [onBuiltIn] runs on the main
+         * thread when the built-in transport is the one (and no prompt is up).
          */
-        fun attachTo(activity: ComponentActivity, promptsHeld: () -> Boolean): PushRegistration =
-            PushRegistration(activity, promptsHeld)
+        fun attachTo(activity: ComponentActivity, promptsHeld: () -> Boolean, onBuiltIn: () -> Unit): PushRegistration =
+            PushRegistration(activity, promptsHeld, onBuiltIn)
 
         private const val PREFERENCES = "dev.passporter.push"
         private const val TOLD = "toldNoDistributor"

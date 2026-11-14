@@ -28,6 +28,9 @@ pub const STORE_FILE: &str = "push-subscriptions.json";
 /// Why the store could not be read or changed.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
+    /// A built-in registration cannot be reassigned to another device.
+    #[error("native registration belongs to another device")]
+    Owned,
     /// The file could not be read or written.
     #[error("push subscription store {}: {source}", path.display())]
     Io {
@@ -132,9 +135,25 @@ impl SubscriptionStore {
         if revoked() {
             return Ok(None);
         }
+        if super::native::registration(&subscription.endpoint).is_some()
+            && devices.iter().any(|(owner, subscriptions)| {
+                owner != device
+                    && subscriptions
+                        .iter()
+                        .any(|s| s.endpoint == subscription.endpoint)
+            })
+        {
+            return Err(StoreError::Owned);
+        }
         let mut next = devices.clone();
         let existed = remove_endpoint(&mut next, &subscription.endpoint);
         let list = next.entry(device.to_owned()).or_default();
+        if super::native::registration(&subscription.endpoint).is_some() {
+            // One built-in registration per device: a new one (after a
+            // switch back, or a pairing reset the bridge never heard of)
+            // replaces the one the phone left, which nobody reads any more.
+            list.retain(|s| super::native::registration(&s.endpoint).is_none());
+        }
         if list.len() >= MAX_PER_DEVICE {
             return Err(StoreError::Full);
         }
@@ -411,6 +430,32 @@ pub(crate) mod tests {
             Put::Replaced
         );
         assert_eq!(store.devices(), ["new-pairing"]);
+    }
+
+    #[test]
+    fn a_device_keeps_one_built_in_registration() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let store = SubscriptionStore::open(dir.path().join(STORE_FILE)).expect("empty");
+        let reserved = |n: u8| {
+            let mut s = subscription("x");
+            s.endpoint = format!(
+                "https://native.passporter.invalid/00000000-0000-4000-8000-0000000000{n:02}"
+            )
+            .parse()
+            .expect("endpoint");
+            s
+        };
+        store.put("phone", subscription("browser")).expect("put");
+        store.put("phone", reserved(1)).expect("put");
+        store.put("phone", reserved(2)).expect("put");
+        assert_eq!(
+            endpoints(&store, "phone"),
+            [
+                "https://push.example.com/browser",
+                "https://native.passporter.invalid/00000000-0000-4000-8000-000000000002",
+            ],
+            "the newer registration replaced the one the phone left; others stay"
+        );
     }
 
     #[test]

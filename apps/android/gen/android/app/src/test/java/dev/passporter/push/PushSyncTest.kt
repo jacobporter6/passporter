@@ -87,6 +87,32 @@ class PushSyncTest {
     }
 
     @Test
+    fun theBuiltInTransportTakingOverDropsTheBridgeCopyThenLeavesTheDistributor() {
+        sync.onNewEndpoint(first)
+        assertEquals(PushState.Left, sync.leave())
+        assertEquals(listOf("POST ${first.endpoint}", "DELETE ${first.endpoint}"), bridge.calls)
+        assertEquals(1, unregistered)
+        assertEquals(PushRecord(owner = "dev-1"), store.load())
+        // Nothing held any more: no call, no second unregistration.
+        assertEquals(PushState.Left, sync.leave())
+        assertEquals(2, bridge.calls.size)
+        assertEquals(1, unregistered)
+    }
+
+    @Test
+    fun aBridgeCopyNotDroppedWhileLeavingIsDroppedNextTime() {
+        sync.onNewEndpoint(first)
+        bridge.answers += 503
+        assertEquals(PushState.Left, sync.leave())
+        assertEquals(1, unregistered)
+        assertEquals(listOf(first.endpoint), store.load().stale)
+        assertEquals(PushState.Left, sync.leave())
+        assertEquals(listOf("POST ${first.endpoint}", "DELETE ${first.endpoint}", "DELETE ${first.endpoint}"), bridge.calls)
+        assertTrue(store.load().stale.isEmpty())
+        assertEquals(1, unregistered)
+    }
+
+    @Test
     fun aNewPairingStartsWithNewKeys() {
         sync.onNewEndpoint(first)
         bridge.device = "dev-2"

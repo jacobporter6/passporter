@@ -172,6 +172,13 @@ impl VapidKey {
         Some(Self { pair })
     }
 
+    /// Domain-separated notice signature, using the existing deployment signing key.
+    pub(crate) fn sign_notice(&self, message: &[u8]) -> Result<String, ring::error::Unspecified> {
+        self.pair
+            .sign(&SystemRandom::new(), message)
+            .map(|sig| BASE64URL.encode(sig.as_ref()))
+    }
+
     /// The public key, base64url: the PWA's `applicationServerKey`.
     #[must_use]
     pub fn public_key(&self) -> String {
