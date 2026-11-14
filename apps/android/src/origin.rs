@@ -35,8 +35,9 @@ pub enum OriginError {
     Ipv6,
     /// A name that is not an RFC 1123 host name (labels of letters, digits
     /// and inner `-`, once in punycode, the last one starting with a
-    /// letter), or a `localhost` name, which on the phone means the phone
-    /// itself (`tauri.localhost` is the app's own pages).
+    /// letter), or a `localhost` name or loopback address, which on the
+    /// phone means the phone itself (`tauri.localhost` is the app's own
+    /// pages), or the unspecified address `0.0.0.0`.
     #[error("use the bridge's DNS name")]
     Host,
 }
@@ -70,6 +71,10 @@ impl BridgeOrigin {
             None => return Err(OriginError::Invalid),
             Some(Host::Ipv6(_)) => return Err(OriginError::Ipv6),
             Some(Host::Domain(name)) if !is_dns_name(name) => return Err(OriginError::Host),
+            // The phone itself (127.0.0.0/8) or no host at all (0.0.0.0), as `localhost` is.
+            Some(Host::Ipv4(ip)) if ip.is_loopback() || ip.is_unspecified() => {
+                return Err(OriginError::Host);
+            }
             Some(Host::Domain(_) | Host::Ipv4(_)) => {}
         }
         let origin = url.origin().ascii_serialization();
@@ -212,6 +217,12 @@ mod tests {
             ("https://bridge.-example", OriginError::Host),
             ("https://bridge.1lan", OriginError::Host),
             ("https://bridge.example.", OriginError::Host),
+            ("https://127.0.0.1:8443", OriginError::Host),
+            ("https://127.1.2.3", OriginError::Host),
+            ("https://127.1", OriginError::Host),
+            ("https://0.0.0.0", OriginError::Host),
+            ("https://[::]", OriginError::Ipv6),
+            ("https://[::ffff:127.0.0.1]", OriginError::Ipv6),
         ];
         for (input, expected) in cases {
             assert_eq!(BridgeOrigin::parse(input), Err(expected), "{input:?}");
