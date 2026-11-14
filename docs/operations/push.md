@@ -139,8 +139,9 @@ sequenceDiagram
   refuses a `native_ntfy` that is not loopback. The phone talks only to the
   bridge, on its usual HTTPS origin, with its native device session: the
   registration and the stream are app-scope routes (a car session is
-  refused), and a stream is only ever the caller's own registration. Device
-  tokens never reach the companion. **Never proxy or expose the
+  refused), and a stream is only ever the caller's own registration, one at
+  a time (a reconnect ends the stream the phone left). Device tokens never
+  reach the companion. **Never proxy or expose the
   companion's port.**
 - **The companion cannot forge a notice.** Each envelope carries the
   ciphertext, the registration it is for and an expiry (one hour), signed by
@@ -152,13 +153,17 @@ sequenceDiagram
 - **Nothing is lost while the companion is down.** The bridge spools sealed
   envelopes in a private file (`push-native-spool.json` beside the
   subscription store; at most 256, 16 per phone, each for an hour) and
-  publishes them, oldest first, once the companion answers. The companion
+  publishes them in order once the companion answers (one it refuses for
+  good, a 4xx, is dropped, never holding back the rest). The companion
   keeps an hour of them for a phone that is offline. Delivery is at least
   once; the app drops a message it has shown.
 - **The phone keeps one connection.** A foreground service (a quiet,
   minimised notification, *Listening for agent news*) holds the stream,
   reconnects with backoff, waits for a network, and starts again after a
-  reboot (once you unlock) or an app update. After pairing, the app asks
+  reboot (once you unlock) or an app update. If the bridge stops offering
+  the transport (its companion removed), the app posts *Agent news
+  stopped*; its tap opens the setup, which falls back to the ntfy app.
+  After pairing, the app asks
   once to run without battery restrictions: without that, Doze may hold
   news back for minutes. A force stop ends it until you open the app.
 - **A pairing change starts afresh.** Forgetting or re-pairing stops the
@@ -186,10 +191,13 @@ docker run -d --name passporter-ntfy --restart unless-stopped \
   --user "$(id -u):$(id -g)" -v "$HOME/.local/state/passporter/ntfy:/var/cache/ntfy" \
   binwiederhier/ntfy@sha256:1875ddcf815c8a3c981d6d78c67a93452d0abba79b1ab9520b1f5f5238902bd7 \
   serve --listen-http=127.0.0.1:2586 --cache-file=/var/cache/ntfy/cache.db \
-  --cache-duration=1h --keepalive-interval=20s
+  --cache-duration=1h --keepalive-interval=20s \
+  --visitor-request-limit-exempt-hosts=127.0.0.1 --visitor-subscription-limit=64
 ```
 
-(make the cache directory first, mode 0700), or generate a whole new
+(make the cache directory first, mode 0700; the last two flags lift ntfy's
+per-visitor limits, a request burst of 60 and 30 subscriptions, which the
+bridge, its only client, would otherwise hit), or generate a whole new
 deployment for one herdr session with
 [`deploy/session/create.py`](../deploy.md#a-new-deployment-with-the-built-in-transport).
 The image is ntfy 2.37.2, pinned by digest. Your HTTPS proxy must pass the

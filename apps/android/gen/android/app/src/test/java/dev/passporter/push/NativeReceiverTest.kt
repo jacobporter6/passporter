@@ -5,6 +5,7 @@ import dev.passporter.device.DeviceAuthException
 import dev.passporter.device.DeviceId
 import dev.passporter.device.HttpResponse
 import dev.passporter.notify.NoticeOutcome
+import dev.passporter.notify.actions.PairedAs
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.nio.file.Files
@@ -35,7 +36,7 @@ class NativeReceiverTest {
     private val bridge = FakeBridge()
     private val keys = FakeKeys()
     private val shown = mutableListOf<Pair<DeviceId, String>>()
-    private var pairedNow: DeviceId? = device("dev-0000000000000001")
+    private var pairedNow: PairedAs = PairedAs.Device(device("dev-0000000000000001"))
     private var ids = ArrayDeque(listOf(EnvelopeVector.registration, "00000000-0000-4000-8000-000000000002"))
     private val receiver = NativeReceiver(
         store = store,
@@ -45,7 +46,7 @@ class NativeReceiverTest {
             shown += owner to text
             NoticeOutcome.Posted(1)
         },
-        current = { pairedNow },
+        paired = { pairedNow },
         nowSecs = { EnvelopeVector.validAt },
         newId = { ids.removeFirst() },
     )
@@ -151,7 +152,7 @@ class NativeReceiverTest {
     fun aRefusedOrUnreachableRegistrationIsNotRegistered() {
         bridge.answers += 409
         assertEquals(NativeState.Refused(409), receiver.register())
-        assertNull("a new id next time", store.load().registrationId)
+        assertEquals("the id is kept", EnvelopeVector.registration, store.load().registrationId)
         bridge.failure = DeviceAuthException.Unreachable(java.io.IOException("offline"))
         assertEquals(NativeState.RetryLater, receiver.register())
         assertFalse(store.load().registered)
@@ -205,9 +206,15 @@ class NativeReceiverTest {
     @Test
     fun aMessageForAnEarlierPairingIsDroppedUnseen() {
         receiver.register()
-        pairedNow = device("dev-0000000000000002")
+        pairedNow = PairedAs.Device(device("dev-0000000000000002"))
         assertEquals(Ingested.OtherPairing, receiver.ingest(message("m1")))
-        assertTrue(shown.isEmpty())
+        // Unpaired since (a stream still being read while the reset runs): dropped too.
+        pairedNow = PairedAs.Nothing
+        assertEquals(Ingested.OtherPairing, receiver.ingest(message("m2")))
+        // When the app cannot tell, the registration counts.
+        pairedNow = PairedAs.Unknown
+        check(receiver.ingest(message("m3")) is Ingested.Shown)
+        assertEquals(1, shown.size)
     }
 
     @Test
@@ -257,6 +264,16 @@ class NativeReceiverTest {
         bridge.streams += NativeStream(404, null) {}
         assertEquals(NativeState.Registered, receiver.listen({ true }, {}, {}))
         assertEquals("POST ${EnvelopeVector.registration}", bridge.calls.last())
+    }
+
+    @Test
+    fun envelopesThatKeepFailingTheSignatureRegisterAgain() {
+        receiver.register()
+        val forged = message("m1", EnvelopeVector.with("expiresAt", EnvelopeVector.expiresAt + 1))
+        bridge.streams += stream(forged, forged, forged, message("m9"))
+        assertEquals(NativeState.Registered, receiver.listen({ true }, {}, {}))
+        assertEquals(listOf("POST ${EnvelopeVector.registration}", "POST ${EnvelopeVector.registration}"), bridge.calls.filter { it.startsWith("POST") })
+        assertTrue("the rest waits for the new registration", shown.isEmpty())
     }
 
     @Test

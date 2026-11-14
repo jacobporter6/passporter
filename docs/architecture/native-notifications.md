@@ -139,6 +139,17 @@ and [server license](https://github.com/binwiederhier/ntfy/blob/main/LICENSE).
 
 ## Transport and deployment options
 
+> **Where this differs from what was built, the build wins.** The proposal
+> below gives the companion its own accounts, per-device read credentials,
+> deny-by-default ACLs and a private container network. The built version
+> keeps it simpler: the companion has no accounts at all and listens on
+> loopback only (the generator uses the host network for that), the phone
+> never reaches it, and its lack of authentication is a recorded gap
+> ([security D22](../security.md#deferred-and-known-gaps)), bounded by
+> end-to-end encryption and the bridge's signature. Each registration has one
+> live stream at a time. The bridge-owned stream below is, in effect, what the
+> bridge's proxy route is, with ntfy as its queue.
+
 | Option | Benefit | Cost / decision |
 |---|---|---|
 | Bundled ntfy + internal native receiver | Existing encrypted publishing path; queue and resume support; no second app | Recommended first production candidate; adds a supervised service and provisioning adapter |

@@ -40,9 +40,10 @@ class NotificationSetup(
         return when {
             record.choice == Transport.EXTERNAL ->
                 if (external) status(true, R.string.push_status_external) else status(false, R.string.push_status_external_waiting)
-            record.registered && record.owner == paired.value -> when (state) {
-                NativeState.Connected -> status(true, R.string.push_status_builtin_connected)
-                NativeState.RetryLater -> status(false, R.string.push_status_builtin_retrying)
+            record.registered && record.owner == paired.value -> when {
+                NativeStatus.clockOff -> status(false, R.string.push_status_clock_off)
+                state == NativeState.Connected -> status(true, R.string.push_status_builtin_connected)
+                state == NativeState.RetryLater -> status(false, R.string.push_status_builtin_retrying)
                 else -> status(false, R.string.push_status_builtin_connecting)
             }
             state == NativeState.BridgeHasNone || state is NativeState.Refused ->

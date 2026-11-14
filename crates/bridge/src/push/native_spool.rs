@@ -37,6 +37,9 @@ pub(super) struct Pending {
     pub expires: u64,
     /// The signed envelope's JSON.
     pub envelope: String,
+    /// Its place in spooling order (set by [`Spool::put`]).
+    #[serde(default)]
+    pub seq: u64,
 }
 
 /// The spool: the file and its contents in memory, by message id.
@@ -47,21 +50,27 @@ pub(super) struct Spool {
 }
 
 impl Spool {
-    /// Reads the spool at `path` (none yet is an empty one).
+    /// Reads the spool at `path` (none yet is an empty one). Its contents
+    /// live an hour at most, so one that cannot be read back (invalid, over
+    /// its limits, not private) is set aside, with a warning, rather than
+    /// keeping the bridge from starting.
+    ///
+    /// # Errors
+    /// Such a spool could not be set aside.
     pub(super) fn open(path: &Path) -> Result<Self, StoreError> {
-        let corrupt = |message: &str| StoreError::Corrupt {
-            path: path.to_owned(),
-            message: message.into(),
-        };
         let items = if path.exists() {
-            let bytes = crate::config::read_private(path, MAX_BYTES)
-                .map_err(|_| corrupt("cannot read the built-in notice spool privately"))?;
-            let items: BTreeMap<String, Pending> = serde_json::from_slice(&bytes)
-                .map_err(|_| corrupt("invalid built-in notice spool"))?;
-            if items.len() > MAX_ITEMS || items.values().any(|i| i.envelope.len() > MAX_ENVELOPE) {
-                return Err(corrupt("built-in notice spool exceeds its limits"));
+            match read(path) {
+                Ok(items) => items,
+                Err(reason) => {
+                    let aside = path.with_extension("json.unreadable");
+                    tracing::warn!(reason, aside = %aside.display(), "setting the built-in notice spool aside");
+                    std::fs::rename(path, &aside).map_err(|source| StoreError::Io {
+                        path: path.to_owned(),
+                        source,
+                    })?;
+                    BTreeMap::new()
+                }
             }
-            items
         } else {
             BTreeMap::new()
         };
@@ -76,7 +85,18 @@ impl Spool {
     pub(super) fn put(&self, id: &str, item: &Pending) -> io::Result<()> {
         let mut items = self.lock();
         let mut next = items.clone();
-        next.insert(id.to_owned(), item.clone());
+        let seq = next
+            .values()
+            .map(|entry| entry.seq)
+            .max()
+            .map_or(0, |max| max + 1);
+        next.insert(
+            id.to_owned(),
+            Pending {
+                seq,
+                ..item.clone()
+            },
+        );
         let now = now();
         next.retain(|_, entry| entry.expires > now);
         while next
@@ -125,13 +145,23 @@ impl Spool {
     }
 }
 
-/// The id of the entry of `items` that expires first among those `which`
-/// selects. Every entry lives the same time, so that is the oldest.
+/// The spool at `path`, or why it cannot be used.
+fn read(path: &Path) -> Result<BTreeMap<String, Pending>, &'static str> {
+    let bytes =
+        crate::config::read_private(path, MAX_BYTES).map_err(|_| "not readable privately")?;
+    let items: BTreeMap<String, Pending> = serde_json::from_slice(&bytes).map_err(|_| "invalid")?;
+    if items.len() > MAX_ITEMS || items.values().any(|i| i.envelope.len() > MAX_ENVELOPE) {
+        return Err("over its limits");
+    }
+    Ok(items)
+}
+
+/// The id of the entry of `items` spooled first among those `which` selects.
 fn oldest(items: &BTreeMap<String, Pending>, which: impl Fn(&Pending) -> bool) -> Option<String> {
     items
         .iter()
         .filter(|(_, entry)| which(entry))
-        .min_by_key(|(_, entry)| entry.expires)
+        .min_by_key(|(_, entry)| entry.seq)
         .map(|(id, _)| id.clone())
 }
 
@@ -151,6 +181,7 @@ mod tests {
             registration,
             expires,
             envelope: "ciphertext".into(),
+            seq: 0,
         }
     }
 
@@ -212,21 +243,39 @@ mod tests {
     }
 
     #[test]
-    fn an_oversized_or_invalid_spool_is_refused() {
+    fn an_unreadable_spool_is_set_aside_and_the_bridge_starts_empty() {
         let dir = tempfile::tempdir().expect("tmp");
         let path = dir.path().join("spool.json");
+        let aside = path.with_extension("json.unreadable");
         write_atomically(&path, b"not json").expect("write");
-        assert!(matches!(
-            Spool::open(&path),
-            Err(StoreError::Corrupt { .. })
-        ));
+        assert!(Spool::open(&path).expect("starts").snapshot().is_empty());
+        assert!(aside.exists() && !path.exists());
         let big = serde_json::json!({
             "x": {"registration": registration(1), "expires": 1, "envelope": "a".repeat(MAX_ENVELOPE + 1)},
         });
         write_atomically(&path, big.to_string().as_bytes()).expect("write");
-        assert!(matches!(
-            Spool::open(&path),
-            Err(StoreError::Corrupt { .. })
-        ));
+        assert!(Spool::open(&path).expect("starts").snapshot().is_empty());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn envelopes_keep_the_order_they_were_spooled_in_across_a_restart() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("spool.json");
+        let spool = Spool::open(&path).expect("open");
+        // The same expiry second, and ids that sort the other way.
+        for id in ["z", "m", "a"] {
+            spool
+                .put(id, &pending(registration(1), now() + 60))
+                .expect("put");
+        }
+        let restarted = Spool::open(&path).expect("reopen");
+        restarted
+            .put("b", &pending(registration(1), now() + 60))
+            .expect("put");
+        let mut items: Vec<_> = restarted.snapshot().into_iter().collect();
+        items.sort_by_key(|(_, item)| item.seq);
+        let order: Vec<_> = items.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(order, ["z", "m", "a", "b"]);
     }
 }

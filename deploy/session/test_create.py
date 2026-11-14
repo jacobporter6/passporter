@@ -38,6 +38,8 @@ class DeploymentTest(unittest.TestCase):
             self.assertRegex(create.NTFY_IMAGE, r"@sha256:[0-9a-f]{64}$")
             self.assertNotIn("ports:", compose)
             self.assertIn("127.0.0.1:12586", compose)
+            self.assertIn("--visitor-request-limit-exempt-hosts=127.0.0.1", compose)
+            self.assertIn("--visitor-subscription-limit=64", compose)
             subprocess.run(["bash", "-n", str(root / "run.sh")], check=True)
             with self.assertRaises(FileExistsError):
                 create.create(args)

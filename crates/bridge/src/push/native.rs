@@ -21,8 +21,10 @@
 //! The companion listens on loopback only (`push.native_ntfy`, checked in
 //! `config.rs`) and sees only ciphertext, opaque topics and timing.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::{Body, Bytes};
@@ -36,7 +38,7 @@ use hyper_util::client::legacy::{Client, connect::HttpConnector};
 use hyper_util::rt::TokioExecutor;
 use protocol::{IdempotencyKey, NativeRegister, NativeRegistration, PushMessage, PushPayload};
 use serde::Serialize;
-use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, watch};
 
 use super::native_spool::{Pending, Spool};
 use super::subscription::BASE64URL;
@@ -96,9 +98,13 @@ pub(crate) enum NativeError {
     /// The spool could not be written.
     #[error("spooling the notice failed: {0}")]
     Spool(#[source] std::io::Error),
-    /// The companion did not take it.
+    /// The companion did not take it, for now: retried.
     #[error("the notification companion {0}")]
     Companion(&'static str),
+    /// The companion refused it for good (a 4xx other than 408 and 429):
+    /// dropped, so it never holds back the envelopes behind it.
+    #[error("the notification companion refused the notice ({0})")]
+    Rejected(StatusCode),
 }
 
 /// The private ntfy companion, configured by the operator, never named by
@@ -108,6 +114,12 @@ pub struct Companion {
     address: SocketAddr,
     client: Client<HttpConnector, Full<Bytes>>,
     streams: Arc<Semaphore>,
+    /// The open stream of each registration: a new one ends the old one
+    /// (dropping its sender), so a phone that reconnects from a new network
+    /// never holds two of [`MAX_STREAMS`] while the old connection lingers.
+    live: Mutex<HashMap<IdempotencyKey, (u64, watch::Sender<()>)>>,
+    /// Numbers the streams, to tell whose entry [`Self::live`] holds.
+    opened: AtomicU64,
     spool: Arc<Spool>,
     /// Wakes [`forward`] when a notice is spooled.
     spooled: Notify,
@@ -158,6 +170,8 @@ impl Companion {
             address,
             client: Client::builder(TokioExecutor::new()).build_http(),
             streams: Arc::new(Semaphore::new(MAX_STREAMS)),
+            live: Mutex::new(HashMap::new()),
+            opened: AtomicU64::new(0),
             spool: Arc::new(Spool::open(spool)?),
             spooled: Notify::new(),
         })
@@ -179,6 +193,7 @@ impl Companion {
             registration: registration.clone(),
             expires: now + LIFETIME_SECS,
             envelope,
+            seq: 0,
         };
         // One ping per message and device: unique per notice message.
         let id = format!("{registration}:{}", message.ping);
@@ -207,10 +222,39 @@ impl Companion {
             .await
             .map_err(|_| NativeError::Companion("did not answer in time"))?
             .map_err(|_| NativeError::Companion("is unreachable"))?;
-        if response.status().is_success() {
+        let status = response.status();
+        if status.is_success() {
             Ok(())
+        } else if status.is_client_error()
+            && status != StatusCode::REQUEST_TIMEOUT
+            && status != StatusCode::TOO_MANY_REQUESTS
+        {
+            Err(NativeError::Rejected(status))
         } else {
-            Err(NativeError::Companion("refused the notice"))
+            Err(NativeError::Companion("refused the notice for now"))
+        }
+    }
+
+    /// Makes `registration`'s new stream the live one, ending the one
+    /// before; its number and what tells it that a newer one took over.
+    fn take_over(&self, registration: &IdempotencyKey) -> (u64, watch::Receiver<()>) {
+        let number = self.opened.fetch_add(1, Ordering::Relaxed);
+        let (sender, receiver) = watch::channel(());
+        let previous = self
+            .live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(registration.clone(), (number, sender));
+        // Dropping its sender ends the previous stream.
+        drop(previous);
+        (number, receiver)
+    }
+
+    /// Forgets stream `number` of `registration`, unless a newer one took over.
+    fn release(&self, registration: &IdempotencyKey, number: u64) {
+        let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        if live.get(registration).is_some_and(|(n, _)| *n == number) {
+            live.remove(registration);
         }
     }
 }
@@ -220,11 +264,11 @@ fn topic(registration: &IdempotencyKey) -> String {
     format!("pp-{registration}")
 }
 
-/// Publishes the spool to the companion, oldest first, until `shutdown`:
-/// at once when a notice is spooled (and at start, for what a restart
-/// left), and again with a doubling backoff (up to a minute) while the
-/// companion fails. An envelope whose registration is gone, or that
-/// expired, is dropped unsent.
+/// Publishes the spool to the companion, in the order it was spooled,
+/// until `shutdown`: at once when a notice is spooled (and at start, for
+/// what a restart left), and again with a doubling backoff (up to a
+/// minute) while the companion fails. An envelope whose registration is
+/// gone, that expired, or that the companion refuses for good, is dropped.
 pub(super) async fn forward(push: Arc<Push>, mut shutdown: Shutdown) {
     let Some(companion) = &push.native else {
         return;
@@ -243,17 +287,23 @@ pub(super) async fn forward(push: Arc<Push>, mut shutdown: Shutdown) {
         }
         let mut failed = false;
         let mut pending: Vec<_> = companion.spool.snapshot().into_iter().collect();
-        pending.sort_by_key(|(_, item)| item.expires);
+        pending.sort_by_key(|(_, item)| item.seq);
         for (id, item) in pending {
             if item.expires > now() && registered(&push, &item.registration) {
                 let sent = tokio::select! {
                     () = shutdown.wait() => return,
                     sent = companion.send(&item.registration, &item.envelope) => sent,
                 };
-                if let Err(error) = sent {
-                    tracing::warn!(%error, "built-in notice not published; retrying");
-                    failed = true;
-                    break;
+                match sent {
+                    Ok(()) => {}
+                    Err(error @ NativeError::Rejected(_)) => {
+                        tracing::warn!(%error, "built-in notice dropped");
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "built-in notice not published; retrying");
+                        failed = true;
+                        break;
+                    }
                 }
             }
             let spool = Arc::clone(&companion.spool);
@@ -445,9 +495,19 @@ pub(crate) async fn stream(
         return Err(StatusCode::NOT_FOUND);
     }
     let since = since(raw.as_deref())?;
+    // The phone's previous stream (a connection it has left) ends first,
+    // giving back its permit.
+    let (number, superseded) = companion.take_over(&registration);
     let permit = Arc::clone(&companion.streams)
         .try_acquire_owned()
-        .map_err(|_| StatusCode::TOO_MANY_REQUESTS)?;
+        .map_err(|_| StatusCode::TOO_MANY_REQUESTS);
+    let permit = match permit {
+        Ok(permit) => permit,
+        Err(status) => {
+            companion.release(&registration, number);
+            return Err(status);
+        }
+    };
     let request = Request::get(format!(
         "http://{}/{}/json?since={since}",
         companion.address,
@@ -472,6 +532,8 @@ pub(crate) async fn stream(
         _permit: permit,
         push: Arc::clone(&push),
         registration,
+        number,
+        superseded,
         device: principal.device,
         revocation: principal.revocation,
         shutdown: state.shutdown.clone(),
@@ -500,10 +562,22 @@ struct Open {
     _permit: OwnedSemaphorePermit,
     push: Arc<Push>,
     registration: IdempotencyKey,
+    /// Its number ([`Companion::take_over`]).
+    number: u64,
+    /// Changes (or closes) once a newer stream of the registration opens.
+    superseded: watch::Receiver<()>,
     device: String,
     revocation: Revocation,
     shutdown: Shutdown,
     expires: tokio::time::Instant,
+}
+
+impl Drop for Open {
+    fn drop(&mut self) {
+        if let Some(companion) = &self.push.native {
+            companion.release(&self.registration, self.number);
+        }
+    }
 }
 
 impl Open {
@@ -515,6 +589,8 @@ impl Open {
             }
             tokio::select! {
                 () = self.revocation.revoked() => return None,
+                // A newer stream of the registration: this one is left.
+                _ = self.superseded.changed() => return None,
                 () = self.shutdown.wait() => return None,
                 () = tokio::time::sleep_until(self.expires) => return None,
                 () = tokio::time::sleep(RECHECK) => {}

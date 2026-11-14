@@ -10,10 +10,14 @@
     <string name="push_builtin_channel">Connection to your bridge</string>
     <string name="push_builtin_channel_description">Shown while Passporter keeps its connection to your bridge for agent news. You can hide this channel; news still arrives.</string>
     <string name="push_builtin_ongoing">Listening for agent news</string>
+    <string name="push_stopped_channel">Notification problems</string>
+    <string name="push_stopped_title">Agent news stopped</string>
+    <string name="push_stopped_text">Your bridge no longer offers its built-in notifications. Tap to set them up again.</string>
     <string name="push_status_not_paired">Pair with your bridge to get agent news.</string>
     <string name="push_status_blocked">Notifications are off for Passporter in Android\'s settings.</string>
     <string name="push_status_builtin_connected">Connected to your bridge.</string>
     <string name="push_status_builtin_connecting">Connecting to your bridge…</string>
+    <string name="push_status_clock_off">News arrives but is refused: this phone\'s clock is off. Check the date and time in Android\'s settings.</string>
     <string name="push_status_builtin_retrying">Can\'t reach your bridge right now; retrying.</string>
     <string name="push_status_external">News comes through the ntfy app.</string>
     <string name="push_status_external_waiting">Waiting for the ntfy app to connect. Is it installed?</string>

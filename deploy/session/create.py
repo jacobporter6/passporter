@@ -90,6 +90,11 @@ services:
       - --cache-file=/var/cache/ntfy/cache.db
       - --cache-duration=1h
       - --keepalive-interval=20s
+      # The bridge is ntfy's only client: one visitor (127.0.0.1) for every
+      # publish and stream, above ntfy's per-visitor defaults (a request
+      # burst of 60, 30 subscriptions).
+      - --visitor-request-limit-exempt-hosts=127.0.0.1
+      - --visitor-subscription-limit=64
     healthcheck:
       test: [CMD, wget, -q, -O, /dev/null, "http://127.0.0.1:{args.ntfy_port}/v1/health"]
       interval: 10s

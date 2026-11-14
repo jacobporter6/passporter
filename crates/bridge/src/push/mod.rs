@@ -546,10 +546,13 @@ impl Push {
     async fn deliver(self: Arc<Self>, subscription: Subscription, message: &PushMessage) {
         let host = subscription.endpoint.host();
         if let Some(registration) = native::registration(&subscription.endpoint) {
-            if let Some(companion) = &self.native
-                && let Err(error) = companion
-                    .publish(&registration, &subscription, message, &self.vapid)
-                    .await
+            let Some(companion) = &self.native else {
+                tracing::debug!("built-in subscription skipped: no push.native_ntfy configured");
+                return;
+            };
+            if let Err(error) = companion
+                .publish(&registration, &subscription, message, &self.vapid)
+                .await
             {
                 tracing::warn!(%error, "built-in notice not spooled");
             }

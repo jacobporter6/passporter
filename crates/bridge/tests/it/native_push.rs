@@ -46,6 +46,8 @@ struct FakeNtfy {
     published: watch::Sender<u64>,
     /// While set, publishing answers 503.
     down: AtomicBool,
+    /// While set, publishing answers 413 (a refusal for good).
+    rejecting: AtomicBool,
 }
 
 impl FakeNtfy {
@@ -75,6 +77,9 @@ impl FakeNtfy {
 async fn publish(State(ntfy): State<Arc<FakeNtfy>>, body: Bytes) -> StatusCode {
     if ntfy.down.load(Ordering::SeqCst) {
         return StatusCode::SERVICE_UNAVAILABLE;
+    }
+    if ntfy.rejecting.load(Ordering::SeqCst) {
+        return StatusCode::PAYLOAD_TOO_LARGE;
     }
     let json: serde_json::Value = serde_json::from_slice(&body).expect("publish json");
     let topic = json["topic"].as_str().expect("topic").to_owned();
@@ -491,5 +496,71 @@ async fn a_notice_spooled_while_the_companion_is_down_arrives_once_it_is_back() 
     let mut stream = open_stream(&phone).await;
     let event = next_message(&mut stream).await;
     verified(&event, &phone, &registration);
+    phone.paired.bridge.stop().await.expect("stop");
+}
+
+#[tokio::test]
+async fn a_new_stream_of_the_registration_ends_the_one_it_left() {
+    let (companion, _ntfy) = FakeNtfy::start().await;
+    let phone = phone_with(Some(companion)).await;
+    register(&phone).await;
+    let mut left = open_stream(&phone).await;
+    let _new = open_stream(&phone).await;
+    tokio::time::timeout(PATIENCE, async {
+        while let Some(Ok(_)) = left.frame().await {}
+    })
+    .await
+    .expect("the stream the phone left ends");
+    phone.paired.bridge.stop().await.expect("stop");
+}
+
+#[tokio::test]
+async fn a_notice_the_companion_refuses_for_good_does_not_hold_back_the_next() {
+    let (companion, ntfy) = FakeNtfy::start().await;
+    let herdr = CuttableHerdr::new();
+    let first = herdr
+        .fake
+        .add_agent("first", "claude", herdr::AgentStatus::Idle);
+    let second = herdr
+        .fake
+        .add_agent("second", "claude", herdr::AgentStatus::Idle);
+    let phone = phone_on(herdr, Some(companion)).await;
+    let fake = phone.paired.bridge.fake();
+    tokio::time::timeout(PATIENCE, async {
+        loop {
+            let response = phone
+                .paired
+                .with(&phone.token, "GET", "/v1/agents", "")
+                .await;
+            let agents: Vec<protocol::Agent> =
+                serde_json::from_str(&response.body).expect("agents");
+            if agents.len() == 2 {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("both agents listed");
+    let registration = register(&phone).await;
+    let topic = format!("pp-{}", phone.registration);
+
+    ntfy.rejecting.store(true, Ordering::SeqCst);
+    fake.set_status(&first, herdr::AgentStatus::Working);
+    fake.set_status(&first, herdr::AgentStatus::Blocked);
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    ntfy.rejecting.store(false, Ordering::SeqCst);
+    // Past the per-device minimum interval between pings.
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    fake.set_status(&second, herdr::AgentStatus::Working);
+    fake.set_status(&second, herdr::AgentStatus::Blocked);
+
+    let mut stream = open_stream(&phone).await;
+    verified(&next_message(&mut stream).await, &phone, &registration);
+    assert_eq!(
+        ntfy.messages_after(&topic, "all").len(),
+        1,
+        "the refused notice was dropped, not retried"
+    );
     phone.paired.bridge.stop().await.expect("stop");
 }

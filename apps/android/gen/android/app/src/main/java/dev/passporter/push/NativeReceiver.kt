@@ -4,6 +4,7 @@ import android.util.Log
 import dev.passporter.device.DeviceAuthException
 import dev.passporter.device.DeviceId
 import dev.passporter.notify.NoticeOutcome
+import dev.passporter.notify.actions.PairedAs
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
@@ -82,7 +83,10 @@ sealed interface Ingested {
  * - An envelope is shown only if it verifies with the key the bridge
  *   named at registration, is for this registration, has not expired, and
  *   decrypts with this app's keys; and only while its owner is still the
- *   pairing ([current]). Its notices' actions answer as the owner.
+ *   pairing ([paired]: not paired counts as not the owner, as for
+ *   [IncomingPush]). Its notices' actions answer as the owner.
+ * - Several envelopes in a row that fail the signature mean the bridge's
+ *   key changed (a new VAPID key): it registers again for the new key.
  * - The stream's cursor advances after a message is shown, so a crash in
  *   between shows it once more at worst; the notifier drops a ping it has
  *   shown.
@@ -93,8 +97,8 @@ class NativeReceiver(
     private val keys: KeyManager,
     /** Shows a decrypted payload as [DeviceId]'s (`NoticeNotifier.show`). */
     private val show: (DeviceId, String) -> NoticeOutcome,
-    /** The device the app is paired as now, cheaply ([dev.passporter.device.DeviceAuth.savedDevice]). */
-    private val current: () -> DeviceId?,
+    /** What the app is paired as now, cheaply ([dev.passporter.device.DeviceAuth.savedDevice]). */
+    private val paired: () -> PairedAs,
     /** Unix seconds now. */
     private val nowSecs: () -> Long = { System.currentTimeMillis() / 1000 },
     /** A fresh registration id. */
@@ -106,6 +110,10 @@ class NativeReceiver(
     /** Whether the bridge confirmed the registration in this process: registered once per process. */
     @Volatile
     private var confirmed = false
+
+    /** Envelopes in a row that failed the signature ([MAX_FORGED]). */
+    @Volatile
+    private var forged = 0
 
     /** The record (safe from any thread). */
     fun record(): NativeRecord = store.load()
@@ -154,12 +162,9 @@ class NativeReceiver(
                 save(record.copy(signingKey = null))
                 NativeState.BridgeHasNone
             }
-            409 -> {
-                // Taken (never in practice: ids are random) or the device is full: a new id next time.
-                save(record.copy(registrationId = null, signingKey = null))
-                NativeState.Refused(409)
-            }
-            400, 403 -> NativeState.Refused(response.status)
+            // 409: the device holds its 8 subscriptions (an id taken by another device is
+            // never seen in practice: ids are random). The id is kept for the next try.
+            400, 403, 409 -> NativeState.Refused(response.status)
             else -> NativeState.RetryLater
         }
         Log.i(PUSH_TAG, "built-in registration: status ${response.status}, $state")
@@ -181,6 +186,7 @@ class NativeReceiver(
         }
         if (!save(record.copy(signingKey = key))) return NativeState.RetryLater
         confirmed = true
+        forged = 0
         return NativeState.Registered
     }
 
@@ -290,6 +296,11 @@ class NativeReceiver(
                     val line = stream.nextLine() ?: break
                     val outcome = guard { ingest(line) }
                     if (outcome !is Ingested.Ignored) Log.i(PUSH_TAG, "built-in message: $outcome")
+                    if (forged >= MAX_FORGED) {
+                        Log.w(PUSH_TAG, "envelopes keep failing the signature: registering again")
+                        confirmed = false
+                        return register()
+                    }
                 }
             } catch (e: IOException) {
                 // A dropped connection or a read timeout: reconnect. Never logged with content.
@@ -312,7 +323,9 @@ class NativeReceiver(
         val registration = record.registrationId
         val key = record.signingKey
         if (owner == null || registration == null || key == null) return Ingested.OtherPairing
-        val outcome = when (val opened = NativeEnvelope.open(event.optString("message"), registration, key, nowSecs())) {
+        val opened = NativeEnvelope.open(event.optString("message"), registration, key, nowSecs())
+        forged = if (opened == Opened.Refused(EnvelopeRefusal.FORGED)) forged + 1 else 0
+        val outcome = when (opened) {
             is Opened.Refused -> Ingested.Refused(opened.reason)
             is Opened.Ciphertext -> deliver(opened.body, owner)
         }
@@ -330,9 +343,8 @@ class NativeReceiver(
             null
         } ?: return Ingested.Undecryptable
         val text = utf8(plaintext) ?: return Ingested.Undecryptable
-        // When the app cannot tell (no record read), the registration counts, as for IncomingPush.
-        val now = current()
-        if (now != null && now != owner) return Ingested.OtherPairing
+        // Unpaired, or paired as another device: dropped, as IncomingPush drops it.
+        if (paired().isNot(owner)) return Ingested.OtherPairing
         return Ingested.Shown(show(owner, text))
     }
 
@@ -355,6 +367,9 @@ class NativeReceiver(
     }
 
     companion object {
+        /** Envelopes in a row failing the signature before registering again. */
+        const val MAX_FORGED = 3
+
         /** The key manager instance of the built-in receiver's keys. */
         const val KEY_INSTANCE = "passporter-builtin"
 

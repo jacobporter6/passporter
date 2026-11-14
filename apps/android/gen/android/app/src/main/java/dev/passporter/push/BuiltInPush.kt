@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import dev.passporter.device.DeviceAuth
 import dev.passporter.notify.NoticeNotifier
+import dev.passporter.notify.actions.PairedAs
 import java.io.File
 import org.unifiedpush.android.connector.keys.DefaultKeyManager
 
@@ -47,7 +48,8 @@ object BuiltInPush {
                 bridge = DeviceAuthNativeBridge(app, auth),
                 keys = DefaultKeyManager(app),
                 show = { owner, text -> NoticeNotifier(app) { owner }.show(text) },
-                current = auth::savedDevice,
+                // The saved record only: no Keystore call per message.
+                paired = { auth.savedDevice()?.let(PairedAs::Device) ?: PairedAs.Nothing },
             )
         }.also { receiver = it }
     }
@@ -62,7 +64,7 @@ object BuiltInPush {
         val app = context.applicationContext
         val receiver = receiver(app)
         val state = receiver.register()
-        NativeStatus.set(state)
+        NativeStatus.registered(state)
         val builtIn = when (state) {
             NativeState.Registered, NativeState.Connected -> true
             // Kept while the bridge is out of reach, if it worked before.
@@ -73,7 +75,9 @@ object BuiltInPush {
             NativePushService.stop(app)
             return Settled.EXTERNAL
         }
-        NativePushService.start(app)
+        // Only once the service runs is the external registration dropped:
+        // Android refuses the start if the app went to the background meanwhile.
+        if (!NativePushService.start(app)) return Settled.EXTERNAL
         val left = PushWork.sync(app).leave()
         Log.i(PUSH_TAG, "built-in transport: $state; external registration: $left")
         return Settled.BUILT_IN
@@ -94,11 +98,28 @@ object NativeStatus {
     @Volatile
     private var state: NativeState? = null
 
+    /**
+     * Whether the last message was refused as expired: the phone's clock is
+     * off (more than ten minutes behind, or past the hour), so every notice
+     * is.
+     */
+    @Volatile
+    var clockOff: Boolean = false
+
     /** The last state, or null before anything was tried in this process. */
     fun get(): NativeState? = state
 
-    /** Records [next]. */
+    /** Records [next], what the service saw. */
     fun set(next: NativeState) {
+        state = next
+    }
+
+    /**
+     * Records [next], a registration's outcome: a confirmed registration
+     * does not hide that the service's stream is open.
+     */
+    fun registered(next: NativeState) {
+        if (next == NativeState.Registered && state == NativeState.Connected) return
         state = next
     }
 }

@@ -579,7 +579,8 @@ or what is wrong, and *Set up*, which opens the app's own dialog: *Retry*,
 *Allow* to run without battery restrictions (Android's own prompt). The
 launcher's *Notifications* shortcut and the built-in transport's ongoing
 notification open the same dialog. The status is in-process: what the
-service saw last, whether notifications are allowed, and whether the
+service saw last (including messages refused as expired, which means the
+phone's clock is off), whether notifications are allowed, and whether the
 bridge holds the external registration.
 
 ### The built-in receiver
@@ -608,12 +609,18 @@ bridge holds the external registration.
 - **The stream.** `?since=<last message id>` resumes after a reconnect; the
   cursor advances after a message is shown (a crash in between shows it
   once more at worst, and the notifier drops a ping it has shown). A 404
-  means the bridge lost the registration: it registers again. A 400 drops
-  the cursor. Lines over 16 KiB end the stream.
+  means the bridge lost the registration: it registers again; so do three
+  envelopes in a row that fail the signature (a new VAPID key on the
+  bridge). A 400 drops the cursor. Lines over 16 KiB end the stream. A 409
+  at registration (the device holds its 8 subscriptions) keeps the
+  registration id for the next try.
 - **The service.** One connection thread, reconnecting with a jittered
   backoff from 1 s doubling to 5 minutes, waiting for a network (a network
   callback wakes it), holding a 10-second wake lock per line. It stops
-  itself when the transport is off. `BOOT_COMPLETED` and
+  itself when the transport is off; if that is because the bridge no
+  longer offers it, it first posts *Agent news stopped* (a tap opens the
+  setup). The external registration is dropped only once the service has
+  started. `BOOT_COMPLETED` and
   `MY_PACKAGE_REPLACED` start it again if it was on; a force stop is final
   until you open the app. Its notification is on a minimum-importance
   channel (*Connection to your bridge*), which you may hide.
@@ -627,7 +634,8 @@ mkdir -m 700 /tmp/pp-ntfy
 docker run -d --rm --name pp-test-ntfy --network host --read-only --cap-drop ALL \
   --user "$(id -u):$(id -g)" -v /tmp/pp-ntfy:/var/cache/ntfy \
   binwiederhier/ntfy@sha256:1875ddcf815c8a3c981d6d78c67a93452d0abba79b1ab9520b1f5f5238902bd7 \
-  serve --listen-http=127.0.0.1:12586 --cache-file=/var/cache/ntfy/cache.db --cache-duration=1h
+  serve --listen-http=127.0.0.1:12586 --cache-file=/var/cache/ntfy/cache.db --cache-duration=1h \
+  --visitor-request-limit-exempt-hosts=127.0.0.1 --visitor-subscription-limit=64
 PASSPORTER_TEST_NTFY=127.0.0.1:12586 cargo nextest run -p bridge native_push
 docker stop pp-test-ntfy
 ```
