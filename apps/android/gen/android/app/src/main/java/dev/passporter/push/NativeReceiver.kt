@@ -272,8 +272,8 @@ class NativeReceiver(
      * thread). [connected] is called once the stream is open; each line is
      * handled inside [guard] (a wake lock). Answers why
      * it ended: [NativeState.RetryLater] when worth reconnecting, else what
-     * stops the service. A registration the bridge no longer holds (404)
-     * is made afresh first.
+     * stops the service. A registration the bridge no longer holds (404),
+     * or one that has no signing key yet, is made afresh first.
      */
     fun listen(
         running: () -> Boolean,
@@ -286,9 +286,11 @@ class NativeReceiver(
         val owner = record.owner?.let(DeviceId::parse)
         val id = record.registrationId
         if (owner == null || id == null) return NativeState.NotPaired
-        // Owner and id but no key yet: a registration in progress (a new
-        // pairing's, say). Come back shortly rather than stop.
-        if (!record.registered) return NativeState.RetryLater
+        // Owner and id but no key: a registration in progress (a new pairing's,
+        // which register() waits for under the lock) or one whose post failed
+        // (after a 404 here, or a refresh). Nothing else on this path would
+        // register again, so register here, as after a 404; not after a stop.
+        if (!record.registered) return if (running()) register() else NativeState.RetryLater
         val path = streamPath(id) + "?since=" + (record.cursor ?: "all")
         val stream = try {
             bridge.openStream(path, owner)

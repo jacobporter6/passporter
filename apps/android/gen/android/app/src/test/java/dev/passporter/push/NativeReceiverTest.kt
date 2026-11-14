@@ -319,10 +319,50 @@ class NativeReceiverTest {
     }
 
     @Test
-    fun aRegistrationInProgressIsWaitedForNotAStop() {
+    fun aRegistrationWithoutASigningKeyIsMadeAgainBeforeListening() {
+        // A re-pair whose post failed: owner and id saved, no signing key.
+        bridge.failure = DeviceAuthException.Unreachable(java.io.IOException("offline"))
+        assertEquals(NativeState.RetryLater, receiver.register())
+        bridge.failure = null
+        assertFalse(store.load().registered)
+        assertEquals(NativeState.Registered, receiver.listen({ true }, {}, {}))
+        assertEquals(listOf("POST ${EnvelopeVector.registration}"), bridge.calls)
+        assertEquals(EnvelopeVector.signer, store.load().signingKey)
+    }
+
+    @Test
+    fun aFailedRegistrationAfterA404IsTriedAgainOnTheNextListen() {
+        receiver.register()
+        bridge.streams += NativeStream(404, null) {}
+        bridge.answers += 503
+        assertEquals(NativeState.RetryLater, receiver.listen({ true }, {}, {}))
+        assertFalse(store.load().registered)
+        bridge.answers += 502
+        assertEquals("tried again, not stuck", NativeState.RetryLater, receiver.listen({ true }, {}, {}))
+        assertEquals(3, bridge.calls.count { it.startsWith("POST") })
+        // The bridge is back: registered, then the stream opens with the new key.
+        assertEquals(NativeState.Registered, receiver.listen({ true }, {}, {}))
+        assertEquals(EnvelopeVector.signer, store.load().signingKey)
+        bridge.streams += stream(message("m1"))
+        receiver.listen({ true }, {}, {})
+        assertEquals(1, shown.size)
+    }
+
+    @Test
+    fun aRegistrationWithoutASigningKeyIsNotMadeAfterAStop() {
         receiver.register()
         store.save(store.load().copy(signingKey = null))
-        assertEquals(NativeState.RetryLater, receiver.listen({ true }, {}, {}))
+        val posts = bridge.calls.size
+        assertEquals(NativeState.RetryLater, receiver.listen({ false }, {}, {}))
+        assertEquals(posts, bridge.calls.size)
+    }
+
+    @Test
+    fun aRegistrationWithoutASigningKeyThatIsRefusedStopsTheService() {
+        receiver.register()
+        store.save(store.load().copy(signingKey = null))
+        bridge.answers += 404
+        assertEquals(NativeState.BridgeHasNone, receiver.listen({ true }, {}, {}))
     }
 
     @Test
