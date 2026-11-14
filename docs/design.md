@@ -3,9 +3,9 @@
 > Work from anywhere. A mobile-first, voice-first control surface for the coding
 > agents running in herdr on your dev machine.
 
-Status: **v0.1**. This document mixes what is built (the bridge and the PWA)
-with what is planned (the Android app, WebAuthn step-up); each section says
-which.
+Status: **v0.1**. This document mixes what is built (the bridge, the PWA and
+the Android app) with what is planned (WebAuthn step-up, several herdr
+sessions); each section says which.
 
 ---
 
@@ -97,7 +97,7 @@ Three deliverables:
 |---|---|---|
 | `crates/bridge` | Rust service (axum) on the dev machine. Wraps herdr + Claude transcripts into a small, typed, authenticated API. | systemd user unit (or any supervisor); reachable only through your HTTPS proxy |
 | `crates/web` | Mobile-first PWA, Rust compiled to WASM (Leptos). Works on its own in Chrome; also the UI inside the Android app. | served by the bridge |
-| `apps/android` (planned, not built) | Tauri 2 mobile shell around `crates/web` plus Kotlin plugins: notifications with inline reply, Android Auto messaging, UnifiedPush, recording that survives app kills. | sideloaded APK |
+| `apps/android` (built; device and car checks by a human pending) | Tauri 2 mobile shell around `crates/web` plus Kotlin plugins: notifications with inline reply, Android Auto messaging, the bridge's built-in notification transport or UnifiedPush, recording that survives app kills. | sideloaded APK |
 
 Shared crates: `crates/protocol` (serde types compiled into both the bridge and
 the WASM frontend, so an API mismatch is a build error), `crates/herdr`
@@ -217,8 +217,9 @@ PendingInput = {
   composer instead). Suggestions are computed on the bridge **when the event
   arrives, before the push goes out**, so they are ready when the notification
   is opened.
-- **Natural-language → option mapping** (used for car and notification
-  replies): a strict, conservative classifier. Clear affirmatives ("yes",
+- **Natural-language → option mapping** (used for car replies; the
+  native notification asks with explicit *Allow once* / *Deny* / *Deny with
+  note* actions instead, §6.6): a strict, conservative classifier. Clear affirmatives ("yes",
   "go ahead", "do it") map to *Allow once* / proceed. Anything else maps to
   *Deny + feedback text*, or is sent as a prompt. "Always allow" is never chosen
   from free text.
@@ -268,6 +269,21 @@ PendingInput = {
   `MediaRecorder` holds the take in memory until it stops. iOS Safari stops
   the capture outright. Recording in the background belongs to the native
   app, with a foreground service.
+- **In the Android app the take is native** (the `recorder` plugin): a
+  foreground service (type `microphone`, with an ongoing notification and
+  its Stop) records AAC in ADTS frames to app-private storage
+  (`noBackupFilesDir`), each frame written as it is encoded, so the take
+  goes on with the screen off and survives the webview reloading or the
+  app being swiped away; if the process is killed, the frames on disk are
+  kept (at most the encoder's last fraction of a second is lost) and
+  recovered at the next start. A call or another app taking the audio
+  focus ends the take, keeping what was said. The PWA only starts and
+  stops it, then reads the audio over IPC into the same clip a browser
+  take makes (stored in `IndexedDB` under the take's id, released natively
+  only after that), so upload, transcription and the card are unchanged.
+  A take no page was waiting for (it ended while the app was closed, or
+  was recovered) waits on its agent's card, never sent unseen. Without the
+  plugin (Chrome, an old `WebView`) the PWA records as above.
 - whisper.cpp's server ends every segment with a newline, and a segment can
   end mid-word or before punctuation (`" dict"`, `"ation,"`): segments join
   as they are, each one's leading space deciding where a word starts.
@@ -328,16 +344,27 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
 - **Push transport**: the bridge sends a **content-free wake ping** with
   Web Push (VAPID), through the browser vendor's push service. The PWA wakes
   on it and fetches the actual content over the authenticated API. The
-  planned Android app would use UnifiedPush instead (for example a
-  self-hosted ntfy, allowed with `[push] ntfy_host`). Doze often blocks that
+  Android app instead collects its messages from the bridge itself when the
+  bridge runs the **built-in transport**: a private ntfy companion on
+  loopback (`[push] native_ntfy`) holds them, and the app reads its own
+  topic through an app-scope stream on the bridge's origin, signed by the
+  bridge so the companion cannot forge one. Without a companion, or by
+  choice, it uses a UnifiedPush distributor on the phone (for example a
+  self-hosted ntfy, allowed with `[push] ntfy_host`), as before; one
+  transport at a time. Doze often blocks that
   fetch for a native app, so its subscription opts into **encrypted
   notices** (`"payload": "notice"`): the same message also carries, per
   agent with news, its name, state, one line (what it asks, or the turn's
   headline), the TL;DR *Decide* line once there is one, and the pending id
   to answer with. Every message is end-to-end encrypted to the phone (RFC
-  8291), so the push service only sees ciphertext. The bridge side of
-  notices is built; the app is not. Web Push (PWA) subscriptions keep the
-  content-free ping.
+  8291), so the push service (or the companion) only sees ciphertext. The
+  app registers while paired and shows a notice as a notification with no
+  network call, also with its process cold (T31a, T32a; the built-in
+  receiver keeps its stream open in a foreground service); a tap opens
+  that agent (T30c), and it can be answered from the
+  shade (T31b); Android Auto reads announced notices aloud and takes
+  spoken replies (T33). Web Push (PWA) subscriptions keep the
+  content-free ping, and the PWA inside the app makes none.
 - **Only news disrupts.** A message is sent only if its reason still holds
   when its debounce ends (the agent still blocked, or its finished turn
   still unread), and only for a change since the last one; it carries
@@ -345,14 +372,26 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
   its finished turn still unread. If a push still finds nothing to report (a
   late race), the PWA never alerts: a showing notification is re-shown
   silently in place, else a silent one is shown and closes itself.
-- **Notifications** (native, planned) use `MessagingStyle`, one conversation per agent.
-  A reply action uses `RemoteInput` (inline text/voice reply in the shade),
-  plus option actions such as *Allow once* / *Deny* for permissions and a
-  mark-as-read action.
-- **Android Auto** (planned) uses the messaging category: no custom car UI, just
+- **Notifications** (native) use `MessagingStyle`, one conversation per agent.
+  A dialog gets *Allow once*, *Deny* and *Deny with note* (`RemoteInput`,
+  the note as feedback, like the PWA's "Deny opens dictation"); a finished
+  turn gets a `RemoteInput` reply (inline text/voice) sent as a prompt.
+  Each answer is a durable WorkManager job with its idempotency key and
+  `origin: "notification"` (§6.5), and the notification shows how it went
+  (sent, already answered, the agent moved on). The app clears
+  notifications whose news is old when it comes to the foreground. The
+  shade offers no mark-as-read: that waits for a bridge API (a turn is
+  unread until herdr sees the pane); Android Auto's does nothing (below). See docs/development/android.md.
+- **Android Auto** (T33) uses the messaging category: no custom car UI, just
   correctly built notifications plus the `automotive_app_desc` declaration
   (`<uses name="notification"/>`). Android Auto reads "widget: run
-  pnpm test?" aloud and takes a spoken reply. Notes:
+  pnpm test?" aloud and takes a spoken reply. An announced notice carries
+  two invisible actions, reply and mark-as-read, the notification's only
+  semantic actions (the shade's carry none, so the car never reaches
+  them); they act only while Android Auto projects, then also with the
+  phone locked. The bridge's answer sentence is added to the conversation
+  for the car to read back. Mark-as-read does nothing (no bridge API; the
+  notification stays for the car). See docs/development/android.md. Notes:
   - Sideloaded app, so you must enable Android Auto developer settings →
     "Unknown sources". This is accepted (decision D3).
   - Car text is the notice's one line (what a blocked agent asks), or a
@@ -360,7 +399,9 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
     one-line command a permission asks about.
   - **Announcements**: blocked agents always; a finished agent only once
     its TL;DR has a *Decide* line (`[push] car_announce_done`, default
-    `"decide"`; `"always"` or `"never"`).
+    `"decide"`; `"always"` or `"never"`). A notice not announced gets no
+    car actions; Google requires both for Android Auto, so it is expected
+    to stay silent in the car (Android Auto's behaviour: a DHU check).
   - **Car replies** go to `POST /v1/agents/:id/car-reply` with the
     transcribed utterance as heard, the pending id from the notice, and an
     idempotency key; the app adds nothing. The bridge maps it with a tiny
@@ -384,8 +425,9 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
     `car`. The bridge derives every action's origin from the session's
     scope, never the body, and a car session reaches only the car-safe
     endpoints (agent list, pending, TL;DR, car reply, car-origin actions).
-  - Tested with the Android Auto Desktop Head Unit (DHU), then in the car.
-    These tasks need a human to verify them.
+  - Tested with the Android Auto Desktop Head Unit (DHU), then in the car
+    (docs/development/android.md has the DHU guide). These need a human
+    to verify them.
 
 ## 7. UI design principles
 
@@ -414,7 +456,7 @@ third-party push or CDN service; and **malicious content in agent output**
 |---|---|
 | Network | The bridge listens on loopback by default; the only way in is your HTTPS proxy (§3). Keep it reachable only over a VPN (Tailscale, WireGuard) where you can. Plain HTTP off loopback is refused unless explicitly opted into (insecure MVP mode). |
 | TLS | Required: pairing (WebCrypto), service workers, push and the mic need a secure context. Use a publicly trusted certificate (Tailscale's `*.ts.net`, Let's Encrypt) so nothing needs installing on the phone. A proxy on another host connects to the bridge over HTTPS with the bridge's own leaf (`[tls]`). |
-| Device pairing | `passporter pair` on the dev machine shows a one-time QR (5 min, single use). The phone generates a **non-extractable** keypair (WebCrypto P-256 in the PWA; Android Keystore in the APK) and registers the public key. Every session token comes from signing a server challenge. Tokens are short-lived (15 min) and refresh by signature. |
+| Device pairing | `passporter pair` on the dev machine shows a one-time QR (5 min, single use). The phone generates a **non-extractable** P-256 keypair and registers the public key. In a browser it is a WebCrypto key in the PWA's IndexedDB. In the APK it is an Android Keystore key (StrongBox when the phone has one) owned by native code, which also pairs, signs in and caches tokens, so native features (notification replies, push registration and Android Auto) can authenticate with the app closed; the PWA in the APK asks the native layer for app-scope tokens over IPC and never gets a car token. Native IPC is granted only on a WebView that labels each frame's origin (`WEB_MESSAGE_LISTENER`); on an older one the app grants nothing and the PWA keeps a WebCrypto key, as in Chrome. The Keystore key needs no user authentication, so background replies work; biometric step-up is the planned Step-up below. Every session token comes from signing a server challenge. Tokens are short-lived (15 min) and refresh by signature. |
 | Revocation | `passporter devices list / revoke <id>`. Revocation takes effect immediately and kills open WebSockets. |
 | Step-up (planned) | Elevated actions (*Always allow*, interrupt, any option tagged elevated) are to require device biometric unlock (WebAuthn user verification / BiometricPrompt). Not built yet: today they are refused, except raw keys and interrupt from the app, which go through without step-up (the keypad is the only way to answer a dialog, and an interrupt is one of its keys; see docs/security.md, known gaps). Never available from the car. |
 | Session scope | Every session has a scope chosen when it is made: `app` or `car`. The action origin is derived from it (a car session is always `car`; an app session's claim can only narrow), and car sessions reach only the car-safe endpoints (§6.6). |
@@ -435,12 +477,12 @@ third-party push or CDN service; and **malicious content in agent output**
 | Bridge | axum + tokio + tower-http, rusqlite, rustls | Small, typed, one static binary |
 | Validation | serde types in `crates/protocol`, strict deserialization (`deny_unknown_fields` on inbound) | Shared types on both ends; the compiler checks the contract |
 | Web | Leptos (CSR) → WASM, built with trunk; `web-sys`/`gloo` for browser APIs (IndexedDB, MediaRecorder, WebAuthn, Push) | Fine-grained reactivity without a virtual DOM; small bundle. Browser APIs are clunkier from Rust, which costs effort, not quality |
-| Android (planned) | Tauri 2 mobile + Kotlin plugins | Rust-native shell around the same Leptos UI; proper Kotlin plugin system |
+| Android (built) | Tauri 2 mobile + Kotlin plugins | Rust-native shell around the same Leptos UI; proper Kotlin plugin system |
 | Speech-to-text | whisper.cpp server (CUDA or CPU), local | Private. A GPU makes large models fast |
-| Push | Web Push (VAPID) in the PWA; UnifiedPush (e.g. ntfy) planned for the APK | No content through third parties |
+| Push | Web Push (VAPID) in the PWA; in the APK the bridge's built-in transport (a private ntfy companion) or UnifiedPush (e.g. ntfy), with notices end-to-end encrypted | No content through third parties |
 | Summaries | `claude -p --model haiku` | Uses the existing login, no stored key |
 | Tests | cargo-nextest; a fake herdr (`FakeHerdr`) for integration tests; headless Chromium over CDP for E2E smoke tests (`just e2e`) | Everything but device and car behavior is verifiable in CI |
-| CI | `just gate` (fmt, clippy pedantic `-D warnings` on host + wasm, nextest, release build, PWA size budget, cargo deny) in GitHub Actions | One gate, locally and in CI |
+| CI | `just gate` (fmt, clippy pedantic `-D warnings` on host + wasm, nextest, release build, PWA size budget, cargo deny, and the Android checks where the Android toolchain is installed) in GitHub Actions | One gate, locally and in CI |
 
 ## 10. Status and roadmap
 
@@ -449,7 +491,7 @@ third-party push or CDN service; and **malicious content in agent output**
 | **0. Foundations** | Cargo workspace, gate, `crates/herdr` | done |
 | **1. Bridge** | Agents, threads, pending inputs, actions, pairing, TL;DR, transcription, Web Push, spawn, runbooks | done |
 | **2. PWA** | Triage, detail, quick reply, dictation, outbox, TL;DR | done; usable in Chrome on Android |
-| **3. Android** | APK with native notifications + inline reply, UnifiedPush, native recorder, Android Auto | planned |
+| **3. Android** | APK with native notifications + inline reply, UnifiedPush, native recorder, Android Auto | built (shell, device identity, UnifiedPush notices, the built-in transport, answers from the shade, native recorder, Android Auto); device and car checks by a human pending |
 | **4. Hardening** | WebAuthn step-up, app lock, SQLite ledger, audit viewer | planned (see docs/security.md, known gaps) |
 | **5. Sessions** | One app over several herdr sessions (below) | planned |
 
@@ -476,6 +518,11 @@ The plan is sessions as the app's top level, kept apart rather than merged:
   unique within a session. This changes ids, so existing deep links and
   outbox entries need a migration or a clean break on upgrade.
 
+An alternative is proposed in [native notifications](architecture/native-notifications.md#product-boundary):
+one bridge (with its own companion) per session, and one phone paired with
+several bridges, its pairing, notification and action identities qualified
+by bridge rather than agent ids changed. Not decided.
+
 
 ## 11. Decisions
 
@@ -488,3 +535,4 @@ The plan is sessions as the app's top level, kept apart rather than merged:
 | D5 | Tauri 2 mobile (Rust) rather than Capacitor or a fully native Compose app | **accepted** |
 | D7 | Rust everywhere it can run, including a Leptos/WASM frontend | **accepted** |
 | D6 | Built largely by coding agents under human review; every change passes the same gate | **accepted** |
+| D8 | The Android app loads the PWA from the paired bridge's HTTPS origin rather than bundling it. The shell bundles only a Connect page that asks for that origin once; Tauri IPC is granted at runtime to exactly that origin (a remote capability), and the webview refuses to navigate anywhere else, so no other page reaches native plugins. Bundling the PWA was rejected: it would need a configurable API base, CORS and a widened CSP on the bridge, in-app pairing, and service workers and WebCrypto storage on Tauri's local scheme, and every UI change would need a new APK. The cost: the first launch needs the bridge reachable, and Web Push is unavailable in the webview (the app's own transport, built-in or UnifiedPush, replaces it, §6.6). Since T32c the device key in the APK is native (Android Keystore, §8), so native plugins authenticate on their own | **accepted** (T30b) |

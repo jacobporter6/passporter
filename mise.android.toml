@@ -1,0 +1,13 @@
+# Android app only, loaded with MISE_ENV=android (deploy/android/setup.sh,
+# docs/development/android.md). Kept out of mise.toml so the bridge and PWA
+# don't pull a JDK or override ANDROID_HOME.
+[tools]
+# JDK 21: AGP 9 needs 17+, and Gradle 9.6 runs on up to 26. mise sets JAVA_HOME.
+java = "temurin-21.0.13+9.0.LTS"
+"github:tauri-apps/tauri" = { version = "tauri-cli-v2.12.4", bin = "cargo-tauri" }
+
+# Where deploy/android/setup.sh puts the Android SDK. NDK_HOME's version
+# must match NDK_VERSION in that script.
+[env]
+ANDROID_HOME = "{{env.HOME}}/.local/share/android-sdk"
+NDK_HOME = "{{env.ANDROID_HOME}}/ndk/29.0.14206865"

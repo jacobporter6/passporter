@@ -1,0 +1,495 @@
+package dev.passporter.push
+
+import android.util.Log
+import dev.passporter.device.DeviceAuthException
+import dev.passporter.device.DeviceId
+import dev.passporter.notify.NoticeOutcome
+import dev.passporter.notify.actions.PairedAs
+import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
+import java.security.GeneralSecurityException
+import java.util.UUID
+import org.json.JSONException
+import org.json.JSONObject
+import org.unifiedpush.android.connector.keys.KeyManager
+
+/** Where the built-in transport stands ([NativeReceiver]). */
+sealed interface NativeState {
+    /** Not paired: nothing registered, no keys kept. */
+    data object NotPaired : NativeState
+
+    /** You chose the external distributor: the built-in transport is off. */
+    data object Off : NativeState
+
+    /** The bridge has no companion (`POST /v1/push/native` answers 404). */
+    data object BridgeHasNone : NativeState
+
+    /** The bridge holds this app's registration; the stream is not open. */
+    data object Registered : NativeState
+
+    /** The stream is open: news arrives. */
+    data object Connected : NativeState
+
+    /** The bridge refused the registration ([status]: 400, 403 or 409). */
+    data class Refused(
+        /** The HTTP status. */
+        val status: Int,
+    ) : NativeState
+
+    /** Could not reach the bridge, or it failed: tried again later. */
+    data object RetryLater : NativeState
+}
+
+/** What became of one stream line ([NativeReceiver.ingest]). */
+sealed interface Ingested {
+    /** Not a message (ntfy's `open` and `keepalive` events): nothing to do. */
+    data object Ignored : Ingested
+
+    /** The envelope was refused unread. */
+    data class Refused(
+        /** Why. */
+        val reason: EnvelopeRefusal,
+    ) : Ingested
+
+    /** Verified, but the receiver's keys could not decrypt it, or it was not text. */
+    data object Undecryptable : Ingested
+
+    /** The pairing changed since registering: dropped, as [IncomingPush] drops it. */
+    data object OtherPairing : Ingested
+
+    /**
+     * Decrypting or showing it failed unexpectedly (a Keystore provider
+     * error, the notifier refused by the platform): logged, and read past,
+     * so the same message cannot fail again on every reconnect.
+     */
+    data object Failed : Ingested
+
+    /** Shown by the notifier, which did [outcome]. */
+    data class Shown(
+        /** What the notifier did. */
+        val outcome: NoticeOutcome,
+    ) : Ingested
+}
+
+/**
+ * The built-in transport's receiver (design §6.6): registers this pairing
+ * with the bridge's companion and reads its stream of signed envelopes,
+ * turning each into notifications through the same path as a push from
+ * an external distributor. Every method is blocking: [register], [leave]
+ * and [reset] run on [PushWork]'s thread, [listen] on the
+ * [NativePushService]'s.
+ *
+ * - The receiver's Web Push keys are the connector's key manager's, under
+ *   their own instance ([KEY_INSTANCE]), apart from the external
+ *   registration's.
+ * - The registration belongs to the device it was made for (its owner). A
+ *   new pairing, or none, drops the keys and the registration, so what the
+ *   old pairing's bridge still sends can no longer be decrypted.
+ * - An envelope is shown only if it verifies with the key the bridge
+ *   named at registration, is for this registration, has not expired, and
+ *   decrypts with this app's keys; and only while its owner is still the
+ *   pairing ([paired]: not paired counts as not the owner, as for
+ *   [IncomingPush]). Its notices' actions answer as the owner.
+ * - Several envelopes in a row that fail the signature mean the bridge's
+ *   key changed (a new VAPID key): it registers again for the new key.
+ * - The stream's cursor advances after each message, whatever became of
+ *   it (shown, refused, failed), so a crash in between shows it once more
+ *   at worst; the notifier drops a ping it has shown. A message that fails
+ *   unexpectedly ([Ingested.Failed]) is read past, never retried.
+ */
+class NativeReceiver(
+    private val store: NativeStore,
+    private val bridge: NativeBridge,
+    private val keys: KeyManager,
+    /** Shows a decrypted payload as [DeviceId]'s (`NoticeNotifier.show`). */
+    private val show: (DeviceId, String) -> NoticeOutcome,
+    /** What the app is paired as now, cheaply ([dev.passporter.device.DeviceAuth.savedDevice]). */
+    private val paired: () -> PairedAs,
+    /** Unix seconds now. */
+    private val nowSecs: () -> Long = { System.currentTimeMillis() / 1000 },
+    /** A fresh registration id. */
+    private val newId: () -> String = { UUID.randomUUID().toString() },
+    /** A monotonic clock, in milliseconds. */
+    private val elapsedMs: () -> Long = { System.nanoTime() / 1_000_000 },
+) {
+    /** Serializes changes of the record and the keys ([register] runs on two threads). */
+    private val lock = Any()
+
+    /**
+     * Called when the registration is dropped or replaced ([reset]): the
+     * service ends the stream it is reading, which belongs to the old one
+     * (perhaps of another pairing), and reconnects with the new record.
+     */
+    @Volatile
+    var onRegistrationChanged: (() -> Unit)? = null
+
+    /**
+     * Registration posts finished so far ([post]), so the stream's
+     * [registerAgain] can tell that another ended while it waited (a
+     * refresh's). Written under [lock].
+     */
+    @Volatile
+    private var attempts = 0L
+
+    /** Whether the bridge confirmed the registration in this process: registered once per process. */
+    @Volatile
+    private var confirmed = false
+
+    /** Envelopes in a row that failed the signature ([MAX_FORGED]). */
+    @Volatile
+    private var forged = 0
+
+    /**
+     * When forged envelopes last made it register again (elapsed millis),
+     * so a local publisher cannot make it re-register and reconnect in a loop.
+     */
+    @Volatile
+    private var reregisteredAt: Long? = null
+
+    /** The record (safe from any thread). */
+    fun record(): NativeRecord = store.load()
+
+    /**
+     * Registers this pairing with the bridge's companion, unless you chose
+     * the external distributor ([NativeState.Off], which also leaves) or
+     * the app is not paired.
+     */
+    fun register(): NativeState = synchronized(lock) { registerLocked() }
+
+    private fun registerLocked(): NativeState {
+        val device = try {
+            bridge.deviceId()
+        } catch (e: DeviceAuthException) {
+            return NativeState.RetryLater
+        } ?: return notPaired()
+        var record = store.load()
+        if (record.choice == Transport.EXTERNAL) return leave()
+        if (record.owner != null && record.owner != device.value) record = reset()
+        if (record.registered && confirmed) return NativeState.Registered
+        return try {
+            post(device, record)
+        } finally {
+            attempts++
+        }
+    }
+
+    /** Posts the registration of [owned] (made for [device]) with this app's keys. Under [lock]. */
+    private fun post(device: DeviceId, owned: NativeRecord): NativeState {
+        var record = owned
+        val public = try {
+            if (!keys.exists(KEY_INSTANCE)) keys.generate(KEY_INSTANCE)
+            keys.getPublicKeySet(KEY_INSTANCE)
+        } catch (e: GeneralSecurityException) {
+            Log.e(PUSH_TAG, "could not make the built-in receiver's keys", e)
+            null
+        } ?: return NativeState.RetryLater
+        val id = record.registrationId ?: newId()
+        // Saved before posting: the bridge may keep it even if its answer is lost.
+        record = record.copy(owner = device.value, registrationId = id)
+        if (!save(record)) return NativeState.RetryLater
+        val body = JSONObject()
+            .put("registrationId", id)
+            .put("p256dh", public.pubKey)
+            .put("auth", public.auth)
+            .toString()
+        val response = try {
+            bridge.register(body, device)
+        } catch (e: DeviceAuthException) {
+            return failed(e)
+        }
+        val state = when (response.status) {
+            200 -> registered(record, response.body)
+            404 -> {
+                save(record.copy(signingKey = null))
+                NativeState.BridgeHasNone
+            }
+            // 409: the device holds its 8 subscriptions (an id taken by another device is
+            // never seen in practice: ids are random). The id is kept for the next try,
+            // the signing key is not: the bridge holds no registration for it.
+            400, 403, 409 -> {
+                save(record.copy(signingKey = null))
+                NativeState.Refused(response.status)
+            }
+            else -> NativeState.RetryLater
+        }
+        Log.i(PUSH_TAG, "built-in registration: status ${response.status}, $state")
+        return state
+    }
+
+    /** Reads a 200 answer to the registration: its signing key, once checked. */
+    private fun registered(record: NativeRecord, body: String): NativeState {
+        val answer = try {
+            JSONObject(body)
+        } catch (e: JSONException) {
+            return NativeState.RetryLater
+        }
+        val key = answer.optString("signingKey")
+        val expected = streamPath(record.registrationId ?: return NativeState.RetryLater)
+        if (answer.optInt("version") != 1 || !NativeEnvelope.isSigningKey(key) || answer.optString("streamPath") != expected) {
+            Log.w(PUSH_TAG, "the bridge's built-in registration answer was not understood")
+            return NativeState.RetryLater
+        }
+        if (!save(record.copy(signingKey = key))) return NativeState.RetryLater
+        confirmed = true
+        forged = 0
+        return NativeState.Registered
+    }
+
+    /**
+     * Turns the built-in transport off for the external distributor: asks
+     * the bridge to drop the registration (best effort: unread envelopes
+     * expire within the hour, and revoking the device drops it too), then
+     * forgets it and the keys.
+     */
+    fun leave(): NativeState = synchronized(lock) {
+        val record = store.load()
+        val owner = record.owner?.let(DeviceId::parse)
+        val id = record.registrationId
+        if (owner != null && id != null) {
+            val endpoint = JSONObject().put("endpoint", RESERVED_PREFIX + id).toString()
+            try {
+                val status = bridge.unsubscribe(endpoint, owner).status
+                Log.i(PUSH_TAG, "dropping the built-in registration: status $status")
+            } catch (e: DeviceAuthException) {
+                Log.w(PUSH_TAG, "could not drop the built-in registration: ${e.code}")
+            }
+        }
+        reset()
+        NativeState.Off
+    }
+
+    /** Forgets the registration and deletes the keys, keeping your choice; the record now. */
+    fun reset(): NativeRecord = synchronized(lock) {
+        confirmed = false
+        try {
+            if (keys.exists(KEY_INSTANCE)) keys.delete(KEY_INSTANCE)
+        } catch (e: GeneralSecurityException) {
+            Log.e(PUSH_TAG, "could not delete the built-in receiver's keys", e)
+        }
+        val left = store.load().forgotten()
+        save(left)
+        onRegistrationChanged?.invoke()
+        left
+    }
+
+    /** Sets your [choice]; the next [register] acts on it. */
+    fun choose(choice: Transport) {
+        synchronized(lock) { save(store.load().copy(choice = choice)) }
+    }
+
+    private fun notPaired(): NativeState {
+        if (store.load().owner != null) reset()
+        return NativeState.NotPaired
+    }
+
+    private fun failed(e: DeviceAuthException): NativeState = when (e) {
+        is DeviceAuthException.NotPaired, is DeviceAuthException.Forgotten, is DeviceAuthException.NoBridge -> notPaired()
+        else -> {
+            Log.w(PUSH_TAG, "could not reach the bridge: ${e.code}")
+            NativeState.RetryLater
+        }
+    }
+
+    /**
+     * Reads the stream once, until it ends, it fails, or [running] turns
+     * false (closing what [opened] was given also ends it, from another
+     * thread). [connected] is called once the stream is open, if it is
+     * still the record's (under the receiver's lock: keep it quick); each line is
+     * handled inside [guard] (a wake lock). Answers why
+     * it ended: [NativeState.RetryLater] when worth reconnecting, else what
+     * stops the service. A registration the bridge no longer holds (404),
+     * or one that has no signing key yet, is made afresh first.
+     */
+    fun listen(
+        running: () -> Boolean,
+        opened: (NativeStream) -> Unit,
+        connected: () -> Unit,
+        guard: (() -> Ingested) -> Ingested = { it() },
+    ): NativeState {
+        // Before the record is read: an attempt after this one decides for it.
+        val seen = attempts
+        val record = store.load()
+        if (record.choice == Transport.EXTERNAL) return NativeState.Off
+        val owner = record.owner?.let(DeviceId::parse)
+        val id = record.registrationId
+        if (owner == null || id == null) return NativeState.NotPaired
+        // Owner and id but no key: a registration in progress (a new pairing's,
+        // which register() waits for under the lock) or one whose post failed
+        // (after a 404 here, or a refresh). Nothing else on this path would
+        // register again, so register here, as after a 404.
+        if (!record.registered) return registerAgain(running, seen)
+        val path = streamPath(id) + "?since=" + (record.cursor ?: "all")
+        val stream = try {
+            bridge.openStream(path, owner)
+        } catch (e: DeviceAuthException) {
+            return failed(e)
+        } catch (e: IOException) {
+            return NativeState.RetryLater
+        }
+        stream.use {
+            opened(stream)
+            when (stream.status) {
+                200 -> Unit
+                404 -> {
+                    val now = attempts
+                    synchronized(lock) {
+                        confirmed = false
+                        save(store.load().copy(signingKey = null))
+                    }
+                    // Not after a stop: that would make keys and a registration nobody wants.
+                    return registerAgain(running, now)
+                }
+                else -> return NativeState.RetryLater
+            }
+            // Under the lock, so a reset (a new pairing's registration) comes
+            // either before, and this stream is not the record's, or after,
+            // and its onRegistrationChanged sees the connection.
+            val current = synchronized(lock) {
+                val now = store.load()
+                val mine = now.registrationId == id && now.owner == owner.value
+                if (mine) {
+                    // Remembered for the pairing: its external registration can go now.
+                    if (!now.streamConnected) save(now.copy(streamConnected = true))
+                    connected()
+                }
+                mine
+            }
+            if (!current) return NativeState.RetryLater
+            try {
+                // Read only while the record is still the one this stream was opened for.
+                while (running() && store.load().let { it.registrationId == id && it.owner == owner.value }) {
+                    val line = stream.nextLine() ?: break
+                    val outcome = guard { ingest(line) }
+                    if (outcome !is Ingested.Ignored) Log.i(PUSH_TAG, "built-in message: $outcome")
+                    if (forged >= MAX_FORGED && running() && mayReregister()) {
+                        Log.w(PUSH_TAG, "envelopes keep failing the signature: registering again")
+                        forged = 0
+                        confirmed = false
+                        return register()
+                    }
+                }
+            } catch (e: IOException) {
+                // A dropped connection or a read timeout: reconnect. Never logged with content.
+            }
+        }
+        return NativeState.RetryLater
+    }
+
+    /**
+     * Registers again for the stream ([listen]) of the record it read after
+     * [seen] attempts, unless the service stopped or another attempt (a
+     * refresh's) ran while it waited for the lock: one that succeeded
+     * answers [NativeState.Registered], one that failed [NativeState.RetryLater]
+     * (backed off, not posted again at once). Checked under the lock: a stop
+     * during a refresh's registration must make none.
+     */
+    private fun registerAgain(running: () -> Boolean, seen: Long): NativeState = synchronized(lock) {
+        when {
+            !running() -> NativeState.RetryLater
+            attempts != seen -> if (store.load().registered && confirmed) NativeState.Registered else NativeState.RetryLater
+            else -> registerLocked()
+        }
+    }
+
+    /**
+     * Whether forged envelopes may make it register again now: once per
+     * [REREGISTER_EVERY_MS] (a new VAPID key needs it once; a local
+     * publisher sending forgeries must not get a loop).
+     */
+    private fun mayReregister(): Boolean {
+        val now = elapsedMs()
+        val last = reregisteredAt
+        if (last != null && now - last < REREGISTER_EVERY_MS) return false
+        reregisteredAt = now
+        return true
+    }
+
+    /** Handles one stream line. Never logs its content. */
+    fun ingest(line: String): Ingested {
+        val event = try {
+            JSONObject(line)
+        } catch (e: JSONException) {
+            return Ingested.Ignored
+        }
+        if (event.optString("event") != "message") return Ingested.Ignored
+        val id = event.optString("id").takeIf(::isCursor) ?: return Ingested.Ignored
+        val record = store.load()
+        val owner = record.owner?.let(DeviceId::parse)
+        val registration = record.registrationId
+        val key = record.signingKey
+        if (owner == null || registration == null || key == null) return Ingested.OtherPairing
+        try {
+            val opened = NativeEnvelope.open(event.optString("message"), registration, key, nowSecs())
+            forged = if (opened == Opened.Refused(EnvelopeRefusal.FORGED)) forged + 1 else 0
+            return when (opened) {
+                is Opened.Refused -> Ingested.Refused(opened.reason)
+                is Opened.Ciphertext -> try {
+                    deliver(opened.body, owner)
+                } catch (e: RuntimeException) {
+                    // Never with content: the exception's class only.
+                    Log.e(PUSH_TAG, "could not decrypt or show a built-in message: ${e.javaClass.name}")
+                    Ingested.Failed
+                }
+            }
+        } finally {
+            // Read past it whatever became of it: a refused message stays refused, and
+            // one that failed must not fail again on every reconnect.
+            synchronized(lock) {
+                if (store.load().registrationId == registration) save(store.load().copy(cursor = id))
+            }
+        }
+    }
+
+    private fun deliver(body: ByteArray, owner: DeviceId): Ingested {
+        val plaintext = try {
+            keys.decrypt(KEY_INSTANCE, body)
+        } catch (e: GeneralSecurityException) {
+            null
+        } ?: return Ingested.Undecryptable
+        val text = utf8(plaintext) ?: return Ingested.Undecryptable
+        // Unpaired, or paired as another device: dropped, as IncomingPush drops it.
+        if (paired().isNot(owner)) return Ingested.OtherPairing
+        return Ingested.Shown(show(owner, text))
+    }
+
+    private fun save(record: NativeRecord): Boolean = try {
+        store.save(record)
+        true
+    } catch (e: IOException) {
+        Log.e(PUSH_TAG, "could not save the built-in record", e)
+        false
+    }
+
+    private fun utf8(bytes: ByteArray): String? = try {
+        Charsets.UTF_8.newDecoder()
+            .onMalformedInput(CodingErrorAction.REPORT)
+            .onUnmappableCharacter(CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(bytes))
+            .toString()
+    } catch (e: CharacterCodingException) {
+        null
+    }
+
+    companion object {
+        /** Envelopes in a row failing the signature before registering again. */
+        const val MAX_FORGED = 3
+
+        /** The least time between two registrations forged envelopes cause. */
+        const val REREGISTER_EVERY_MS = 30 * 60 * 1000L
+
+        /** The key manager instance of the built-in receiver's keys. */
+        const val KEY_INSTANCE = "passporter-builtin"
+
+        /** The bridge's reserved endpoint prefix (`push::native`). */
+        private const val RESERVED_PREFIX = "https://native.passporter.invalid/"
+
+        /** The stream of registration [id]. */
+        fun streamPath(id: String): String = "/v1/push/native/$id/stream"
+
+        /** Whether [value] is a stream cursor the bridge accepts (ntfy's message ids). */
+        fun isCursor(value: String): Boolean =
+            value.length in 1..64 && value.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it == '-' || it == '_' }
+    }
+}

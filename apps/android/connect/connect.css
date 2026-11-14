@@ -1,0 +1,105 @@
+/* Colours and sizes from crates/web/style/tokens.css. */
+:root {
+  color-scheme: dark;
+  --c-bg: #0b0d10;
+  --c-surface-2: #191d23;
+  --c-hairline-strong: rgb(255 255 255 / 0.13);
+  --c-text: #eef0f3;
+  --c-text-2: #aab2bc;
+  --c-danger: #e9a3a3;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font: 1rem/1.5 system-ui, sans-serif;
+}
+
+main {
+  max-width: 32rem;
+  margin: 0 auto;
+  padding: max(3rem, env(safe-area-inset-top)) 1rem 2rem;
+}
+
+h1 {
+  font-size: 1.5rem;
+  line-height: 1.25;
+  margin: 0 0 0.75rem;
+}
+
+p {
+  color: var(--c-text-2);
+  margin: 0 0 1.5rem;
+}
+
+code {
+  overflow-wrap: anywhere;
+}
+
+label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+input,
+button {
+  width: 100%;
+  min-height: 3rem;
+  border-radius: 0.75rem;
+  font: inherit;
+}
+
+input {
+  padding: 0 1rem;
+  border: 1px solid var(--c-hairline-strong);
+  background: var(--c-surface-2);
+  color: var(--c-text);
+}
+
+#error {
+  min-height: 1.5rem;
+  margin: 0.5rem 0 1rem;
+  color: var(--c-danger);
+}
+
+button {
+  border: 0;
+  background: var(--c-text);
+  color: var(--c-bg);
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.6;
+}
+
+.note {
+  margin-top: 2rem;
+  font-size: 0.875rem;
+}
+
+.actions {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.actions p {
+  margin: 0 0 0.25rem;
+}
+
+button.secondary {
+  border: 1px solid var(--c-hairline-strong);
+  background: var(--c-surface-2);
+  color: var(--c-text);
+}
+
+[hidden] {
+  display: none !important;
+}

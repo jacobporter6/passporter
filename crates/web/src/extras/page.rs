@@ -299,7 +299,7 @@ fn answer(ctx: &Ctx, ask: Ask, a: JsValue, b: JsValue) -> JsValue {
         | Ask::ClearSnapshots
         | Ask::PushProbe
         | Ask::PushEnable
-        | Ask::PushDisable => future_to_promise(answer_later(app, live, nav, ask, text, b)).into(),
+        | Ask::PushDisable => future_to_promise(answer_later(app, live, nav, ask, text)).into(),
     }
 }
 
@@ -310,7 +310,6 @@ async fn answer_later(
     nav: Nav,
     ask: Ask,
     text: String,
-    b: JsValue,
 ) -> Result<JsValue, JsValue> {
     let outcome = |done: Result<(), String>| {
         done.map_or_else(
@@ -320,7 +319,9 @@ async fn answer_later(
     };
     Ok(match ask {
         Ask::OpenAgent => {
-            spawn::open_agent(app, live, nav, &text, b.as_string()).await;
+            if let Ok(opened) = serde_json::from_str(&text) {
+                spawn::open_agent(app, live, nav, opened).await;
+            }
             JsValue::UNDEFINED
         }
         Ask::Forget => outcome(settings::forget(app, live).await),

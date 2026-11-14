@@ -1,0 +1,125 @@
+package dev.passporter.notify
+
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import android.util.Log
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import dev.passporter.device.DeviceId
+import dev.passporter.notify.actions.PairedAs
+
+/** What [NoticeNotifier.show] did with a payload. */
+sealed interface NoticeOutcome {
+    /** Posted [count] notifications (none for a bare ping). */
+    data class Posted(
+        /** How many. */
+        val count: Int,
+    ) : NoticeOutcome
+
+    /** The same message was shown before: nothing posted. */
+    data object Duplicate : NoticeOutcome
+
+    /** Notifications are off for the app (or not yet allowed): nothing posted. */
+    data object NotAllowed : NoticeOutcome
+
+    /**
+     * The app is no longer paired as the message's device (a new pairing,
+     * or none, since the caller checked): nothing posted.
+     */
+    data object OtherPairing : NoticeOutcome
+
+    /** Not a notice message ([NoticeParser]): nothing posted. */
+    data class Invalid(
+        /** What was wrong. */
+        val error: NoticeError,
+    ) : NoticeOutcome
+}
+
+/**
+ * Posts the notifications of decrypted push messages: the one entry point
+ * of this package for the push receiver.
+ *
+ * Every notice of a new message is news and alerts ([NotificationPlanner]);
+ * a message delivered twice is recognised by its ping ([RecentPings]).
+ * Its actions are made for [device], the pairing the message came to
+ * ([dev.passporter.notify.actions.DeviceStamp]); without one it has none.
+ * The pairing is checked again under [NotificationLock], which a pairing
+ * reset clears the shade under, so a notice of the old pairing cannot
+ * come back after it.
+ */
+class NoticeNotifier(
+    context: Context,
+    /** The device the push keys were registered for (`PushRecord.owner`). */
+    private val device: () -> DeviceId?,
+    /** What the app is paired as now, cheaply (`DeviceAuth.savedDevice`). */
+    private val paired: () -> PairedAs,
+) {
+    private val context = context.applicationContext
+    private val manager = NotificationManagerCompat.from(this.context)
+    private val pings = RecentPings(this.context)
+
+    /**
+     * Shows the notices in [payload], the decrypted plaintext of a push
+     * message. The outcome lets the caller fall back (for example to a
+     * generic notification); an invalid payload is logged by field name
+     * only.
+     */
+    fun show(payload: String): NoticeOutcome =
+        when (val parse = NoticeParser.parse(payload)) {
+            is NoticeParse.Parsed -> show(parse.message)
+            is NoticeParse.Invalid -> {
+                Log.w(TAG, "invalid notice message: ${parse.error}")
+                NoticeOutcome.Invalid(parse.error)
+            }
+        }
+
+    /** Shows [message]'s news. */
+    fun show(message: NoticeMessage): NoticeOutcome {
+        if (!canPost()) return NoticeOutcome.NotAllowed
+        // One message at a time, so a retry racing its original is seen;
+        // and never in the middle of an answer's update of the same
+        // conversation (dev.passporter.notify.actions.ActionFeedback).
+        synchronized(NotificationLock) {
+            val device = device()
+            // Again under the lock: a reset between the caller's check and here cleared the shade.
+            if (paired().isNot(device)) return NoticeOutcome.OtherPairing
+            if (message.ping in pings.all()) return NoticeOutcome.Duplicate
+            pings.add(message.ping)
+            val notices = NotificationPlanner.plan(message)
+            NoticeNotification.createChannels(context)
+            val now = System.currentTimeMillis()
+            for ((posted, notice) in notices.withIndex()) {
+                try {
+                    ShortcutManagerCompat.pushDynamicShortcut(context, NoticeNotification.shortcut(context, notice))
+                } catch (e: IllegalArgumentException) {
+                    // Refused (a pinned one Android will not re-enable, say): the notice still shows.
+                    Log.w(TAG, "could not push an agent's shortcut", e)
+                } catch (e: IllegalStateException) {
+                    Log.w(TAG, "could not push an agent's shortcut", e)
+                }
+                val notification = NoticeNotification.build(context, notice, now, device)
+                try {
+                    manager.notify(NoticeNotification.tag(notice.agentId), NoticeNotification.ID, notification)
+                } catch (_: SecurityException) {
+                    // The permission was revoked between the check and the post.
+                    return if (posted == 0) NoticeOutcome.NotAllowed else NoticeOutcome.Posted(posted)
+                }
+            }
+            return NoticeOutcome.Posted(notices.size)
+        }
+    }
+
+    private fun canPost(): Boolean {
+        val granted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        return granted && manager.areNotificationsEnabled()
+    }
+
+    private companion object {
+        const val TAG = "PassporterNotify"
+    }
+}

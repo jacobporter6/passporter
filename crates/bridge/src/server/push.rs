@@ -110,6 +110,12 @@ pub(crate) async fn subscribe(
 ) -> Result<StatusCode, Refusal> {
     let push = service(&state)?;
     let subscription: Subscription = parse(&body)?;
+    if crate::push::native::is_reserved(&subscription.endpoint) {
+        return Err(Refusal(
+            StatusCode::BAD_REQUEST,
+            Some("reserved for the built-in transport (POST /v1/push/native)".to_owned()),
+        ));
+    }
     push.hosts()
         .check(&subscription.endpoint)
         .map_err(|error| Refusal(StatusCode::BAD_REQUEST, Some(error.to_string())))?;

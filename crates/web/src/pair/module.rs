@@ -9,7 +9,8 @@
 //! The two modules have separate memories and talk through plain values:
 //! the page mounts the module's view into an element of its own and hands
 //! it a host (made here) for toasts, for adopting the device key the
-//! module made or the token it checked (the page stores them: the session
+//! module made (or the Android app's native one it paired) or the token
+//! it checked (the page stores them: the session
 //! lives here, [`session`]), and for leaving the screen.
 
 use core::cell::RefCell;
@@ -113,6 +114,13 @@ fn host(app: AppState, nav: Nav) -> Result<JsValue, JsValue> {
                 })
             },
         )
+        .into_js_value(),
+    )?;
+    set(
+        "adoptNative",
+        Closure::<dyn Fn() -> js_sys::Promise>::new(move || {
+            future_to_promise(async move { Ok(outcome(session::adopt_native(app).await)) })
+        })
         .into_js_value(),
     )?;
     set(

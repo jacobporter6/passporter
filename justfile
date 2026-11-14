@@ -9,10 +9,11 @@ default:
     @just --list
 
 # Format check, lints (host + wasm), tests. Must pass before you open a PR.
-verify: fmt-check lint test
+verify: fmt-check lint test deploy-test
 
-# The full gate (CI runs this): verify + release build + PWA size budget + supply-chain audit.
-gate: verify build web-size audit
+# The full gate (CI runs this): verify + release build + PWA size budget + supply-chain audit,
+# plus the Android checks where the Android toolchain is installed.
+gate: verify build web-size audit android-gate
 
 fmt:
     cargo fmt --all
@@ -35,6 +36,10 @@ lint-wasm:
 test:
     cargo nextest run --workspace --all-features --locked --no-tests=warn
 
+# The deployment generator's tests (temporary files only; nothing starts).
+deploy-test:
+    python3 -I -B -m unittest discover -s deploy/session -p 'test_*.py'
+
 build:
     cargo build --workspace --release --locked
 
@@ -42,7 +47,14 @@ audit:
     cargo deny --locked check
 
 # Release build of the PWA into crates/web/dist (trunk runs wasm-bindgen and wasm-opt).
+# Panic locations name dependency and std sources by absolute path; mapping the
+# cargo home and the toolchain to fixed prefixes makes the WASM, and so the size
+# budget (`web-size`), the same on every machine.
 web-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    remap=$(just _web-remap)
+    eval "$remap"
     cd crates/web && trunk build --release --locked
 
 # Fail if the PWA's gzipped WASM is over budget (400 KiB).
@@ -51,7 +63,23 @@ web-size: web-build
 
 # Serve the PWA on 127.0.0.1:8080 with the production CSP (no autoreload).
 web-serve:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    remap=$(just _web-remap)
+    eval "$remap"
     cd crates/web && trunk serve --release --locked
+
+# The path remap `web-build` and `web-serve` share, as an `export` line.
+# Cargo ignores per-target flags when RUSTFLAGS is set, so that is refused.
+_web-remap:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -n "${RUSTFLAGS:-}${CARGO_ENCODED_RUSTFLAGS:-}" ]]; then
+        echo "web: unset RUSTFLAGS: it would drop the path remap and change the WASM sizes" >&2
+        exit 1
+    fi
+    printf 'export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS=%q\n' \
+        "--remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=$(rustc --print sysroot)=/rustc"
 
 # Documentation site (docs-site/, needs Node 22+): tests, build, link and render checks. Not part of `gate`.
 docs:
@@ -76,6 +104,86 @@ e2e:
 demo: web-build
     cargo build --locked --package bridge --bin passporter-bridge
     cargo run --locked --package e2e --example demo
+
+# Install the Android toolchain under your user: JDK, SDK, NDK, Rust targets, Tauri CLI (docs/development/android.md).
+android-setup:
+    deploy/android/setup.sh
+
+# Android APK (apps/android) into target/android/: `debug` (default) or `release`, signed with the PASSPORTER_ANDROID_* env vars.
+android-build profile="debug" abi="aarch64":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export MISE_ENV=android
+    eval "$(mise env --shell bash)"
+    if ! command -v cargo-tauri >/dev/null || [[ ! -d "${ANDROID_HOME:-}/build-tools/37.0.0" ]]; then
+        echo "android: no Android toolchain; run just android-setup (docs/development/android.md)" >&2
+        exit 1
+    fi
+    case "{{profile}}" in
+        debug) flags=(--debug) ;;
+        release)
+            missing=()
+            for var in PASSPORTER_ANDROID_KEYSTORE PASSPORTER_ANDROID_KEYSTORE_PASSWORD \
+                    PASSPORTER_ANDROID_KEY_ALIAS PASSPORTER_ANDROID_KEY_PASSWORD; do
+                [[ -n "${!var:-}" ]] || missing+=("$var")
+            done
+            if (( ${#missing[@]} )); then
+                echo "android-build release: set ${missing[*]} (docs/development/android.md, Release builds)" >&2
+                exit 1
+            fi
+            if [[ ! -f "$PASSPORTER_ANDROID_KEYSTORE" ]]; then
+                echo "android-build release: no keystore at PASSPORTER_ANDROID_KEYSTORE ($PASSPORTER_ANDROID_KEYSTORE)" >&2
+                exit 1
+            fi
+            flags=() ;;
+        *) echo "android-build: the profile is debug or release, not {{profile}}" >&2; exit 2 ;;
+    esac
+    cargo metadata --locked --format-version 1 >/dev/null
+    out=apps/android/gen/android/app/build/outputs/apk/universal/{{profile}}
+    # A fresh package: AGP rewrites an existing APK in place and leaves gaps in it.
+    rm -rf "$out"
+    (cd apps/android && cargo tauri android build --ci --apk --target {{abi}} "${flags[@]}")
+    mkdir -p target/android
+    apk=target/android/passporter-{{profile}}.apk
+    cp "$out/app-universal-{{profile}}.apk" "$apk"
+    "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify "$apk"
+    echo "$apk ($(du -h "$apk" | cut -f1))"
+
+# Android checks: clippy for the Android target, the shell's and plugins' Rust tests, Gradle's JVM unit tests.
+android-test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export MISE_ENV=android
+    eval "$(mise env --shell bash)"
+    if ! command -v cargo-tauri >/dev/null || [[ ! -d "${ANDROID_HOME:-}/build-tools/37.0.0" ]]; then
+        echo "android: no Android toolchain; run just android-setup (docs/development/android.md)" >&2
+        exit 1
+    fi
+    # The app's JVM tests compile against Kotlin files that only a Tauri build
+    # generates: a fresh checkout builds the debug APK once first.
+    if [[ ! -f apps/android/gen/android/app/src/main/java/dev/passporter/app/generated/TauriActivity.kt ]]; then
+        just android-build
+    fi
+    # tauri-build writes the Gradle include files the JVM tests need when it knows the project.
+    TAURI_ANDROID_PROJECT_PATH="$PWD/apps/android/gen/android" TAURI_ANDROID_PACKAGE_UNESCAPED=dev.passporter.app \
+        cargo clippy --package passporter-android --all-targets --locked --target aarch64-linux-android -- -D warnings
+    cargo clippy --package tauri-plugin-device --package tauri-plugin-recorder --all-targets --locked --target aarch64-linux-android -- -D warnings
+    cargo nextest run --package passporter-android --package tauri-plugin-device --locked
+    cd apps/android/gen/android && ./gradlew --console=plain testUniversalDebugUnitTest :tauri-plugin-device:testDebugUnitTest :tauri-plugin-recorder:testDebugUnitTest
+
+# `android-test` where the Android toolchain is installed (`gate` runs this);
+# elsewhere, CI included, skipped with a message, like `e2e` without Chromium.
+android-gate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Without the toolchain, mise may not even resolve the Android env.
+    env=$(MISE_ENV=android mise env --shell bash 2>/dev/null) || env=""
+    eval "$env"
+    if ! command -v cargo-tauri >/dev/null || [[ ! -d "${ANDROID_HOME:-}/build-tools/37.0.0" ]]; then
+        echo "android: SKIPPED: no Android toolchain (just android-setup, docs/development/android.md)"
+        exit 0
+    fi
+    just android-test
 
 # Reclaim stale build output across worktrees (see crates/xtask).
 prune *args:
