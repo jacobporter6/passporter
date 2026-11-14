@@ -10,6 +10,8 @@ import dev.passporter.notify.NoticeNotification
 import dev.passporter.notify.NotificationLock
 import dev.passporter.notify.actions.Outbox
 import dev.passporter.notify.actions.PreferenceFrozenBodies
+import dev.passporter.push.BuiltInPush
+import dev.passporter.push.NativePushService
 import dev.passporter.recorder.Recorder
 
 /**
@@ -30,7 +32,10 @@ import dev.passporter.recorder.Recorder
  *   id); one pinned to the home screen cannot be removed, so it is
  *   disabled; the launcher's static *Bridge* shortcut stays;
  * - the dictation takes nobody has released ([Recorder.discardAll]),
- *   which the new bridge's PWA would adopt.
+ *   which the new bridge's PWA would adopt;
+ * - the built-in transport's stream, registration and keys
+ *   ([BuiltInPush]): the next registration is the new pairing's, with new
+ *   keys, so what the old bridge still sends cannot be decrypted.
  *
  * Each answer also carries the device it was made for, and is never sent
  * once the app is paired as another (`dev.passporter.notify.actions.DeviceStamp`):
@@ -55,6 +60,10 @@ object PairingReset {
             step("the agents' shortcuts") { removeShortcuts(app) }
         }
         step("the dictation takes") { Recorder.discardAll(app) }
+        step("the built-in transport") {
+            NativePushService.stop(app)
+            BuiltInPush.receiver(app).reset()
+        }
     }
 
     /** Cancels every agent's notification ([NoticeNotification.ID]), under [NotificationLock]. */

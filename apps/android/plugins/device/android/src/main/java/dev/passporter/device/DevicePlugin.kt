@@ -14,8 +14,9 @@ import java.util.concurrent.Executors
 /**
  * The device identity, as the PWA sees it (`plugin:device|<command>`), plus
  * one call for the shell. The ACL lets only the paired bridge's origin call
- * `status`, `pair`, `session` and `forget` (`permissions/default.toml`);
- * `webviewFeatures` has no permission, so only Rust reaches it.
+ * `status`, `pair`, `session`, `forget`, `notificationStatus` and
+ * `notificationSetup` (`permissions/default.toml`); `webviewFeatures` has
+ * no permission, so only Rust reaches it.
  *
  * The webview only ever gets an app-scope token: a car-scope token is for
  * native code ([DeviceAuth]) alone.
@@ -69,6 +70,33 @@ class DevicePlugin(private val activity: Activity) : Plugin(activity) {
             token.deviceName?.let { put("deviceName", it) }
         }
     }
+
+    /**
+     * `{connected, message}`: how agent news reaches the phone, for the
+     * PWA's status light ([NotificationHost]). Never an endpoint or a key.
+     */
+    @Command
+    fun notificationStatus(invoke: Invoke) = work(invoke, emptySet()) {
+        val status = host().notificationStatus()
+        JSObject().apply {
+            put("connected", status.connected)
+            put("message", status.message)
+        }
+    }
+
+    /**
+     * Opens the app's notification setup (a native dialog: nothing changes
+     * without a tap there). Resolves `null`.
+     */
+    @Command
+    fun notificationSetup(invoke: Invoke) = work(invoke, emptySet()) {
+        val host = host()
+        activity.runOnUiThread { if (!activity.isFinishing) host.openNotificationSetup() }
+        null
+    }
+
+    private fun host(): NotificationHost =
+        activity as? NotificationHost ?: throw DeviceAuthException.BadResponse("no notification setup in this app")
 
     /** Forgets the pairing here. Resolves `null`. */
     @Command

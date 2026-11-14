@@ -648,6 +648,37 @@ mod tests {
         assert!(opened.notices.len() < message.notices.len());
     }
 
+    /// The vector the Android app's `NativeEnvelopeTest` opens: an
+    /// envelope in this module's format, signed over [`signing_input`].
+    #[test]
+    fn the_android_envelope_vector_is_one_the_bridge_signs() {
+        let vector: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/native-envelope-vector.json"))
+                .expect("vector");
+        let notice: serde_json::Value =
+            serde_json::from_str(include_str!("fixtures/webpush-notice-vector.json"))
+                .expect("notice vector");
+        let envelope = envelope_json(vector["envelope"].as_str().expect("envelope"));
+        let registration =
+            IdempotencyKey::new(envelope["registrationId"].as_str().expect("id")).expect("uuid");
+        let body = envelope["body"].as_str().expect("body");
+        assert_eq!(body, notice["body"], "the notice vector's ciphertext");
+        let input = signing_input(
+            &registration,
+            envelope["expiresAt"].as_u64().expect("expiry"),
+            body,
+        );
+        let public = BASE64URL
+            .decode(vector["signer"].as_str().expect("key"))
+            .expect("base64");
+        let signature = BASE64URL
+            .decode(envelope["signature"].as_str().expect("signature"))
+            .expect("base64");
+        UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, public)
+            .verify(input.as_bytes(), &signature)
+            .expect("signed as the bridge signs");
+    }
+
     #[test]
     fn the_stream_cursor_is_checked_before_reaching_the_companion() {
         assert_eq!(since(None), Ok("all"));
