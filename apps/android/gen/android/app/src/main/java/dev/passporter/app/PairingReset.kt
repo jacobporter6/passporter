@@ -6,10 +6,14 @@ import android.util.Log
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.work.WorkManager
 import dev.passporter.car.CarOutbox
+import dev.passporter.device.DeviceAuth
 import dev.passporter.notify.NoticeNotification
 import dev.passporter.notify.NotificationLock
 import dev.passporter.notify.actions.Outbox
 import dev.passporter.notify.actions.PreferenceFrozenBodies
+import dev.passporter.push.BuiltInPush
+import dev.passporter.push.NativePushService
+import dev.passporter.push.NativeStatus
 import dev.passporter.recorder.Recorder
 
 /**
@@ -30,7 +34,10 @@ import dev.passporter.recorder.Recorder
  *   id); one pinned to the home screen cannot be removed, so it is
  *   disabled; the launcher's static *Bridge* shortcut stays;
  * - the dictation takes nobody has released ([Recorder.discardAll]),
- *   which the new bridge's PWA would adopt.
+ *   which the new bridge's PWA would adopt;
+ * - the built-in transport's stream, registration and keys
+ *   ([BuiltInPush]): the next registration is the new pairing's, with new
+ *   keys, so what the old bridge still sends cannot be decrypted.
  *
  * Each answer also carries the device it was made for, and is never sent
  * once the app is paired as another (`dev.passporter.notify.actions.DeviceStamp`):
@@ -44,6 +51,20 @@ object PairingReset {
     /** Drops it all; failures are logged. */
     fun run(context: Context) {
         val app = context.applicationContext
+        // First, so no notice of the old pairing is shown after the shade is cleared.
+        step("the built-in transport") {
+            val receiver = BuiltInPush.receiver(app)
+            // Unless it is already the new pairing's (a refresh that ran first:
+            // its reset already ended the old stream, and the service reconnects).
+            if (receiver.record().owner != DeviceAuth.get(app).savedDevice()?.value) {
+                NativePushService.stop(app)
+                receiver.reset()
+                NativeStatus.reset()
+            } else {
+                // The new pairing's state stands; only a clock verdict from before goes.
+                NativeStatus.clockOff = false
+            }
+        }
         step("the queued answers") {
             val work = WorkManager.getInstance(app)
             listOf(Outbox.TAG, CarOutbox.TAG).map { work.cancelAllWorkByTag(it).result }.forEach { it.get() }

@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Intent
 import dev.passporter.notify.NoticeNotification
 import dev.passporter.notify.agent
+import dev.passporter.push.NotificationSetup
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -28,9 +29,21 @@ class ShellRequestTest {
     @Test
     fun theShortcutOpensTheBridgePage() {
         val activity = Robolectric.buildActivity(BridgeShortcutActivity::class.java).get()
-        val forwarded = BridgeShortcutActivity.forward(activity)
+        val forwarded = BridgeShortcutActivity.forward(activity, ShellRequest.ACTION_MANAGE_BRIDGE)
         assertEquals(MainActivity::class.java.name, forwarded.component?.className)
         assertEquals(ShellRequest.ManageBridge, ShellRequest.from(forwarded))
+    }
+
+    @Test
+    fun theNotificationsShortcutOpensTheSetupNotTheBridgePage() {
+        val activity = Robolectric.buildActivity(BridgeShortcutActivity::class.java).get()
+        val forwarded = BridgeShortcutActivity.forward(activity, NotificationSetup.ACTION)
+        assertEquals(MainActivity::class.java.name, forwarded.component?.className)
+        assertEquals(NotificationSetup.ACTION, forwarded.action)
+        assertNull(ShellRequest.from(forwarded))
+        // Anything else is the Bridge shortcut's.
+        val other = BridgeShortcutActivity.forward(activity, "dev.passporter.app.OTHER")
+        assertEquals(ShellRequest.ManageBridge, ShellRequest.from(other))
     }
 
     @Test
@@ -61,13 +74,17 @@ class ShellRequestTest {
     }
 
     @Test
-    fun theShortcutGoesThroughItsOwnTask() {
+    fun everyShortcutGoesThroughItsOwnTask() {
         val shortcuts = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
             .newDocumentBuilder().parse(File("src/main/res/xml/shortcuts.xml"))
-        val intent = shortcuts.getElementsByTagName("intent").item(0)
+        val intents = shortcuts.getElementsByTagName("intent")
         val android = "http://schemas.android.com/apk/res/android"
-        val attributes = intent.attributes
-        assertEquals(BridgeShortcutActivity::class.java.name, attributes.getNamedItemNS(android, "targetClass").nodeValue)
-        assertEquals(context.packageName, attributes.getNamedItemNS(android, "targetPackage").nodeValue)
+        val actions = (0 until intents.length).map { i ->
+            val attributes = intents.item(i).attributes
+            assertEquals(BridgeShortcutActivity::class.java.name, attributes.getNamedItemNS(android, "targetClass").nodeValue)
+            assertEquals(context.packageName, attributes.getNamedItemNS(android, "targetPackage").nodeValue)
+            attributes.getNamedItemNS(android, "action").nodeValue
+        }
+        assertEquals(listOf(Intent.ACTION_VIEW, NotificationSetup.ACTION), actions)
     }
 }

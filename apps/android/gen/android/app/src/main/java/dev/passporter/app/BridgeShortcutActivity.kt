@@ -3,10 +3,12 @@ package dev.passporter.app
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
+import dev.passporter.push.NotificationSetup
 
 /**
- * The launcher's *Bridge* shortcut lands here, and is passed on to
- * [MainActivity] as [ShellRequest.ACTION_MANAGE_BRIDGE].
+ * The launcher's shortcuts land here, and are passed on to [MainActivity]:
+ * *Bridge* as [ShellRequest.ACTION_MANAGE_BRIDGE], *Notifications* as
+ * [NotificationSetup.ACTION].
  *
  * Android starts a static shortcut with `FLAG_ACTIVITY_CLEAR_TASK`, which
  * would destroy a running `MainActivity` and with it Tauri's webview. This
@@ -17,15 +19,15 @@ import android.os.Bundle
 class BridgeShortcutActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        startActivity(forward(this))
+        startActivity(forward(this, intent.action))
         finish()
     }
 
     companion object {
-        /** The intent this activity starts. */
-        fun forward(activity: Activity): Intent =
+        /** The intent this activity starts for a shortcut of [action]. */
+        fun forward(activity: Activity, action: String?): Intent =
             Intent(activity, MainActivity::class.java)
-                .setAction(ShellRequest.ACTION_MANAGE_BRIDGE)
+                .setAction(if (action == NotificationSetup.ACTION) action else ShellRequest.ACTION_MANAGE_BRIDGE)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
 }

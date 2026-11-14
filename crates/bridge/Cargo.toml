@@ -22,6 +22,7 @@ name = "passporter-hook"
 path = "hooks/main.rs"
 
 [dependencies]
+futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "matched-path", "original-uri", "tokio", "ws"] }
 base64 = "0.22.1"
 getrandom = "0.4.3"
@@ -57,7 +58,6 @@ transcripts.workspace = true
 webpki = { package = "rustls-webpki", version = "0.103.16", default-features = false, features = ["std"] }
 
 [dev-dependencies]
-futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 herdr = { workspace = true, features = ["fake"] }
 summarize = { workspace = true, features = ["fake"] }
 # A throwaway CA and leaves for the TLS tests, made at runtime.

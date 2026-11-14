@@ -50,6 +50,8 @@ version.
 | POST | `/v1/auth/session` | **public** | Exchanges a signed challenge for a 15-minute session token. |
 | GET | `/v1/projects` | session | The projects and kinds this device may start; both empty when spawning is off. |
 | GET | `/v1/push/key` | session | `{"vapidPublicKey": "<base64url>"}`, the PWA's `applicationServerKey`. |
+| POST | `/v1/push/native` | session | Stores the caller's built-in notice subscription at the registration's reserved endpoint (new keys replace the old) and names the key that signs its notices. |
+| GET | `/v1/push/native/:id/stream` | session | Streams the companion's newline-delimited JSON events of the caller's own registration (404 for any other), after `?since=<id>` if given. |
 | GET | `/v1/push/subscriptions` | session | `{"subscriptions": [{"endpoint": "…"}]}`, this device's subscriptions. |
 | POST | `/v1/push/subscriptions` | session | With `PushSubscription.toJSON()`: 201 when new, 204 when it replaced the one at that endpoint, 400 when invalid or not on an allowed push service, 409 when the device is at its limit. |
 | DELETE | `/v1/push/subscriptions` | session | With `{"endpoint": "…"}`: 204, or 404 if this device has no such subscription. |
@@ -60,5 +62,5 @@ version.
 | GET | `/v1/terminals/:pane/screen` | session | The last lines of a terminal this device's run opened, while its pane still runs that terminal. |
 | GET | `/v1/version` | **public** | The bridge's build. |
 
-31 routes. Each description is the first sentence that the handler's doc comment, or its
+33 routes. Each description is the first sentence that the handler's doc comment, or its
 module's, gives for the route.

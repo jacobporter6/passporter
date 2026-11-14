@@ -21,7 +21,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{AgentId, PendingId};
+use crate::ids::{AgentId, IdempotencyKey, PendingId};
 
 /// Most notices in one [`PushMessage`]; the most recent changes win.
 pub const MAX_NOTICES: usize = 4;
@@ -106,6 +106,34 @@ pub enum NoticeState {
 pub struct PushKey {
     /// The uncompressed P-256 public key, base64url without padding.
     pub vapid_public_key: String,
+}
+
+/// `POST /v1/push/native`: registers the Android app's built-in receiver
+/// for encrypted notices (design §6.6). Inbound, so strict.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct NativeRegister {
+    /// A random id the app picks for this pairing's receiver; it names
+    /// the stream and is bound to the registering device.
+    pub registration_id: IdempotencyKey,
+    /// The receiver's P-256 public key, base64url (RFC 8291 `ua_public`).
+    pub p256dh: String,
+    /// The receiver's 16-byte auth secret, base64url.
+    pub auth: String,
+}
+
+/// The answer to [`NativeRegister`]: how to collect and check the notices.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeRegistration {
+    /// The envelope version the bridge sends (1).
+    pub version: u8,
+    /// The uncompressed P-256 public key that signs every envelope,
+    /// base64url (the bridge's VAPID key).
+    pub signing_key: String,
+    /// Where to stream the registration's envelopes from, under the
+    /// bridge's origin.
+    pub stream_path: String,
 }
 
 /// `GET /v1/push/subscriptions`: what the bridge holds for this device.

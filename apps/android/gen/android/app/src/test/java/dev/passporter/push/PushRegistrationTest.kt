@@ -11,9 +11,8 @@ import org.robolectric.RobolectricTestRunner
 class PushRegistrationTest {
     /** Attaches in its constructor, before it has a context, as MainActivity does. */
     class AttachingActivity : ComponentActivity() {
-        init {
-            PushRegistration.attachTo(this, promptsHeld = { false })
-        }
+        private val push: PushRegistration = PushRegistration.attachTo(this, promptsHeld = { false }, onBuiltIn = { setup.offerBackgroundOnce() })
+        private val setup = NotificationSetup(this, refresh = { push.refresh() })
     }
 
     @Test

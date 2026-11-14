@@ -230,8 +230,12 @@ class DeviceAuth internal constructor(
         return sendWith(token(scope, device), method, url, jsonBody)
     }
 
-    /** [token] for [scope], if it was made for [device] (when given). */
-    private fun token(scope: Scope, device: DeviceId?): SessionToken =
+    /**
+     * [token] for [scope], if it was made for [device] (when given), else
+     * [DeviceAuthException.OtherDevice]: for a request [send] cannot make
+     * (a long-lived stream) that must go only as one pairing.
+     */
+    fun token(scope: Scope, device: DeviceId?): SessionToken =
         try {
             token(scope)
         } catch (e: DeviceAuthException.NotPaired) {
