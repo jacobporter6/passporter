@@ -21,13 +21,17 @@ enum class EnvelopeRefusal {
     /** For another registration than this app's. */
     OTHER_REGISTRATION,
 
-    /** Signed, but past its expiry: delivered late (the phone was offline). */
+    /**
+     * Signed, but past its expiry: delivered late (the phone was offline, the
+     * bridge's spool held it while the companion was down). However late:
+     * an honest envelope can arrive well past its expiry, so lateness never
+     * says the clock is off.
+     */
     EXPIRED,
 
     /**
-     * Signed, but its expiry is more than an hour away from what the bridge
-     * could have set: the phone's clock is off (more than ten minutes
-     * behind, or more than an hour ahead).
+     * Signed, but it expires further ahead than the bridge ever sets (an
+     * hour, plus ten minutes of skew): the phone's clock is behind.
      */
     CLOCK,
 
@@ -66,12 +70,6 @@ object NativeEnvelope {
     /** How far past now the bridge sets the expiry (one hour), plus room for clock skew. */
     private const val MAX_LIFETIME_SECS = 3600L + 600L
 
-    /**
-     * How long past its expiry an envelope can still arrive: the companion
-     * keeps messages an hour, so a late one is at most that much expired.
-     */
-    private const val CACHE_SECS = 3600L
-
     /** The version this app reads. */
     private const val VERSION = 1
 
@@ -102,8 +100,8 @@ object NativeEnvelope {
         // The signature first: only the bridge's own timing says anything about the clock.
         val input = "$DOMAIN\n$id\n$expires\n$body".toByteArray(Charsets.UTF_8)
         if (!verifies(signingKey, input, signature)) return refused(EnvelopeRefusal.FORGED)
-        if (expires > nowSecs + MAX_LIFETIME_SECS || expires <= nowSecs - CACHE_SECS) return refused(EnvelopeRefusal.CLOCK)
         if (expires <= nowSecs) return refused(EnvelopeRefusal.EXPIRED)
+        if (expires > nowSecs + MAX_LIFETIME_SECS) return refused(EnvelopeRefusal.CLOCK)
         return decode(body)?.let(Opened::Ciphertext) ?: refused(EnvelopeRefusal.MALFORMED)
     }
 

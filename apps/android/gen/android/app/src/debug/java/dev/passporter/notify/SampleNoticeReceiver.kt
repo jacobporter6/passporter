@@ -32,7 +32,8 @@ class SampleNoticeReceiver : BroadcastReceiver() {
         }
         val ping = intent.getStringExtra(EXTRA_PING) ?: UUID.randomUUID().toString().replace("-", "")
         // Answers as the device the app is paired as now, as a push to it would.
-        val outcome = NoticeNotifier(context) { pairedDevice(context).device }.show(message(ping, sample.notices))
+        val paired = pairedDevice(context)
+        val outcome = NoticeNotifier(context, { paired.device }) { paired }.show(message(ping, sample.notices))
         Log.i(TAG, "sample ${sample.wire}: $outcome")
     }
 

@@ -3,7 +3,7 @@ package dev.passporter.push
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** What the built-in transport falls back to once it stops ([Fallback.decide]). */
+/** What the built-in transport falls back to once it stops ([Fallback.decide]), and keeps until it connects ([Interim]). */
 class FallbackTest {
     @Test
     fun aSavedDistributorTakesOverWhenTheBridgeIsReady() {
@@ -20,5 +20,23 @@ class FallbackTest {
     @Test
     fun withoutASavedDistributorTheBridgeIsNotAskedAndItIsTold() {
         assertEquals(Fallback.NoDistributor, Fallback.decide(null) { error("the bridge was asked") })
+    }
+
+    @Test
+    fun untilTheStreamConnectsTheSavedDistributorKeepsARegistration() {
+        assertEquals("vapid", Interim.vapidKey(connected = false, "io.heckel.ntfy") { Readiness.Register("vapid") })
+    }
+
+    @Test
+    fun onceTheStreamConnectsNoExternalRegistrationIsMade() {
+        assertEquals(null, Interim.vapidKey(connected = true, "io.heckel.ntfy") { error("the bridge was asked") })
+    }
+
+    @Test
+    fun beforeTheStreamConnectsNoPickerAndNoRegistrationTheBridgeIsNotReadyFor() {
+        assertEquals(null, Interim.vapidKey(connected = false, null) { error("the bridge was asked") })
+        for (readiness in listOf(Readiness.NotPaired, Readiness.BridgeOff, Readiness.Later)) {
+            assertEquals(null, Interim.vapidKey(connected = false, "io.heckel.ntfy") { readiness })
+        }
     }
 }

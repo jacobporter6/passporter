@@ -150,8 +150,22 @@ class NativePushService : Service() {
         super.onDestroy()
     }
 
-    /** The connection thread. */
+    /**
+     * The connection thread. It never dies of an exception: one from a
+     * connection is retried after the backoff ([connect]), anything else
+     * ends the thread and the service as a stop would.
+     */
     private fun listen() {
+        try {
+            connect()
+        } catch (e: RuntimeException) {
+            Log.e(PUSH_TAG, "the built-in transport's thread failed: ${e.javaClass.name}")
+            end()
+        }
+    }
+
+    /** Connects, reads and reconnects until the service stops or the transport is off. */
+    private fun connect() {
         val receiver = BuiltInPush.receiver(this)
         val power = getSystemService(PowerManager::class.java)
         var failures = 0
@@ -164,36 +178,13 @@ class NativePushService : Service() {
             // This connection answers any wake so far (the network callback's first
             // onAvailable among them): only one during it skips the next backoff.
             synchronized(signal) { woken = false }
-            val state = receiver.listen(
-                running = { running },
-                opened = { stream = it },
-                connected = {
-                    failures = 0
-                    NativeStatus.set(NativeState.Connected)
-                    // News arrives this way now: the external registration can go
-                    // (kept until here, so a stream that never connects loses nothing).
-                    val app = applicationContext
-                    PushWork.run {
-                        // Not if you switched to the ntfy app meanwhile.
-                        if (BuiltInPush.bringsNews(app)) {
-                            Log.i(PUSH_TAG, "external registration: ${PushWork.sync(app).leave()}")
-                        }
-                    }
-                },
-                guard = { work ->
-                    val lock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_LOCK_TAG)
-                    lock.acquire(WAKE_LOCK_MS)
-                    try {
-                        work().also { outcome ->
-                            if (outcome !is Ingested.Ignored) {
-                                NativeStatus.clockOff = outcome == Ingested.Refused(EnvelopeRefusal.CLOCK)
-                            }
-                        }
-                    } finally {
-                        if (lock.isHeld) lock.release()
-                    }
-                },
-            )
+            val state = try {
+                listenOnce(receiver, power) { failures = 0 }
+            } catch (e: RuntimeException) {
+                // A Keystore or platform failure outside a message: reconnect after the backoff.
+                Log.e(PUSH_TAG, "the built-in stream failed: ${e.javaClass.name}")
+                NativeState.RetryLater
+            }
             stream = null
             NativeStatus.set(state)
             if (!running) break
@@ -202,18 +193,56 @@ class NativePushService : Service() {
                 // The external registration was dropped when this one took
                 // over: say so rather than go quiet until the app is opened.
                 if (state == NativeState.BridgeHasNone || state is NativeState.Refused) BuiltInPush.fallBack(this)
-                val startId = lastStart
-                val me = Thread.currentThread()
-                ContextCompat.getMainExecutor(this).execute {
-                    // This thread is ending: a start after startId gets a fresh one.
-                    if (worker === me) worker = null
-                    stopUnlessStartedAgain(startId)
-                }
+                end()
                 break
             }
             failures = (failures + 1).coerceAtMost(MAX_DOUBLINGS)
             val ceiling = (1_000L shl failures).coerceAtMost(MAX_BACKOFF_MS)
             pause(ThreadLocalRandom.current().nextLong(ceiling / 2, ceiling + 1))
+        }
+    }
+
+    /** One connection ([NativeReceiver.listen]); [onConnected] once it is open. */
+    private fun listenOnce(receiver: NativeReceiver, power: PowerManager, onConnected: () -> Unit): NativeState =
+        receiver.listen(
+            running = { running },
+            opened = { stream = it },
+            connected = {
+                onConnected()
+                NativeStatus.set(NativeState.Connected)
+                // News arrives this way now: the external registration can go
+                // (kept until here, so a stream that never connects loses nothing).
+                val app = applicationContext
+                PushWork.run {
+                    // Not if you switched to the ntfy app meanwhile.
+                    if (BuiltInPush.bringsNews(app)) {
+                        Log.i(PUSH_TAG, "external registration: ${PushWork.sync(app).leave()}")
+                    }
+                }
+            },
+            guard = { work ->
+                val lock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_LOCK_TAG)
+                lock.acquire(WAKE_LOCK_MS)
+                try {
+                    work().also { outcome ->
+                        if (outcome !is Ingested.Ignored) {
+                            NativeStatus.clockOff = outcome == Ingested.Refused(EnvelopeRefusal.CLOCK)
+                        }
+                    }
+                } finally {
+                    if (lock.isHeld) lock.release()
+                }
+            },
+        )
+
+    /** Ends the connection thread (the caller's) and stops the service, unless started again. */
+    private fun end() {
+        val startId = lastStart
+        val me = Thread.currentThread()
+        ContextCompat.getMainExecutor(this).execute {
+            // This thread is ending: a start after startId gets a fresh one.
+            if (worker === me) worker = null
+            stopUnlessStartedAgain(startId)
         }
     }
 

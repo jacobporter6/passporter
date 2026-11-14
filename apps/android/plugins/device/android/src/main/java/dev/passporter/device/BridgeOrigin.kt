@@ -63,12 +63,13 @@ class BridgeOrigin private constructor(private val origin: String) {
 
         /**
          * Whether [host] (lowercase) is one the shell saves
-         * (`apps/android/src/origin.rs`, `is_dns_name`): an RFC 1123 host
-         * name that is not `localhost` or under it, or an IPv4 address in
-         * its plain dotted form.
+         * (`apps/android/src/origin.rs`): an RFC 1123 host name that is not
+         * `localhost` or under it, or an IPv4 address in its plain dotted
+         * form that is neither loopback (`127.0.0.0/8`, the phone itself)
+         * nor unspecified (`0.0.0.0`).
          */
         private fun isBridgeHost(host: String): Boolean =
-            IPV4.matches(host) ||
+            (IPV4.matches(host) && !host.startsWith("127.") && host != "0.0.0.0") ||
                 (HOST_NAME.matches(host) && host != "localhost" && !host.endsWith(".localhost"))
 
         /** The origin the shell saved in [dataDir], or null before the app connects. */

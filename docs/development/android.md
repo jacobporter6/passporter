@@ -569,8 +569,10 @@ the choice and the bridge has it, and only otherwise lets
 `PushRegistration` register with a distributor as before. Taking over, it
 drops the distributor's registration (bridge copy first, `PushSync.leave`)
 once its stream first connects, so a stream that never connects loses
-nothing; while the stream is connected, an endpoint the distributor sends
-is dropped, not posted. The bridge
+nothing: until then (remembered per pairing, `NativeRecord.streamConnected`)
+`PushRegistration` keeps the saved distributor's registration, or makes it
+for a new pairing, without opening the picker. While the stream is
+connected, an endpoint the distributor sends is dropped, not posted. The bridge
 gives all of a device's subscriptions one message id (`ping`), which the
 notifier remembers, so a switch never notifies twice.
 
@@ -581,8 +583,9 @@ or what is wrong, and *Set up*, which opens the app's own dialog: *Retry*,
 *Allow* to run without battery restrictions (Android's own prompt). The
 launcher's *Notifications* shortcut and the built-in transport's ongoing
 notification open the same dialog. The status is in-process: what the
-service saw last (including signed messages whose expiry is further off
-than a late delivery explains, which means the phone's clock is off),
+service saw last (including signed messages that expire further ahead
+than the bridge ever sets, which means the phone's clock is behind; a
+late one, however late, is only expired),
 whether notifications are allowed, and whether the
 bridge holds the external registration.
 
@@ -592,7 +595,7 @@ bridge holds the external registration.
 |---|---|
 | `BuiltInPush.kt` | Chooses the transport, starts and stops the service; `NativeStatus`, the last state, for Settings |
 | `NativeReceiver.kt` | Registers (`POST /v1/push/native`, app scope, once per process and pairing), leaves (drops the registration as its owner), resets, reads the stream (`listen`) and handles each line (`ingest`) |
-| `NativeEnvelope.kt` | Checks an envelope before anything is decrypted: version, this registration, the bridge's ECDSA P-256 signature over the same text the bridge signs, then the expiry (expired, or so far off that the clock must be) |
+| `NativeEnvelope.kt` | Checks an envelope before anything is decrypted: version, this registration, the bridge's ECDSA P-256 signature over the same text the bridge signs, then the expiry (expired, however late, or so far ahead that the clock must be behind) |
 | `NativeBridge.kt` | The bridge as the receiver needs it, through `DeviceAuth`: the stream goes only as the device that registered (`DeviceAuth.token(scope, device)`), a 401 retried once |
 | `NativeStore.kt` | The record (`passporter-builtin-push.json` in `noBackupFilesDir`): your choice, the owner device, the registration id, the signing key, the stream cursor |
 | `NativePushService.kt` | The `specialUse` foreground service and its boot receiver |

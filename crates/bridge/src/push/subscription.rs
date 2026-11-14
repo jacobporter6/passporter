@@ -257,6 +257,14 @@ impl P256dh {
     }
 }
 
+#[cfg(test)]
+impl P256dh {
+    /// `bytes`, unchecked: a key no parsed subscription can hold (tests).
+    pub(crate) fn unchecked(bytes: [u8; 65]) -> Self {
+        Self(bytes)
+    }
+}
+
 impl FromStr for P256dh {
     type Err = InvalidSubscription;
 

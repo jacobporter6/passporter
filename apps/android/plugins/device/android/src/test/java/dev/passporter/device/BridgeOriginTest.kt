@@ -15,7 +15,7 @@ class BridgeOriginTest {
     fun readsWhatTheShellWrites() {
         // The shell writes `{origin}\n` (apps/android/src/store.rs).
         assertEquals("https://bridge.example.org", BridgeOrigin.parse("https://bridge.example.org\n").toString())
-        assertEquals("https://10.0.0.2:8443", BridgeOrigin.parse("https://10.0.0.2:8443").toString())
+        assertEquals("https://192.0.2.2:8443", BridgeOrigin.parse("https://192.0.2.2:8443").toString())
         assertEquals("https://xn--brcke-lva.example", BridgeOrigin.parse("https://xn--brcke-lva.example").toString())
     }
 

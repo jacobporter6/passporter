@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Application
 import android.app.NotificationManager
 import android.content.pm.ShortcutManager
+import dev.passporter.notify.actions.PairedAs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
@@ -18,7 +19,8 @@ import org.robolectric.Shadows.shadowOf
 class NoticeNotifierTest {
     private val context: Application = RuntimeEnvironment.getApplication()
     private val manager = context.getSystemService(NotificationManager::class.java)
-    private val notifier = NoticeNotifier(context) { DEVICE }
+    private var paired: PairedAs = PairedAs.Device(DEVICE)
+    private val notifier = NoticeNotifier(context, { DEVICE }) { paired }
 
     private fun blocked(ping: String = "ab") =
         """{"ping":"$ping","notices":[{"agentId":"w1:p1","name":"widget","state":"blocked",
@@ -54,7 +56,7 @@ class NoticeNotifierTest {
         assertEquals(
             "remembered across notifiers (a new process)",
             NoticeOutcome.Duplicate,
-            NoticeNotifier(context) { DEVICE }.show(blocked()),
+            NoticeNotifier(context, { DEVICE }) { paired }.show(blocked()),
         )
     }
 
@@ -81,5 +83,18 @@ class NoticeNotifierTest {
         assertEquals(0, shadowOf(manager).allNotifications.size)
         shadowOf(context).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
         assertEquals("not remembered as shown", NoticeOutcome.Posted(1), notifier.show(blocked()))
+    }
+
+    @Test
+    fun aNoticeOfAPairingReplacedMeanwhileIsNotPosted() {
+        // A reset ran between the receiver's check and the post.
+        paired = PairedAs.Device(OTHER_DEVICE)
+        assertEquals(NoticeOutcome.OtherPairing, notifier.show(blocked()))
+        paired = PairedAs.Nothing
+        assertEquals(NoticeOutcome.OtherPairing, notifier.show(blocked()))
+        assertEquals(0, shadowOf(manager).allNotifications.size)
+        // When the app cannot tell, the message's device counts; and it was not remembered as shown.
+        paired = PairedAs.Unknown
+        assertEquals(NoticeOutcome.Posted(1), notifier.show(blocked()))
     }
 }

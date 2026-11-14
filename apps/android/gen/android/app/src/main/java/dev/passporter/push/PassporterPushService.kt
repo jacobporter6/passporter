@@ -56,7 +56,7 @@ class PassporterPushService : PushService() {
         // notices' actions answer as that device, and only while it is paired.
         val owner = { store.load().owner?.let(DeviceId::parse) }
         val incoming = IncomingPush(
-            show = NoticeNotifier(this, owner)::show,
+            show = NoticeNotifier(this, owner) { savedPairing(this) }::show,
             // The saved device, not DeviceAuth.status: no Keystore call on the main thread.
             registered = { IncomingPush.isCurrent(store.load(), savedPairing(this)) },
         ).handle(message)

@@ -15,7 +15,9 @@ import org.unifiedpush.android.connector.data.ResolvedDistributor
 /**
  * Registers the app with the phone's UnifiedPush distributor (ntfy, say)
  * while it is paired and the bridge's built-in transport is not the one
- * ([BuiltInPush], tried first), from the activity (design §6.6):
+ * ([BuiltInPush], tried first), or is but its stream has not connected yet
+ * (then only with a saved distributor, without prompts), from the activity
+ * (design §6.6):
  *
  * - whenever the activity resumes, and right after pairing, it asks
  *   [PushSync] whether to register (paired, and the bridge has push on)
@@ -73,6 +75,10 @@ class PushRegistration private constructor(
             // The bridge's own transport first: with it, no distributor.
             if (BuiltInPush.refresh(app) == Settled.BUILT_IN) {
                 onActivity(onBuiltIn)
+                // Until its stream first connects, the saved distributor's registration
+                // is kept (after a new pairing, made for the new device), so a stream
+                // that never connects loses nothing. The service drops it on connecting.
+                BuiltInPush.interimVapidKey(app)?.let(::registerNow)
                 return@run
             }
             when (val readiness = PushWork.sync(app).readiness()) {

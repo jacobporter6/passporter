@@ -550,11 +550,17 @@ impl Push {
                 tracing::debug!("built-in subscription skipped: no push.native_ntfy configured");
                 return;
             };
-            if let Err(error) = companion
+            match companion
                 .publish(&registration, &subscription, message, &self.vapid)
                 .await
             {
-                tracing::warn!(%error, "built-in notice not spooled");
+                Ok(()) => {}
+                Err(native::NativeError::InvalidKey) => {
+                    // As for an external subscription: it can never be sent to.
+                    tracing::warn!("dropping a built-in registration with an invalid key");
+                    self.forget(subscription.endpoint).await;
+                }
+                Err(error) => tracing::warn!(%error, "built-in notice not spooled"),
             }
             return;
         }
