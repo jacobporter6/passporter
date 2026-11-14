@@ -219,6 +219,7 @@ struct State {
     /// Every pane a tab or workspace was made with, as `pane.get` reports it.
     panes: Vec<Value>,
     next: u32,
+    start_blocked: bool,
 }
 
 /// The fake's shared state, with the events subscriptions forward.
@@ -286,6 +287,11 @@ impl FakeHerdr {
     #[must_use]
     pub fn socket(&self) -> &Path {
         &self.socket
+    }
+
+    /// Makes new agents stop at a folder-trust dialog before accepting a prompt.
+    pub fn block_new_agents(&self) {
+        self.shared.lock().start_blocked = true;
     }
 
     /// Every `agent.start` served so far.
@@ -566,10 +572,18 @@ fn start(shared: &Shared, state: &mut State, params: &Value) -> Reply {
         title: name.clone(),
         name: Some(name),
         kind: Kind::Claude,
-        status: Status::Idle,
+        status: if state.start_blocked {
+            Status::Blocked
+        } else {
+            Status::Idle
+        },
         session: Some(format!("0e2e0000-0000-4000-8000-0000000{n:05}")),
         cwd: cwd.clone(),
-        screen: "╭─ Claude Code ─╮\n> ".to_owned(),
+        screen: if state.start_blocked {
+            "Do you trust the files in this folder?\n  1. Yes, proceed\n  2. No, exit\n".to_owned()
+        } else {
+            "╭─ Claude Code ─╮\n> ".to_owned()
+        },
     };
     state.started.push(Started {
         pane: pane.clone(),

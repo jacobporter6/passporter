@@ -22,6 +22,7 @@ class MainActivity : TauriActivity() {
   }
 
   override fun onWebViewCreate(webView: WebView) {
+    SystemBars.fit(webView)
     ShellPlugin.wrap(this, webView)
   }
 

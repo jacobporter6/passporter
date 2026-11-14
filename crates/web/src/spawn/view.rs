@@ -113,18 +113,19 @@ fn Sheet(form: RwSignal<Form>) -> impl IntoView {
         phase.set(Phase::Starting);
         error.set(None);
         spawn_local(async move {
-            let next = sheet::next(mount::api().spawn(&request).await);
+            let next = sheet::next(mount::api().spawn(&request).await, request.prompt.clone());
             if next.is_final() {
                 ATTEMPT.with_borrow_mut(Attempt::settle);
             }
             match next {
-                Next::Open { agent, note } => {
+                Next::Open(opened) => {
                     // A new agent is running: the page opens it, then
                     // closes the sheet.
                     let _ = phase.try_set(Phase::Opening);
-                    let note = note.map_or(JsValue::UNDEFINED, Into::into);
-                    let _ =
-                        mount::ask_later(Ask::OpenAgent, &agent.to_string().into(), &note).await;
+                    if let Ok(json) = serde_json::to_string(&opened) {
+                        let _ = mount::ask_later(Ask::OpenAgent, &json.into(), &JsValue::UNDEFINED)
+                            .await;
+                    }
                 }
                 Next::Retry(message) | Next::Show(message) => {
                     let _ = phase.try_set(Phase::Idle);

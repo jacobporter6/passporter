@@ -1265,7 +1265,7 @@ textarea {
 
 .agent-header {
   position: sticky;
-  top: 0;
+  top: var(--safe-t);
   z-index: 4;
   display: flex;
   align-items: center;
