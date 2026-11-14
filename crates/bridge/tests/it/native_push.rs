@@ -9,6 +9,7 @@
 //! test runs against it instead of the fake.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -142,7 +143,10 @@ fn uuid() -> String {
     getrandom::fill(&mut bytes).expect("random");
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    let hex = bytes.iter().fold(String::new(), |mut out, b| {
+        let _ = write!(out, "{b:02x}");
+        out
+    });
     format!(
         "{}-{}-{}-{}-{}",
         &hex[..8],
