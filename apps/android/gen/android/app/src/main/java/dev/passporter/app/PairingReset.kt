@@ -54,9 +54,11 @@ object PairingReset {
         // First, so no notice of the old pairing is shown after the shade is cleared.
         step("the built-in transport") {
             val receiver = BuiltInPush.receiver(app)
+            val paired = DeviceAuth.get(app).savedDevice()?.value
             // Unless it is already the new pairing's (a refresh that ran first:
             // its reset already ended the old stream, and the service reconnects).
-            if (receiver.record().owner != DeviceAuth.get(app).savedDevice()?.value) {
+            // Not paired (a forget) always resets, even with no owner: no state stands then.
+            if (paired == null || receiver.record().owner != paired) {
                 NativePushService.stop(app)
                 receiver.reset()
                 NativeStatus.reset()

@@ -319,10 +319,78 @@ class NativeReceiverTest {
     }
 
     @Test
-    fun aRegistrationInProgressIsWaitedForNotAStop() {
+    fun aRegistrationWithoutASigningKeyIsMadeAgainBeforeListening() {
+        // A re-pair whose post failed: owner and id saved, no signing key.
+        bridge.failure = DeviceAuthException.Unreachable(java.io.IOException("offline"))
+        assertEquals(NativeState.RetryLater, receiver.register())
+        bridge.failure = null
+        assertFalse(store.load().registered)
+        assertEquals(NativeState.Registered, receiver.listen({ true }, {}, {}))
+        assertEquals(listOf("POST ${EnvelopeVector.registration}"), bridge.calls)
+        assertEquals(EnvelopeVector.signer, store.load().signingKey)
+    }
+
+    @Test
+    fun aFailedRegistrationAfterA404IsTriedAgainOnTheNextListen() {
+        receiver.register()
+        bridge.streams += NativeStream(404, null) {}
+        bridge.answers += 503
+        assertEquals(NativeState.RetryLater, receiver.listen({ true }, {}, {}))
+        assertFalse(store.load().registered)
+        bridge.answers += 502
+        assertEquals("tried again, not stuck", NativeState.RetryLater, receiver.listen({ true }, {}, {}))
+        assertEquals(3, bridge.calls.count { it.startsWith("POST") })
+        // The bridge is back: registered, then the stream opens with the new key.
+        assertEquals(NativeState.Registered, receiver.listen({ true }, {}, {}))
+        assertEquals(EnvelopeVector.signer, store.load().signingKey)
+        bridge.streams += stream(message("m1"))
+        receiver.listen({ true }, {}, {})
+        assertEquals(1, shown.size)
+    }
+
+    @Test
+    fun aRegistrationWithoutASigningKeyIsNotMadeAfterAStop() {
         receiver.register()
         store.save(store.load().copy(signingKey = null))
-        assertEquals(NativeState.RetryLater, receiver.listen({ true }, {}, {}))
+        val posts = bridge.calls.size
+        assertEquals(NativeState.RetryLater, receiver.listen({ false }, {}, {}))
+        assertEquals(posts, bridge.calls.size)
+    }
+
+    @Test
+    fun aRegistrationThatFailedWhileTheStreamWaitedIsNotPostedAgainAtOnce() {
+        receiver.register()
+        store.save(store.load().copy(signingKey = null))
+        bridge.answers += 503
+        // A refresh's registration runs (and fails) while the stream waits for the lock;
+        // running() is asked under that lock, which is reentrant.
+        val outcome = receiver.listen({ receiver.register() == NativeState.RetryLater }, {}, {})
+        assertEquals("backed off, not posted again", NativeState.RetryLater, outcome)
+        assertEquals(2, bridge.calls.count { it.startsWith("POST") })
+    }
+
+    @Test
+    fun aStreamWhoseRegistrationWasReplacedBeforeItConnectedIsNotConnected() {
+        receiver.register()
+        bridge.streams += stream(message("m1"))
+        var connected = false
+        val outcome = receiver.listen(
+            { true },
+            // A new pairing's registration lands while the stream opens.
+            { store.save(store.load().copy(registrationId = "00000000-0000-4000-8000-000000000005")) },
+            { connected = true },
+        )
+        assertEquals(NativeState.RetryLater, outcome)
+        assertFalse("its connection would hide that the new registration has none", connected)
+        assertTrue(shown.isEmpty())
+    }
+
+    @Test
+    fun aRegistrationWithoutASigningKeyThatIsRefusedStopsTheService() {
+        receiver.register()
+        store.save(store.load().copy(signingKey = null))
+        bridge.answers += 404
+        assertEquals(NativeState.BridgeHasNone, receiver.listen({ true }, {}, {}))
     }
 
     @Test

@@ -48,7 +48,11 @@ class NativePushService : Service() {
     private var lastStart = 0
     private val signal = Object()
 
-    /** Set by [wake], cleared by [pause]: a wake between two waits is not lost. Guarded by [signal]. */
+    /**
+     * Set by [wake], cleared by [pause] and before each connection: a wake
+     * during a connection is not lost, one before it does not skip the
+     * backoff after it. Guarded by [signal].
+     */
     private var woken = false
 
     private val network: ConnectivityManager by lazy { getSystemService(ConnectivityManager::class.java) }
@@ -99,7 +103,12 @@ class NativePushService : Service() {
         }
         network.registerDefaultNetworkCallback(networkCallback)
         // A registration replaced under the open stream (a new pairing) ends it.
-        BuiltInPush.receiver(this).onRegistrationChanged = ::wake
+        // The stream was the old registration's: not connected now, so a new
+        // pairing's external endpoint is kept until the new stream connects.
+        BuiltInPush.receiver(this).onRegistrationChanged = {
+            NativeStatus.set(NativeState.RetryLater)
+            wake()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -152,6 +161,9 @@ class NativePushService : Service() {
                 pause(NO_NETWORK_WAIT_MS)
                 continue
             }
+            // This connection answers any wake so far (the network callback's first
+            // onAvailable among them): only one during it skips the next backoff.
+            synchronized(signal) { woken = false }
             val state = receiver.listen(
                 running = { running },
                 opened = { stream = it },
