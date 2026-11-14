@@ -37,6 +37,7 @@ class MainActivity : TauriActivity(), NotificationHost {
   }
 
   override fun onWebViewCreate(webView: WebView) {
+    SystemBars.fit(webView)
     ShellPlugin.wrap(this, webView)
   }
 

@@ -792,3 +792,118 @@ async fn phone_secure() {
     assert_eq!(rig.whisper.served(), 1, "the take was transcribed once");
     rig.assert_no_problems();
 }
+
+/// A startup dialog must keep the first prompt through the extras module,
+/// opening the agent, and leaving and returning before explicitly sending.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs Chromium and a web build: run `just e2e`"]
+async fn phone_startup_trust_keeps_the_prompt() {
+    let Some(rig) = Rig::start(RigSpec::default()).await else {
+        return;
+    };
+    let page = rig.page().await;
+    let bridge = &rig.bridge;
+    rig.herdr.block_new_agents();
+    connect(&page, bridge).await;
+    click(&page, ".new-agent-button").await;
+    expect(&page, bridge, "!!document.querySelector('#new-agent-prompt') && !document.querySelector('.new-agent-start').disabled", "new agent form loaded").await;
+    page.eval("document.querySelector('#new-agent-prompt').focus()")
+        .await
+        .expect("focus");
+    page.insert_text(NEW_AGENT_PROMPT)
+        .await
+        .expect("types first prompt");
+    click(&page, ".new-agent-start").await;
+    expect(
+        &page,
+        bridge,
+        "location.pathname.startsWith('/agent/') && !document.querySelector('.new-agent-sheet')",
+        "opens the agent at its startup dialog",
+    )
+    .await;
+    let started = rig.herdr.started();
+    let [agent] = started.as_slice() else {
+        panic!("one agent: {started:?}");
+    };
+    assert!(
+        rig.herdr.prompted().is_empty(),
+        "no prompt typed into a trust dialog"
+    );
+    // Answering the trust dialog makes the agent ready for its prompt.
+    rig.herdr.set_status(&agent.pane, Status::Idle);
+    expect(
+        &page,
+        bridge,
+        &format!(
+            "document.querySelector('#reply-text')?.value === {}",
+            js(NEW_AGENT_PROMPT)
+        ),
+        "the original prompt is in the composer after trust",
+    )
+    .await;
+    click(&page, ".agent-header .back-link").await;
+    expect(&page, bridge, "location.pathname === '/'", "back to agents").await;
+    click(&page, "#tab-done").await;
+    expect(
+        &page,
+        bridge,
+        &format!(
+            "!!document.querySelector('a[href^=\"/agent/{}\"]')",
+            agent.pane
+        ),
+        "ready agent is on the Done tab",
+    )
+    .await;
+    page.eval(&format!(
+        "document.querySelector('a[href^=\"/agent/{}\"]').click()",
+        agent.pane
+    ))
+    .await
+    .expect("reopen agent");
+    expect(
+        &page,
+        bridge,
+        &format!(
+            "document.querySelector('#reply-text')?.value === {}",
+            js(NEW_AGENT_PROMPT)
+        ),
+        "the prompt survives leaving the agent",
+    )
+    .await;
+    assert!(
+        rig.herdr.prompted().is_empty(),
+        "preserving a prompt never sends it"
+    );
+    click(&page, ".send-button").await;
+    until(bridge, "the restored prompt is sent exactly once", || {
+        rig.herdr.prompted().len() == 1
+    })
+    .await;
+    assert_eq!(rig.herdr.prompted()[0].text, NEW_AGENT_PROMPT);
+    rig.assert_no_problems();
+}
+
+/// A nonzero safe area still protects the sticky Back control after scrolling.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs Chromium and a web build: run `just e2e`"]
+async fn phone_scrolled_header_respects_the_safe_area() {
+    let Some(rig) = Rig::start(RigSpec::default()).await else {
+        return;
+    };
+    let page = rig.page().await;
+    let bridge = &rig.bridge;
+    connect(&page, bridge).await;
+    segment_shows(&page, bridge, "done", DONE).await;
+    open_card(&page, bridge, DONE).await;
+    page.eval("document.documentElement.style.setProperty('--safe-t', '32px'); document.querySelector('.page-agent').style.minHeight = '3000px'; window.scrollTo(0, 600)").await.expect("scrolls below the safe area");
+    expect(&page, bridge, "window.scrollY >= 500 && (() => { const back = document.querySelector('.agent-header .back-link'); const r = back.getBoundingClientRect(); const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return r.top >= 32 && back.contains(hit); })()", "Back stays below the status bar and receives taps after scrolling").await;
+    click(&page, ".agent-header .back-link").await;
+    expect(
+        &page,
+        bridge,
+        "location.pathname === '/'",
+        "Back returns to triage after scrolling",
+    )
+    .await;
+    rig.assert_no_problems();
+}

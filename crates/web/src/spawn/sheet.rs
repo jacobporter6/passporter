@@ -142,17 +142,25 @@ impl Attempt {
     }
 }
 
+/// The new agent to open, including a first prompt the bridge could not send.
+/// Crosses the extras module boundary as JSON before navigation.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Opened {
+    /// The new agent.
+    pub agent: AgentId,
+    /// What to tell the user about delivery.
+    pub note: Option<String>,
+    /// Text to keep in the composer for explicit sending after the dialog.
+    pub draft: Option<PromptText>,
+}
+
 /// What the sheet does with a bridge answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Next {
     /// The agent is running: open it, with `note` as a toast if set (the
     /// first prompt was not sent, or this was a replay).
-    Open {
-        /// The new agent.
-        agent: AgentId,
-        /// What to tell the user.
-        note: Option<String>,
-    },
+    Open(Opened),
     /// Nothing decided: show `message`; sending again repeats the request.
     Retry(String),
     /// Decided without an agent to open: show `message`; the next send is
@@ -170,16 +178,18 @@ impl Next {
 
 /// Maps `POST /v1/agents`'s outcome to what the sheet does.
 #[must_use]
-pub fn next(outcome: Result<SpawnResult, ApiError>) -> Next {
+pub fn next(outcome: Result<SpawnResult, ApiError>, prompt: Option<PromptText>) -> Next {
     match outcome {
         Ok(SpawnResult::Spawned {
             agent_id,
             prompt_error,
             ..
-        }) => Next::Open {
+        }) => Next::Open(Opened {
             agent: agent_id,
-            note: prompt_error.map(|why| "Agent started. Prompt not sent: ".to_owned() + &why),
-        },
+            draft: prompt_error.as_ref().and(prompt),
+            note: prompt_error
+                .map(|why| "Agent started. Prompt kept in the composer: ".to_owned() + &why),
+        }),
         Ok(SpawnResult::Refused { reason, message }) => {
             // The bridge always explains; a blank one gets a generic line.
             let shown = if message.is_empty() {
@@ -233,6 +243,33 @@ mod tests {
     use protocol::SpawnRefusal;
 
     use super::*;
+
+    fn next(outcome: Result<SpawnResult, ApiError>) -> Next {
+        super::next(outcome, None)
+    }
+
+    #[test]
+    fn a_trust_dialog_keeps_the_first_prompt_across_the_module_boundary() {
+        for replayed in [false, true] {
+            for prompt_error in [None, Some("Answer the folder trust dialog first.")] {
+                let prompt =
+                    PromptText::new("Fix the scrolling controls.\nCover it with tests.").unwrap();
+                let Next::Open(opened) = super::next(
+                    Ok(SpawnResult::Spawned {
+                        agent_id: "w2:p1".parse().unwrap(),
+                        replayed,
+                        prompt_error: prompt_error.map(str::to_owned),
+                    }),
+                    Some(prompt.clone()),
+                ) else {
+                    panic!("opens");
+                };
+                assert_eq!(opened.draft, prompt_error.map(|_| prompt));
+                let encoded = serde_json::to_string(&opened).unwrap();
+                assert_eq!(serde_json::from_str::<Opened>(&encoded).unwrap(), opened);
+            }
+        }
+    }
 
     fn name(s: &str) -> ProjectName {
         ProjectName::new(s).unwrap()
@@ -344,14 +381,15 @@ mod tests {
         };
         assert_eq!(
             next(spawned(None)),
-            Next::Open {
+            Next::Open(Opened {
                 agent: "w2:p1".parse().unwrap(),
-                note: None
-            }
+                note: None,
+                draft: None,
+            })
         );
-        let Next::Open {
+        let Next::Open(Opened {
             note: Some(note), ..
-        } = next(spawned(Some("it asked first")))
+        }) = next(spawned(Some("it asked first")))
         else {
             panic!("opens");
         };
