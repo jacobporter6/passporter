@@ -3616,3 +3616,19 @@ details[open] > .tool-summary::before {
   flex-wrap: wrap;
   gap: var(--space-2);
 }
+
+/* The Android app's notification status light (settings/app_notifications.rs). */
+.status-light::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-inline-end: var(--space-2);
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  vertical-align: middle;
+}
+
+.status-light.row-value-ok {
+  color: var(--c-done);
+}

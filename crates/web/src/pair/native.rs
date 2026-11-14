@@ -33,6 +33,16 @@ pub struct NativeStatus {
     pub device_id: Option<DeviceId>,
 }
 
+/// What the plugin's `notificationStatus` answers: how agent news reaches
+/// the phone, never an endpoint or a key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotificationStatus {
+    /// Whether news arrives now.
+    pub connected: bool,
+    /// One sentence from the app saying how, or what is wrong.
+    pub message: String,
+}
+
 /// What the plugin's `pair` answers.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -117,6 +127,40 @@ pub async fn session() -> Result<SessionGrant, DeviceAuthError> {
 /// Forgets the native pairing (key and id).
 pub async fn forget() -> Result<(), DeviceAuthError> {
     call::<()>("forget", &Object::new()).await
+}
+
+/// How agent news reaches the phone (the built-in transport or the ntfy
+/// app), for the Settings status light; `None` if the app did not say.
+/// Read field by field rather than through serde: Settings is in the
+/// extras module, which has no other use for the plugin's error mapping.
+pub async fn notification_status() -> Option<NotificationStatus> {
+    let answer = ask("notificationStatus").await?;
+    let field = |name: &str| Reflect::get(&answer, &name.into()).ok();
+    Some(NotificationStatus {
+        connected: field("connected")?.as_bool()?,
+        message: field("message")?.as_string()?,
+    })
+}
+
+/// Opens the app's own notification setup (a native dialog); whether the
+/// app took the call.
+pub async fn notification_setup() -> bool {
+    ask("notificationSetup").await.is_some()
+}
+
+/// Calls the plugin's argument-less `command`; its answer, or `None` when
+/// it is refused or fails.
+async fn ask(command: &str) -> Option<JsValue> {
+    let promise: Promise = invoke_fn()?
+        .call2(
+            &JsValue::NULL,
+            &format!("plugin:device|{command}").into(),
+            &Object::new(),
+        )
+        .ok()?
+        .dyn_into()
+        .ok()?;
+    JsFuture::from(promise).await.ok()
 }
 
 /// Whether this page runs in the Android app (Tauri's global is there).
