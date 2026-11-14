@@ -46,6 +46,9 @@ def create(args):
     for value in (str(root), str(binary), str(static), str(socket)):
         if any(c in value for c in "\r\n\x00"):
             raise ValueError("paths cannot contain control characters")
+        if "$" in value:
+            # Docker Compose would interpolate it in the generated file.
+            raise ValueError("paths cannot contain $")
     # Unix socket length includes the trailing NUL. This path is also the hook forwarder's setting.
     hook = root / "hooks" / "hooks.sock"
     if len(os.fsencode(hook)) > 103:

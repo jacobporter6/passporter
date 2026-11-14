@@ -52,19 +52,18 @@ pub(super) struct Spool {
 impl Spool {
     /// Reads the spool at `path` (none yet is an empty one). Its contents
     /// live an hour at most, so one that cannot be read back (invalid, over
-    /// its limits, not private) is set aside, with a warning, rather than
+    /// its limits, not private) is deleted, with a warning, rather than
     /// keeping the bridge from starting.
     ///
     /// # Errors
-    /// Such a spool could not be set aside.
+    /// Such a spool could not be deleted.
     pub(super) fn open(path: &Path) -> Result<Self, StoreError> {
         let items = if path.exists() {
             match read(path) {
                 Ok(items) => items,
                 Err(reason) => {
-                    let aside = path.with_extension("json.unreadable");
-                    tracing::warn!(reason, aside = %aside.display(), "setting the built-in notice spool aside");
-                    std::fs::rename(path, &aside).map_err(|source| StoreError::Io {
+                    tracing::warn!(reason, "discarding the built-in notice spool");
+                    std::fs::remove_file(path).map_err(|source| StoreError::Io {
                         path: path.to_owned(),
                         source,
                     })?;
@@ -127,14 +126,16 @@ impl Spool {
         self.lock().clone()
     }
 
-    /// Drops `id` (sent, expired or orphaned).
-    pub(super) fn remove(&self, id: &str) -> io::Result<()> {
+    /// Drops `ids` (sent, expired, refused or orphaned), in one write.
+    pub(super) fn remove_all(&self, ids: &[String]) -> io::Result<()> {
         let mut items = self.lock();
-        if !items.contains_key(id) {
+        if !ids.iter().any(|id| items.contains_key(id)) {
             return Ok(());
         }
         let mut next = items.clone();
-        next.remove(id);
+        for id in ids {
+            next.remove(id);
+        }
         write_atomically(&self.path, &serde_json::to_vec(&next)?)?;
         *items = next;
         Ok(())
@@ -205,8 +206,10 @@ mod tests {
         assert_eq!(items.len(), MAX_PER_REGISTRATION + 1);
         assert!(!items.contains_key("0"), "the oldest went first");
         assert!(items.contains_key("29") && items.contains_key("other"));
-        restarted.remove("29").expect("remove");
-        restarted.remove("missing").expect("nothing to remove");
+        restarted.remove_all(&["29".to_owned()]).expect("remove");
+        restarted
+            .remove_all(&["missing".to_owned()])
+            .expect("nothing to remove");
         assert_eq!(
             Spool::open(&path).expect("reopen").snapshot().len(),
             MAX_PER_REGISTRATION
@@ -243,13 +246,12 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_spool_is_set_aside_and_the_bridge_starts_empty() {
+    fn an_unreadable_spool_is_discarded_and_the_bridge_starts_empty() {
         let dir = tempfile::tempdir().expect("tmp");
         let path = dir.path().join("spool.json");
-        let aside = path.with_extension("json.unreadable");
         write_atomically(&path, b"not json").expect("write");
         assert!(Spool::open(&path).expect("starts").snapshot().is_empty());
-        assert!(aside.exists() && !path.exists());
+        assert!(!path.exists());
         let big = serde_json::json!({
             "x": {"registration": registration(1), "expires": 1, "envelope": "a".repeat(MAX_ENVELOPE + 1)},
         });

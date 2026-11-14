@@ -12,6 +12,7 @@ import dev.passporter.notify.actions.Outbox
 import dev.passporter.notify.actions.PreferenceFrozenBodies
 import dev.passporter.push.BuiltInPush
 import dev.passporter.push.NativePushService
+import dev.passporter.push.NativeStatus
 import dev.passporter.recorder.Recorder
 
 /**
@@ -49,6 +50,12 @@ object PairingReset {
     /** Drops it all; failures are logged. */
     fun run(context: Context) {
         val app = context.applicationContext
+        // First, so no notice of the old pairing is shown after the shade is cleared.
+        step("the built-in transport") {
+            NativePushService.stop(app)
+            BuiltInPush.receiver(app).reset()
+            NativeStatus.reset()
+        }
         step("the queued answers") {
             val work = WorkManager.getInstance(app)
             listOf(Outbox.TAG, CarOutbox.TAG).map { work.cancelAllWorkByTag(it).result }.forEach { it.get() }
@@ -60,10 +67,6 @@ object PairingReset {
             step("the agents' shortcuts") { removeShortcuts(app) }
         }
         step("the dictation takes") { Recorder.discardAll(app) }
-        step("the built-in transport") {
-            NativePushService.stop(app)
-            BuiltInPush.receiver(app).reset()
-        }
     }
 
     /** Cancels every agent's notification ([NoticeNotification.ID]), under [NotificationLock]. */

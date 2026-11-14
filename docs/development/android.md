@@ -579,8 +579,9 @@ or what is wrong, and *Set up*, which opens the app's own dialog: *Retry*,
 *Allow* to run without battery restrictions (Android's own prompt). The
 launcher's *Notifications* shortcut and the built-in transport's ongoing
 notification open the same dialog. The status is in-process: what the
-service saw last (including messages refused as expired, which means the
-phone's clock is off), whether notifications are allowed, and whether the
+service saw last (including signed messages whose expiry is further off
+than a late delivery explains, which means the phone's clock is off),
+whether notifications are allowed, and whether the
 bridge holds the external registration.
 
 ### The built-in receiver
@@ -589,7 +590,7 @@ bridge holds the external registration.
 |---|---|
 | `BuiltInPush.kt` | Chooses the transport, starts and stops the service; `NativeStatus`, the last state, for Settings |
 | `NativeReceiver.kt` | Registers (`POST /v1/push/native`, app scope, once per process and pairing), leaves (drops the registration as its owner), resets, reads the stream (`listen`) and handles each line (`ingest`) |
-| `NativeEnvelope.kt` | Checks an envelope before anything is decrypted: version, this registration, not expired (nor more than an hour and ten minutes ahead), and the bridge's ECDSA P-256 signature over the same text the bridge signs |
+| `NativeEnvelope.kt` | Checks an envelope before anything is decrypted: version, this registration, the bridge's ECDSA P-256 signature over the same text the bridge signs, then the expiry (expired, or so far off that the clock must be) |
 | `NativeBridge.kt` | The bridge as the receiver needs it, through `DeviceAuth`: the stream goes only as the device that registered (`DeviceAuth.token(scope, device)`), a 401 retried once |
 | `NativeStore.kt` | The record (`passporter-builtin-push.json` in `noBackupFilesDir`): your choice, the owner device, the registration id, the signing key, the stream cursor |
 | `NativePushService.kt` | The `specialUse` foreground service and its boot receiver |
@@ -611,16 +612,19 @@ bridge holds the external registration.
   once more at worst, and the notifier drops a ping it has shown). A 404
   means the bridge lost the registration: it registers again; so do three
   envelopes in a row that fail the signature (a new VAPID key on the
-  bridge). A 400 drops the cursor. Lines over 16 KiB end the stream. A 409
+  bridge), at most once per half hour (forgeries from a local publisher are
+  otherwise read past). Lines over 16 KiB end the stream. A 409
   at registration (the device holds its 8 subscriptions) keeps the
-  registration id for the next try.
+  registration id for the next try and hands over to the external
+  transport meanwhile.
 - **The service.** One connection thread, reconnecting with a jittered
   backoff from 1 s doubling to 5 minutes, waiting for a network (a network
   callback wakes it), holding a 10-second wake lock per line. It stops
   itself when the transport is off; if that is because the bridge no
   longer offers it, it first posts *Agent news stopped* (a tap opens the
-  setup). The external registration is dropped only once the service has
-  started. `BOOT_COMPLETED` and
+  setup). The external registration is dropped only once the service runs
+  in the foreground, and while it does a new endpoint from the distributor
+  is dropped too. `BOOT_COMPLETED` and
   `MY_PACKAGE_REPLACED` start it again if it was on; a force stop is final
   until you open the app. Its notification is on a minimum-importance
   channel (*Connection to your bridge*), which you may hide.

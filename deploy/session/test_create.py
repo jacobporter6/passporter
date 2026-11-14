@@ -52,6 +52,11 @@ class DeploymentTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 create.create(args)
             self.assertFalse(args.output.exists(), "nothing written for a refused deployment")
+            args.contact = "mailto:ops@example.com"
+            args.output = base / "price$HOME"
+            with self.assertRaises(ValueError):
+                create.create(args)
+            self.assertFalse(args.output.exists())
 
 
 if __name__ == "__main__":

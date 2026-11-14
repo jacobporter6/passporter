@@ -73,11 +73,21 @@ class NativeEnvelopeTest {
     }
 
     @Test
-    fun refusesAnExpiredEnvelopeAndOneThatClaimsTooLongALife() {
+    fun refusesAnExpiredEnvelopeAndTellsAClockThatIsOff() {
+        // Delivered late, within the companion's hour: expired.
         assertEquals(Opened.Refused(EnvelopeRefusal.EXPIRED), open(at = EnvelopeVector.expiresAt))
-        // More than an hour (and ten minutes of clock skew) ahead: never one the bridge made now.
-        assertEquals(Opened.Refused(EnvelopeRefusal.EXPIRED), open(at = EnvelopeVector.expiresAt - 4201))
+        assertEquals(Opened.Refused(EnvelopeRefusal.EXPIRED), open(at = EnvelopeVector.expiresAt + 3599))
+        // Further past than the companion keeps anything, or further ahead than
+        // the bridge ever sets (an hour, plus ten minutes of skew): the clock.
+        assertEquals(Opened.Refused(EnvelopeRefusal.CLOCK), open(at = EnvelopeVector.expiresAt + 3600))
+        assertEquals(Opened.Refused(EnvelopeRefusal.CLOCK), open(at = EnvelopeVector.expiresAt - 4201))
         check(open(at = EnvelopeVector.expiresAt - 4200) is Opened.Ciphertext)
+    }
+
+    @Test
+    fun anUnsignedEnvelopeNeverSaysAnythingAboutTheClock() {
+        val past = EnvelopeVector.with("expiresAt", 1)
+        assertEquals(Opened.Refused(EnvelopeRefusal.FORGED), open(past))
     }
 
     @Test

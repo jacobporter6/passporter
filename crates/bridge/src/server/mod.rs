@@ -296,14 +296,14 @@ fn router(state: AppState) -> Router {
         )
         .layer(require_auth.clone())
         .layer(timeout(photo_timeout));
-    // Starting an agent waits on herdr (shell, startup, first prompt): its
-    // own timeout, past the handler's own answer deadline (merged into
-    // `/agents`).
     // The built-in notification stream stays open for a session's
     // lifetime: no request timeout (it ends itself, see `push::native`).
     let native = Router::new()
         .route("/push/native/{id}/stream", get(crate::push::native::stream))
         .layer(require_auth.clone());
+    // Starting an agent waits on herdr (shell, startup, first prompt): its
+    // own timeout, past the handler's own answer deadline (merged into
+    // `/agents`).
     let spawns = Router::new()
         .route("/agents", post(crate::spawn::post))
         .layer(require_auth)

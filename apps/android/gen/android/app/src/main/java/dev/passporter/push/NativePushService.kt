@@ -42,6 +42,10 @@ class NativePushService : Service() {
     private var stream: NativeStream? = null
 
     private var worker: Thread? = null
+
+    /** The id of the last start ([stopUnlessStartedAgain]). */
+    @Volatile
+    private var lastStart = 0
     private val signal = Object()
 
     private val network: ConnectivityManager by lazy { getSystemService(ConnectivityManager::class.java) }
@@ -90,20 +94,38 @@ class NativePushService : Service() {
             return
         }
         network.registerDefaultNetworkCallback(networkCallback)
+        inForeground = true
+        // In the foreground now: the external registration can go.
+        val app = applicationContext
+        PushWork.run { Log.i(PUSH_TAG, "external registration: ${PushWork.sync(app).leave()}") }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (!running) return START_NOT_STICKY
-        if (worker?.isAlive != true) {
-            worker = Thread(::listen, "passporter-builtin-push").apply {
-                isDaemon = true
-                start()
-            }
-        }
+        lastStart = startId
+        ensureWorker()
         return START_STICKY
     }
 
+    /** Starts the connection thread unless it runs. Main thread. */
+    private fun ensureWorker() {
+        if (worker?.isAlive == true) return
+        worker = Thread(::listen, "passporter-builtin-push").apply {
+            isDaemon = true
+            start()
+        }
+    }
+
+    /**
+     * Stops the service, unless a start came after [startId] (a refresh
+     * racing the thread's end): then listening goes on. Main thread.
+     */
+    private fun stopUnlessStartedAgain(startId: Int) {
+        if (!stopSelfResult(startId)) ensureWorker()
+    }
+
     override fun onDestroy() {
+        inForeground = false
         running = false
         wake()
         try {
@@ -138,7 +160,7 @@ class NativePushService : Service() {
                     try {
                         work().also { outcome ->
                             if (outcome !is Ingested.Ignored) {
-                                NativeStatus.clockOff = outcome == Ingested.Refused(EnvelopeRefusal.EXPIRED)
+                                NativeStatus.clockOff = outcome == Ingested.Refused(EnvelopeRefusal.CLOCK)
                             }
                         }
                     } finally {
@@ -154,7 +176,10 @@ class NativePushService : Service() {
                 // The external registration was dropped when this one took
                 // over: say so rather than go quiet until the app is opened.
                 if (state == NativeState.BridgeHasNone || state is NativeState.Refused) tellStopped()
-                ContextCompat.getMainExecutor(this).execute { stopSelf() }
+                val startId = lastStart
+                // Before the stop takes effect: a new endpoint from the distributor is posted again.
+                inForeground = false
+                ContextCompat.getMainExecutor(this).execute { stopUnlessStartedAgain(startId) }
                 break
             }
             failures = (failures + 1).coerceAtMost(MAX_DOUBLINGS)
@@ -200,6 +225,15 @@ class NativePushService : Service() {
     }
 
     companion object {
+        /**
+         * Whether the service runs in the foreground: the built-in transport
+         * brings news, so the external registration is not wanted
+         * (`PassporterPushService` drops a new endpoint meanwhile).
+         */
+        @Volatile
+        var inForeground = false
+            private set
+
         private const val CHANNEL = "builtin_push"
         private const val ID = 702
         private const val STOPPED_CHANNEL = "builtin_push_stopped"

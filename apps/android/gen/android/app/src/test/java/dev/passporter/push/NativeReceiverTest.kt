@@ -38,6 +38,7 @@ class NativeReceiverTest {
     private val shown = mutableListOf<Pair<DeviceId, String>>()
     private var pairedNow: PairedAs = PairedAs.Device(device("dev-0000000000000001"))
     private var ids = ArrayDeque(listOf(EnvelopeVector.registration, "00000000-0000-4000-8000-000000000002"))
+    private var clockMs = 0L
     private val receiver = NativeReceiver(
         store = store,
         bridge = bridge,
@@ -49,6 +50,7 @@ class NativeReceiverTest {
         paired = { pairedNow },
         nowSecs = { EnvelopeVector.validAt },
         newId = { ids.removeFirst() },
+        elapsedMs = { clockMs },
     )
 
     @After
@@ -153,6 +155,7 @@ class NativeReceiverTest {
         bridge.answers += 409
         assertEquals(NativeState.Refused(409), receiver.register())
         assertEquals("the id is kept", EnvelopeVector.registration, store.load().registrationId)
+        assertFalse("not registered: the external transport takes over", store.load().registered)
         bridge.failure = DeviceAuthException.Unreachable(java.io.IOException("offline"))
         assertEquals(NativeState.RetryLater, receiver.register())
         assertFalse(store.load().registered)
@@ -255,25 +258,32 @@ class NativeReceiverTest {
     }
 
     @Test
-    fun aDroppedRegistrationIsMadeAgainAndAStaleCursorReset() {
+    fun aDroppedRegistrationIsMadeAgain() {
         receiver.register()
-        store.save(store.load().copy(cursor = "gone"))
-        bridge.streams += NativeStream(400, null) {}
-        assertEquals(NativeState.RetryLater, receiver.listen({ true }, {}, {}))
-        assertNull(store.load().cursor)
         bridge.streams += NativeStream(404, null) {}
         assertEquals(NativeState.Registered, receiver.listen({ true }, {}, {}))
         assertEquals("POST ${EnvelopeVector.registration}", bridge.calls.last())
     }
 
     @Test
-    fun envelopesThatKeepFailingTheSignatureRegisterAgain() {
+    fun envelopesThatKeepFailingTheSignatureRegisterAgainButNotInALoop() {
         receiver.register()
         val forged = message("m1", EnvelopeVector.with("expiresAt", EnvelopeVector.expiresAt + 1))
         bridge.streams += stream(forged, forged, forged, message("m9"))
         assertEquals(NativeState.Registered, receiver.listen({ true }, {}, {}))
-        assertEquals(listOf("POST ${EnvelopeVector.registration}", "POST ${EnvelopeVector.registration}"), bridge.calls.filter { it.startsWith("POST") })
+        val posts = { bridge.calls.count { it.startsWith("POST") } }
+        assertEquals(2, posts())
         assertTrue("the rest waits for the new registration", shown.isEmpty())
+        // A local publisher sending forgeries again soon after: read past, no new registration.
+        bridge.streams += stream(forged, forged, forged, forged, message("m9"))
+        assertEquals(NativeState.RetryLater, receiver.listen({ true }, {}, {}))
+        assertEquals(2, posts())
+        assertEquals(1, shown.size)
+        // Half an hour on, it may register once more.
+        clockMs += NativeReceiver.REREGISTER_EVERY_MS
+        bridge.streams += stream(forged, forged, forged)
+        assertEquals(NativeState.Registered, receiver.listen({ true }, {}, {}))
+        assertEquals(3, posts())
     }
 
     @Test

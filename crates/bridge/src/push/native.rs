@@ -72,6 +72,10 @@ const COMPANION_TIMEOUT: Duration = Duration::from_secs(10);
 /// Most streams open at once, across all devices.
 const MAX_STREAMS: usize = 32;
 
+/// How long a stream waits for a free slot (the previous stream of its
+/// registration gives its back as it ends).
+const PERMIT_WAIT: Duration = Duration::from_secs(2);
+
 /// How often an open stream checks that its registration still exists.
 const RECHECK: Duration = Duration::from_secs(15);
 
@@ -288,6 +292,8 @@ pub(super) async fn forward(push: Arc<Push>, mut shutdown: Shutdown) {
         let mut failed = false;
         let mut pending: Vec<_> = companion.spool.snapshot().into_iter().collect();
         pending.sort_by_key(|(_, item)| item.seq);
+        // Removed in one write per pass, not one per envelope.
+        let mut done = Vec::new();
         for (id, item) in pending {
             if item.expires > now() && registered(&push, &item.registration) {
                 let sent = tokio::select! {
@@ -306,14 +312,16 @@ pub(super) async fn forward(push: Arc<Push>, mut shutdown: Shutdown) {
                     }
                 }
             }
+            done.push(id);
+        }
+        if !done.is_empty() {
             let spool = Arc::clone(&companion.spool);
             if !matches!(
-                tokio::task::spawn_blocking(move || spool.remove(&id)).await,
+                tokio::task::spawn_blocking(move || spool.remove_all(&done)).await,
                 Ok(Ok(()))
             ) {
                 tracing::error!("cannot update the built-in notice spool");
                 failed = true;
-                break;
             }
         }
         backoff = failed.then(|| {
@@ -495,19 +503,6 @@ pub(crate) async fn stream(
         return Err(StatusCode::NOT_FOUND);
     }
     let since = since(raw.as_deref())?;
-    // The phone's previous stream (a connection it has left) ends first,
-    // giving back its permit.
-    let (number, superseded) = companion.take_over(&registration);
-    let permit = Arc::clone(&companion.streams)
-        .try_acquire_owned()
-        .map_err(|_| StatusCode::TOO_MANY_REQUESTS);
-    let permit = match permit {
-        Ok(permit) => permit,
-        Err(status) => {
-            companion.release(&registration, number);
-            return Err(status);
-        }
-    };
     let request = Request::get(format!(
         "http://{}/{}/json?since={since}",
         companion.address,
@@ -522,6 +517,16 @@ pub(crate) async fn stream(
     if !response.status().is_success() {
         return Err(StatusCode::BAD_GATEWAY);
     }
+    // Only now, with the companion answering, does this stream replace the
+    // phone's previous one (a connection it has left), whose permit comes
+    // back as it ends: hence the short wait for one.
+    let (number, superseded) = companion.take_over(&registration);
+    let permit =
+        tokio::time::timeout(PERMIT_WAIT, Arc::clone(&companion.streams).acquire_owned()).await;
+    let Ok(Ok(permit)) = permit else {
+        companion.release(&registration, number);
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    };
     // The static token never expires: such a stream still ends every
     // quarter hour.
     let expires = principal

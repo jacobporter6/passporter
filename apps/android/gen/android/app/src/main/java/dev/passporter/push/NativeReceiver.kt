@@ -103,6 +103,8 @@ class NativeReceiver(
     private val nowSecs: () -> Long = { System.currentTimeMillis() / 1000 },
     /** A fresh registration id. */
     private val newId: () -> String = { UUID.randomUUID().toString() },
+    /** A monotonic clock, in milliseconds. */
+    private val elapsedMs: () -> Long = { System.nanoTime() / 1_000_000 },
 ) {
     /** Serializes changes of the record and the keys ([register] runs on two threads). */
     private val lock = Any()
@@ -114,6 +116,13 @@ class NativeReceiver(
     /** Envelopes in a row that failed the signature ([MAX_FORGED]). */
     @Volatile
     private var forged = 0
+
+    /**
+     * When forged envelopes last made it register again (elapsed millis),
+     * so a local publisher cannot make it re-register and reconnect in a loop.
+     */
+    @Volatile
+    private var reregisteredAt: Long? = null
 
     /** The record (safe from any thread). */
     fun record(): NativeRecord = store.load()
@@ -163,8 +172,12 @@ class NativeReceiver(
                 NativeState.BridgeHasNone
             }
             // 409: the device holds its 8 subscriptions (an id taken by another device is
-            // never seen in practice: ids are random). The id is kept for the next try.
-            400, 403, 409 -> NativeState.Refused(response.status)
+            // never seen in practice: ids are random). The id is kept for the next try,
+            // the signing key is not: the bridge holds no registration for it.
+            400, 403, 409 -> {
+                save(record.copy(signingKey = null))
+                NativeState.Refused(response.status)
+            }
             else -> NativeState.RetryLater
         }
         Log.i(PUSH_TAG, "built-in registration: status ${response.status}, $state")
@@ -276,11 +289,6 @@ class NativeReceiver(
             opened(stream)
             when (stream.status) {
                 200 -> Unit
-                400 -> {
-                    // The cursor is no longer one the companion knows: read all it holds.
-                    synchronized(lock) { save(store.load().copy(cursor = null)) }
-                    return NativeState.RetryLater
-                }
                 404 -> {
                     synchronized(lock) {
                         confirmed = false
@@ -296,8 +304,9 @@ class NativeReceiver(
                     val line = stream.nextLine() ?: break
                     val outcome = guard { ingest(line) }
                     if (outcome !is Ingested.Ignored) Log.i(PUSH_TAG, "built-in message: $outcome")
-                    if (forged >= MAX_FORGED) {
+                    if (forged >= MAX_FORGED && mayReregister()) {
                         Log.w(PUSH_TAG, "envelopes keep failing the signature: registering again")
+                        forged = 0
                         confirmed = false
                         return register()
                     }
@@ -307,6 +316,19 @@ class NativeReceiver(
             }
         }
         return NativeState.RetryLater
+    }
+
+    /**
+     * Whether forged envelopes may make it register again now: once per
+     * [REREGISTER_EVERY_MS] (a new VAPID key needs it once; a local
+     * publisher sending forgeries must not get a loop).
+     */
+    private fun mayReregister(): Boolean {
+        val now = elapsedMs()
+        val last = reregisteredAt
+        if (last != null && now - last < REREGISTER_EVERY_MS) return false
+        reregisteredAt = now
+        return true
     }
 
     /** Handles one stream line. Never logs its content. */
@@ -369,6 +391,9 @@ class NativeReceiver(
     companion object {
         /** Envelopes in a row failing the signature before registering again. */
         const val MAX_FORGED = 3
+
+        /** The least time between two registrations forged envelopes cause. */
+        const val REREGISTER_EVERY_MS = 30 * 60 * 1000L
 
         /** The key manager instance of the built-in receiver's keys. */
         const val KEY_INSTANCE = "passporter-builtin"

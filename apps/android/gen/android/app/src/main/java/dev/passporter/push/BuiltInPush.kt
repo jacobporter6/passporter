@@ -23,7 +23,8 @@ enum class Settled {
  *
  * - by default the bridge's own transport, when it has one: registered,
  *   the [NativePushService] started, and any external registration dropped
- *   ([PushSync.leave]) so the bridge sends each notice once;
+ *   ([PushSync.leave]) once the service is in the foreground, so the bridge
+ *   sends each notice once;
  * - the external distributor (T32a's path, unchanged) when the bridge has
  *   no companion, refuses the registration, or you chose it
  *   ([Transport.EXTERNAL]).
@@ -75,15 +76,19 @@ object BuiltInPush {
             NativePushService.stop(app)
             return Settled.EXTERNAL
         }
-        // Only once the service runs is the external registration dropped:
         // Android refuses the start if the app went to the background meanwhile.
+        // The external registration is dropped by the service itself, once
+        // it is in the foreground (NativePushService.onCreate).
         if (!NativePushService.start(app)) return Settled.EXTERNAL
-        val left = PushWork.sync(app).leave()
-        Log.i(PUSH_TAG, "built-in transport: $state; external registration: $left")
+        Log.i(PUSH_TAG, "built-in transport: $state")
         return Settled.BUILT_IN
     }
 
-    /** Whether the built-in transport is what brings news now (no external registration wanted). */
+    /**
+     * Whether the built-in transport is the choice and registered (what
+     * starts it after a reboot). Whether it brings news now is
+     * [NativePushService.inForeground].
+     */
     fun active(context: Context): Boolean {
         val record = receiver(context).record()
         return record.choice == Transport.BUILT_IN && record.registered
@@ -99,12 +104,17 @@ object NativeStatus {
     private var state: NativeState? = null
 
     /**
-     * Whether the last message was refused as expired: the phone's clock is
-     * off (more than ten minutes behind, or past the hour), so every notice
-     * is.
+     * Whether the last message was refused for its timing: the phone's
+     * clock is off, so every notice is.
      */
     @Volatile
     var clockOff: Boolean = false
+
+    /** Forgets what it knew (a pairing change). */
+    fun reset() {
+        state = null
+        clockOff = false
+    }
 
     /** The last state, or null before anything was tried in this process. */
     fun get(): NativeState? = state
