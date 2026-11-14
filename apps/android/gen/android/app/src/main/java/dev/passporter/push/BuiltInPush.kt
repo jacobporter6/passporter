@@ -30,9 +30,10 @@ enum class Settled {
  * (design §6.6), on [PushWork]'s thread:
  *
  * - by default the bridge's own transport, when it has one: registered,
- *   the [NativePushService] started, and any external registration dropped
- *   ([PushSync.leave]) once its stream first connects, so the bridge sends
- *   each notice once and a stream that never connects loses nothing;
+ *   the [NativePushService] started, and the external registration kept
+ *   (made for a new pairing, [Interim]) until its stream first connects,
+ *   then dropped ([PushSync.leave]), so the bridge sends each notice once
+ *   and a stream that never connects loses nothing;
  * - the external distributor (T32a's path, unchanged) when the bridge has
  *   no companion, refuses the registration, or you chose it
  *   ([Transport.EXTERNAL]).
@@ -93,6 +94,17 @@ object BuiltInPush {
         if (!NativePushService.start(app)) return Settled.EXTERNAL
         Log.i(PUSH_TAG, "built-in transport: $state")
         return Settled.BUILT_IN
+    }
+
+    /**
+     * The bridge's VAPID key to register the saved distributor with while
+     * the built-in transport is settled on but its stream has never
+     * connected for this pairing ([Interim]), or null. On [PushWork]'s thread.
+     */
+    fun interimVapidKey(context: Context): String? {
+        val app = context.applicationContext
+        val connected = receiver(app).record().streamConnected
+        return Interim.vapidKey(connected, UnifiedPush.getSavedDistributor(app)) { PushWork.sync(app).readiness() }
     }
 
     /** Whether the built-in transport is the choice and registered (what starts it after a reboot). */
@@ -202,6 +214,26 @@ internal sealed interface Fallback {
             }
         }
     }
+}
+
+/**
+ * The external registration while the built-in transport is settled on
+ * but its stream has never connected for the current pairing
+ * ([NativeRecord.streamConnected], forgotten with a new pairing). It
+ * stays, or after a new pairing is made for the new device, so a stream
+ * that never connects (the companion down, a proxy that ends streams)
+ * still leaves a transport. The service drops it once the stream
+ * connects, and an endpoint that arrives after that is dropped too.
+ */
+internal object Interim {
+    /**
+     * The VAPID key to register the saved [distributor] with, or null: none
+     * once the stream has [connected] for this pairing, none without a saved distributor (the
+     * picker is not opened for a transport that is not the choice), none
+     * unless the bridge is ready ([readiness], asked only otherwise).
+     */
+    fun vapidKey(connected: Boolean, distributor: String?, readiness: () -> Readiness): String? =
+        if (connected) null else (Fallback.decide(distributor, readiness) as? Fallback.Register)?.vapidKey
 }
 
 /**

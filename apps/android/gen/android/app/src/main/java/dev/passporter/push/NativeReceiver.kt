@@ -347,7 +347,14 @@ class NativeReceiver(
             // either before, and this stream is not the record's, or after,
             // and its onRegistrationChanged sees the connection.
             val current = synchronized(lock) {
-                store.load().let { it.registrationId == id && it.owner == owner.value }.also { if (it) connected() }
+                val now = store.load()
+                val mine = now.registrationId == id && now.owner == owner.value
+                if (mine) {
+                    // Remembered for the pairing: its external registration can go now.
+                    if (!now.streamConnected) save(now.copy(streamConnected = true))
+                    connected()
+                }
+                mine
             }
             if (!current) return NativeState.RetryLater
             try {

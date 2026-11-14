@@ -298,6 +298,27 @@ class NativeReceiverTest {
     }
 
     @Test
+    fun theFirstConnectionIsRememberedForThePairingOnly() {
+        receiver.register()
+        assertFalse(store.load().streamConnected)
+        bridge.streams += stream()
+        receiver.listen({ true }, {}, {})
+        assertTrue(NativeStore(File(dir, "native.json")).load().streamConnected)
+        // A new pairing's stream has not connected: its external registration is kept until it does.
+        bridge.device = device("dev-0000000000000002")
+        receiver.register()
+        assertFalse(store.load().streamConnected)
+    }
+
+    @Test
+    fun aStreamThatNeverOpensIsNotRememberedAsConnected() {
+        receiver.register()
+        bridge.streams += NativeStream(502, null) {}
+        assertEquals(NativeState.RetryLater, receiver.listen({ true }, {}, {}))
+        assertFalse(store.load().streamConnected)
+    }
+
+    @Test
     fun aDroppedRegistrationIsMadeAgain() {
         receiver.register()
         bridge.streams += NativeStream(404, null) {}
