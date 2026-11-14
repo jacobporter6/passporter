@@ -569,8 +569,10 @@ the choice and the bridge has it, and only otherwise lets
 `PushRegistration` register with a distributor as before. Taking over, it
 drops the distributor's registration (bridge copy first, `PushSync.leave`)
 once its stream first connects, so a stream that never connects loses
-nothing; while the stream is connected, an endpoint the distributor sends
-is dropped, not posted. The bridge
+nothing: until then (remembered per pairing, `NativeRecord.streamConnected`)
+`PushRegistration` keeps the saved distributor's registration, or makes it
+for a new pairing, without opening the picker. While the stream is
+connected, an endpoint the distributor sends is dropped, not posted. The bridge
 gives all of a device's subscriptions one message id (`ping`), which the
 notifier remembers, so a switch never notifies twice.
 
