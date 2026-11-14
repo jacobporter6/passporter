@@ -659,8 +659,8 @@ mod tests {
         subscription
     }
 
-    /// A companion that takes the first publish (and says so) and never
-    /// answers the next.
+    /// A companion that takes the first publish and never answers the
+    /// next, saying when the next arrives (so the first's answer is in).
     async fn stalling_companion() -> (SocketAddr, Arc<Notify>) {
         let published = Arc::new(Notify::new());
         let calls = Arc::new(AtomicU64::new(0));
@@ -672,9 +672,9 @@ mod tests {
                 let told = Arc::clone(&told);
                 async move {
                     if !first {
+                        told.notify_one();
                         std::future::pending::<()>().await;
                     }
-                    told.notify_one();
                     StatusCode::OK
                 }
             }),
@@ -732,7 +732,7 @@ mod tests {
     #[tokio::test]
     async fn a_shutdown_mid_pass_still_unspools_what_was_published() {
         let dir = tempfile::tempdir().expect("tmp");
-        let (address, published) = stalling_companion().await;
+        let (address, stalled) = stalling_companion().await;
         let key = Arc::new(super::super::vapid::tests::key());
         let push = push_with_companion(dir.path(), address, &key);
         let receiver = ece::tests::Receiver::new();
@@ -754,10 +754,10 @@ mod tests {
         }
         let (trigger, shutdown) = crate::shutdown::channel();
         let forwarding = tokio::spawn(forward(Arc::clone(&push), shutdown));
-        tokio::time::timeout(Duration::from_secs(10), published.notified())
+        tokio::time::timeout(Duration::from_secs(10), stalled.notified())
             .await
-            .expect("the first is published");
-        // The second's publish hangs: the shutdown cuts it short.
+            .expect("the first is published and the second hangs");
+        // The shutdown cuts the second's publish short.
         trigger.trigger();
         tokio::time::timeout(Duration::from_secs(10), forwarding)
             .await
