@@ -126,7 +126,11 @@ object BuiltInPush {
                         Log.i(PUSH_TAG, "fell back to the distributor ($distributor)")
                     }
                     is Fallback.Tell -> {
-                        Log.i(PUSH_TAG, "no fallback to a distributor: ${fallback.readiness ?: "none saved"}")
+                        Log.i(PUSH_TAG, "no fallback to the distributor: ${fallback.readiness}")
+                        tellStopped(app)
+                    }
+                    Fallback.NoDistributor -> {
+                        Log.i(PUSH_TAG, "no fallback: no distributor saved")
                         tellStopped(app)
                     }
                 }
@@ -175,11 +179,14 @@ internal sealed interface Fallback {
         val vapidKey: String,
     ) : Fallback
 
-    /** Post that agent news stopped: no distributor saved (null [readiness]), or the bridge is not ready. */
+    /** Post that agent news stopped: the saved distributor cannot take over, the bridge is not ready. */
     data class Tell(
-        /** Why the distributor cannot take over: the bridge's answer, null if none is saved. */
-        val readiness: Readiness?,
+        /** The bridge's answer. */
+        val readiness: Readiness,
     ) : Fallback
+
+    /** Post that agent news stopped: no distributor is saved (choosing one needs the app's picker). */
+    data object NoDistributor : Fallback
 
     companion object {
         /**
@@ -188,7 +195,7 @@ internal sealed interface Fallback {
          * ([readiness], asked only when one is saved).
          */
         fun decide(distributor: String?, readiness: () -> Readiness): Fallback {
-            if (distributor == null) return Tell(null)
+            if (distributor == null) return NoDistributor
             return when (val ready = readiness()) {
                 is Readiness.Register -> Register(ready.vapidKey)
                 else -> Tell(ready)

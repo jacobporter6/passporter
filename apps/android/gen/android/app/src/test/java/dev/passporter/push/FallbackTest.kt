@@ -19,6 +19,6 @@ class FallbackTest {
 
     @Test
     fun withoutASavedDistributorTheBridgeIsNotAskedAndItIsTold() {
-        assertEquals(Fallback.Tell(null), Fallback.decide(null) { error("the bridge was asked") })
+        assertEquals(Fallback.NoDistributor, Fallback.decide(null) { error("the bridge was asked") })
     }
 }
