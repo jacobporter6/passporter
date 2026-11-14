@@ -48,7 +48,11 @@ class NativePushService : Service() {
     private var lastStart = 0
     private val signal = Object()
 
-    /** Set by [wake], cleared by [pause]: a wake between two waits is not lost. Guarded by [signal]. */
+    /**
+     * Set by [wake], cleared by [pause] and before each connection: a wake
+     * during a connection is not lost, one before it does not skip the
+     * backoff after it. Guarded by [signal].
+     */
     private var woken = false
 
     private val network: ConnectivityManager by lazy { getSystemService(ConnectivityManager::class.java) }
@@ -157,6 +161,9 @@ class NativePushService : Service() {
                 pause(NO_NETWORK_WAIT_MS)
                 continue
             }
+            // This connection answers any wake so far (the network callback's first
+            // onAvailable among them): only one during it skips the next backoff.
+            synchronized(signal) { woken = false }
             val state = receiver.listen(
                 running = { running },
                 opened = { stream = it },
