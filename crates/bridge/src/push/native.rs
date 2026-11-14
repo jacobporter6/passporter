@@ -290,6 +290,7 @@ pub(super) async fn forward(push: Arc<Push>, mut shutdown: Shutdown) {
             },
         }
         let mut failed = false;
+        let mut stopping = false;
         let mut pending: Vec<_> = companion.spool.snapshot().into_iter().collect();
         pending.sort_by_key(|(_, item)| item.seq);
         // Removed in one write per pass, not one per envelope.
@@ -297,8 +298,14 @@ pub(super) async fn forward(push: Arc<Push>, mut shutdown: Shutdown) {
         for (id, item) in pending {
             if item.expires > now() && registered(&push, &item.registration) {
                 let sent = tokio::select! {
-                    () = shutdown.wait() => return,
-                    sent = companion.send(&item.registration, &item.envelope) => sent,
+                    () = shutdown.wait() => None,
+                    sent = companion.send(&item.registration, &item.envelope) => Some(sent),
+                };
+                // Stopping: what this pass published is still removed below, so a
+                // restart does not send it again (the one cut short may be).
+                let Some(sent) = sent else {
+                    stopping = true;
+                    break;
                 };
                 match sent {
                     Ok(()) => {}
@@ -323,6 +330,9 @@ pub(super) async fn forward(push: Arc<Push>, mut shutdown: Shutdown) {
                 tracing::error!("cannot update the built-in notice spool");
                 failed = true;
             }
+        }
+        if stopping {
+            return;
         }
         backoff = failed.then(|| {
             backoff
@@ -640,6 +650,87 @@ mod tests {
         subscription.p256dh = receiver.p256dh().parse().expect("p256dh");
         subscription.auth = receiver.auth().parse().expect("auth");
         subscription
+    }
+
+    /// A companion that takes the first publish (and says so) and never
+    /// answers the next.
+    async fn stalling_companion() -> (SocketAddr, Arc<Notify>) {
+        let published = Arc::new(Notify::new());
+        let calls = Arc::new(AtomicU64::new(0));
+        let told = Arc::clone(&published);
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::post(move || {
+                let first = calls.fetch_add(1, Ordering::SeqCst) == 0;
+                let told = Arc::clone(&told);
+                async move {
+                    if !first {
+                        std::future::pending::<()>().await;
+                    }
+                    told.notify_one();
+                    StatusCode::OK
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        (address, published)
+    }
+
+    #[tokio::test]
+    async fn a_shutdown_mid_pass_still_unspools_what_was_published() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let (address, published) = stalling_companion().await;
+        let key = Arc::new(super::super::vapid::tests::key());
+        let mut settings = super::super::PushSettings::new(
+            Arc::clone(&key),
+            "mailto:ops@example.com".parse().expect("subject"),
+            dir.path().join(super::super::store::STORE_FILE),
+            Arc::new(super::super::sender::tests::FakeSender::new()),
+        );
+        settings.native_ntfy = Some(address);
+        let push = Arc::new(Push::open(settings).expect("opens"));
+        let receiver = ece::tests::Receiver::new();
+        let mut subscription = subscription_for(&receiver);
+        subscription.endpoint = endpoint_of(&registration_id()).expect("endpoint");
+        push.store
+            .put("dev-0000000000000001", subscription.clone())
+            .expect("registered");
+        let companion = push.native.as_ref().expect("companion");
+        for ping in ["first", "second"] {
+            let message = PushMessage {
+                ping: ping.into(),
+                notices: vec![],
+            };
+            companion
+                .publish(&registration_id(), &subscription, &message, &key)
+                .await
+                .expect("spooled");
+        }
+        let (trigger, shutdown) = crate::shutdown::channel();
+        let forwarding = tokio::spawn(forward(Arc::clone(&push), shutdown));
+        tokio::time::timeout(Duration::from_secs(10), published.notified())
+            .await
+            .expect("the first is published");
+        // The second's publish hangs: the shutdown cuts it short.
+        trigger.trigger();
+        tokio::time::timeout(Duration::from_secs(10), forwarding)
+            .await
+            .expect("forward ends")
+            .expect("forward did not panic");
+        let left = vec![format!("{REGISTRATION}:second")];
+        let in_memory: Vec<_> = companion.spool.snapshot().into_keys().collect();
+        assert_eq!(in_memory, left);
+        let path = dir.path().join(super::super::native_spool::SPOOL_FILE);
+        let on_disk: Vec<_> = Spool::open(&path)
+            .expect("spool")
+            .snapshot()
+            .into_keys()
+            .collect();
+        assert_eq!(on_disk, left, "a restart sends only the second again");
     }
 
     #[test]
