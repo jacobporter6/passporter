@@ -2,7 +2,11 @@
 //! stream are app-scoped and bound to the registering device, and a
 //! blocked agent reaches the phone as a signed envelope through a fake ntfy
 //! companion on loopback, also after the companion was down. No network
-//! beyond loopback, no real ntfy.
+//! beyond loopback.
+//!
+//! With `PASSPORTER_TEST_NTFY` set to a disposable ntfy on loopback (never a
+//! live one; `docs/development/android.md` has the command), the delivery
+//! test runs against it instead of the fake.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -30,8 +34,6 @@ use crate::harness::CuttableHerdr;
 use crate::harness::PATIENCE;
 use crate::pairing::{Paired, key, start_on};
 use crate::push;
-
-const REGISTRATION: &str = "00000000-0000-4000-8000-0000000000aa";
 
 /// A stand-in for ntfy's JSON publish and subscribe API: what the bridge
 /// uses of it, kept in memory.
@@ -124,12 +126,47 @@ async fn subscribe(
 }
 
 /// A paired bridge whose built-in transport uses `ntfy` (or no companion
-/// at all), with one device and its app session.
+/// at all), with one device, its app session and a fresh registration id
+/// (fresh, so a real companion's cache from an earlier run never answers).
 struct Phone {
     paired: Paired,
     device: DeviceId,
     key: SigningKey,
     token: String,
+    registration: String,
+}
+
+/// A random version-4 UUID.
+fn uuid() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("random");
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
+}
+
+/// The companion to deliver through: `PASSPORTER_TEST_NTFY` if set (a
+/// disposable loopback ntfy), else a fresh fake.
+async fn companion() -> SocketAddr {
+    match std::env::var("PASSPORTER_TEST_NTFY") {
+        Ok(address) => {
+            let address: SocketAddr = address.parse().expect("PASSPORTER_TEST_NTFY: host:port");
+            assert!(
+                address.ip().is_loopback(),
+                "only a disposable loopback ntfy"
+            );
+            address
+        }
+        Err(_) => FakeNtfy::start().await.0,
+    }
 }
 
 async fn phone_with(companion: Option<SocketAddr>) -> Phone {
@@ -153,6 +190,7 @@ async fn phone_on(herdr: CuttableHerdr, companion: Option<SocketAddr>) -> Phone 
         device,
         key,
         token,
+        registration: uuid(),
     }
 }
 
@@ -178,7 +216,7 @@ async fn registration_and_streams_are_app_scoped_and_bound_to_the_registering_de
     let (companion, _ntfy) = FakeNtfy::start().await;
     let phone = phone_with(Some(companion)).await;
     let paired = &phone.paired;
-    let body = register_body(REGISTRATION);
+    let body = register_body(&phone.registration);
 
     assert_eq!(
         paired
@@ -213,7 +251,7 @@ async fn registration_and_streams_are_app_scoped_and_bound_to_the_registering_de
     let registration: NativeRegistration =
         serde_json::from_str(&registered.body).expect("registration");
     assert_eq!(registration.version, 1);
-    assert_eq!(registration.stream_path, stream_path(REGISTRATION));
+    assert_eq!(registration.stream_path, stream_path(&phone.registration));
     let vapid = paired.with(&phone.token, "GET", "/v1/push/key", "").await;
     assert!(vapid.body.contains(&registration.signing_key));
     assert_eq!(
@@ -226,8 +264,10 @@ async fn registration_and_streams_are_app_scoped_and_bound_to_the_registering_de
     );
 
     // The ordinary route never creates (or re-points) a reserved endpoint.
-    let reserved =
-        push::browser_subscription(&format!("https://native.passporter.invalid/{REGISTRATION}"));
+    let reserved = push::browser_subscription(&format!(
+        "https://native.passporter.invalid/{}",
+        phone.registration
+    ));
     assert_eq!(
         paired
             .status_of(&phone.token, "POST", "/v1/push/subscriptions", &reserved)
@@ -245,7 +285,7 @@ async fn registration_and_streams_are_app_scoped_and_bound_to_the_registering_de
             .await,
         409
     );
-    let path = stream_path(REGISTRATION);
+    let path = stream_path(&phone.registration);
     assert_eq!(paired.status_of(&other_token, "GET", &path, "").await, 404);
     assert_eq!(paired.status_of(&car, "GET", &path, "").await, 403);
     assert_eq!(
@@ -265,7 +305,7 @@ async fn registration_and_streams_are_app_scoped_and_bound_to_the_registering_de
 async fn without_a_companion_the_built_in_routes_are_absent() {
     let phone = phone_with(None).await;
     let paired = &phone.paired;
-    let body = register_body(REGISTRATION);
+    let body = register_body(&phone.registration);
     assert_eq!(
         paired
             .status_of(&phone.token, "POST", "/v1/push/native", &body)
@@ -274,7 +314,7 @@ async fn without_a_companion_the_built_in_routes_are_absent() {
     );
     assert_eq!(
         paired
-            .status_of(&phone.token, "GET", &stream_path(REGISTRATION), "")
+            .status_of(&phone.token, "GET", &stream_path(&phone.registration), "")
             .await,
         404
     );
@@ -287,7 +327,7 @@ async fn open_stream(phone: &Phone) -> hyper::body::Incoming {
     let request = axum::http::Request::get(format!(
         "http://{}{}",
         phone.paired.bridge.addr,
-        stream_path(REGISTRATION)
+        stream_path(&phone.registration)
     ))
     .header("authorization", format!("Bearer {}", phone.token))
     .body(Full::new(Bytes::new()))
@@ -320,13 +360,18 @@ async fn next_message(body: &mut hyper::body::Incoming) -> serde_json::Value {
     .expect("a message in time")
 }
 
-/// Checks `event`'s envelope against `registration`'s signing key; the
-/// envelope.
-fn verified(event: &serde_json::Value, registration: &NativeRegistration) -> serde_json::Value {
+/// Checks `event`'s envelope for `phone` against `registration`'s
+/// signing key; the envelope.
+fn verified(
+    event: &serde_json::Value,
+    phone: &Phone,
+    registration: &NativeRegistration,
+) -> serde_json::Value {
+    let id = &phone.registration;
     let text = event["message"].as_str().expect("envelope text");
     let envelope: serde_json::Value = serde_json::from_str(text).expect("envelope");
     assert_eq!(envelope["version"], 1);
-    assert_eq!(envelope["registrationId"], REGISTRATION);
+    assert_eq!(envelope["registrationId"], id.as_str());
     let public = URL_SAFE_NO_PAD
         .decode(&registration.signing_key)
         .expect("key");
@@ -334,7 +379,7 @@ fn verified(event: &serde_json::Value, registration: &NativeRegistration) -> ser
         .decode(envelope["signature"].as_str().expect("signature"))
         .expect("signature");
     let input = format!(
-        "passporter-notice-v1\n{REGISTRATION}\n{}\n{}",
+        "passporter-notice-v1\n{id}\n{}\n{}",
         envelope["expiresAt"].as_u64().expect("expiry"),
         envelope["body"].as_str().expect("body"),
     );
@@ -372,7 +417,7 @@ async fn register(phone: &Phone) -> NativeRegistration {
             &phone.token,
             "POST",
             "/v1/push/native",
-            &register_body(REGISTRATION),
+            &register_body(&phone.registration),
         )
         .await;
     assert_eq!(response.status, 200, "{}", response.body);
@@ -381,7 +426,7 @@ async fn register(phone: &Phone) -> NativeRegistration {
 
 #[tokio::test]
 async fn a_blocked_agent_reaches_the_stream_as_a_signed_envelope_and_revocation_ends_it() {
-    let (companion, _ntfy) = FakeNtfy::start().await;
+    let companion = companion().await;
     let herdr = CuttableHerdr::new();
     let pane = herdr
         .fake
@@ -395,7 +440,7 @@ async fn a_blocked_agent_reaches_the_stream_as_a_signed_envelope_and_revocation_
     fake.set_status(&pane, herdr::AgentStatus::Working);
     fake.set_status(&pane, herdr::AgentStatus::Blocked);
     let event = next_message(&mut stream).await;
-    verified(&event, &registration);
+    verified(&event, &phone, &registration);
     assert!(
         !event.to_string().contains("secret-agent"),
         "the companion and the stream carry ciphertext only"
@@ -432,7 +477,7 @@ async fn a_notice_spooled_while_the_companion_is_down_arrives_once_it_is_back() 
     fake.set_status(&pane, herdr::AgentStatus::Blocked);
     // Long enough for the first publish to have failed.
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    let topic = format!("pp-{REGISTRATION}");
+    let topic = format!("pp-{}", phone.registration);
     assert!(
         ntfy.messages_after(&topic, "all").is_empty(),
         "not published yet"
@@ -441,6 +486,6 @@ async fn a_notice_spooled_while_the_companion_is_down_arrives_once_it_is_back() 
 
     let mut stream = open_stream(&phone).await;
     let event = next_message(&mut stream).await;
-    verified(&event, &registration);
+    verified(&event, &phone, &registration);
     phone.paired.bridge.stop().await.expect("stop");
 }
