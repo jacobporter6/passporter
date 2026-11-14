@@ -163,8 +163,8 @@ mod tests {
             "https://bridge.example.org"
         );
         assert_eq!(
-            origin("https://10.0.0.2:8443").to_string(),
-            "https://10.0.0.2:8443"
+            origin("https://192.0.2.2:8443").to_string(),
+            "https://192.0.2.2:8443"
         );
     }
 
@@ -293,13 +293,13 @@ mod tests {
                 ],
             ),
             (
-                "https://10.0.0.2:8443",
-                ["https://10.0.0.2:8443/", "https://10.0.0.2:8443/settings"],
+                "https://192.0.2.2:8443",
+                ["https://192.0.2.2:8443/", "https://192.0.2.2:8443/settings"],
                 [
-                    "https://10.0.0.2/",
-                    "https://10.0.0.20:8443/",
-                    "https://10.0.0.2:18443/",
-                    "http://10.0.0.2:8443/",
+                    "https://192.0.2.2/",
+                    "https://192.0.2.20:8443/",
+                    "https://192.0.2.2:18443/",
+                    "http://192.0.2.2:8443/",
                     "https://tauri.localhost/",
                 ],
             ),

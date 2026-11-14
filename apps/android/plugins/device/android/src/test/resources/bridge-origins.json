@@ -8,8 +8,8 @@
     "https://xn--brcke-lva.example",
     "https://bridge.xn--p1ai",
     "https://intranet",
-    "https://10.0.0.2",
-    "https://10.0.0.2:8443"
+    "https://192.0.2.2",
+    "https://192.0.2.2:8443"
   ],
   "reject": [
     "http://bridge.example.org",
