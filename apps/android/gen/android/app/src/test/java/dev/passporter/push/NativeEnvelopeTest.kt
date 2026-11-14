@@ -73,13 +73,14 @@ class NativeEnvelopeTest {
     }
 
     @Test
-    fun refusesAnExpiredEnvelopeAndTellsAClockThatIsOff() {
-        // Delivered late, within the companion's hour: expired.
+    fun refusesAnExpiredEnvelopeAndTellsAClockThatIsBehind() {
+        // Delivered late, however late (a spool-delayed publish plus the companion's
+        // hour can be more than an hour past): expired, never the clock.
         assertEquals(Opened.Refused(EnvelopeRefusal.EXPIRED), open(at = EnvelopeVector.expiresAt))
         assertEquals(Opened.Refused(EnvelopeRefusal.EXPIRED), open(at = EnvelopeVector.expiresAt + 3599))
-        // Further past than the companion keeps anything, or further ahead than
-        // the bridge ever sets (an hour, plus ten minutes of skew): the clock.
-        assertEquals(Opened.Refused(EnvelopeRefusal.CLOCK), open(at = EnvelopeVector.expiresAt + 3600))
+        assertEquals(Opened.Refused(EnvelopeRefusal.EXPIRED), open(at = EnvelopeVector.expiresAt + 3600))
+        assertEquals(Opened.Refused(EnvelopeRefusal.EXPIRED), open(at = EnvelopeVector.expiresAt + 86_400))
+        // Further ahead than the bridge ever sets (an hour, plus ten minutes of skew): the clock.
         assertEquals(Opened.Refused(EnvelopeRefusal.CLOCK), open(at = EnvelopeVector.expiresAt - 4201))
         check(open(at = EnvelopeVector.expiresAt - 4200) is Opened.Ciphertext)
     }
