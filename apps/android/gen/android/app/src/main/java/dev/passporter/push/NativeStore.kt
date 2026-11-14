@@ -18,7 +18,8 @@ enum class Transport {
 /**
  * What the built-in receiver remembers ([NativeReceiver]): the transport
  * you chose, and for the pairing that owns it ([owner]) its registration,
- * the bridge's signing key and how far the stream was read.
+ * the bridge's signing key, how far the stream was read and whether it
+ * ever connected.
  */
 data class NativeRecord(
     /** Your choice; kept across pairings. */
@@ -31,6 +32,11 @@ data class NativeRecord(
     val signingKey: String? = null,
     /** The id of the last message read from the stream (ntfy's), or null for all. */
     val cursor: String? = null,
+    /**
+     * Whether the stream has connected for [owner] at least once: until it
+     * has, the external registration is kept ([Interim]).
+     */
+    val streamConnected: Boolean = false,
 ) {
     /** Whether the bridge holds a registration for [owner]. */
     val registered: Boolean get() = owner != null && registrationId != null && signingKey != null
@@ -79,6 +85,7 @@ class NativeStore(file: File) {
                 registrationId = obj.text(REGISTRATION),
                 signingKey = obj.text(SIGNING_KEY)?.takeIf(NativeEnvelope::isSigningKey),
                 cursor = obj.text(CURSOR)?.takeIf(NativeReceiver::isCursor),
+                streamConnected = obj.optBoolean(STREAM_CONNECTED),
             )
         } catch (e: JSONException) {
             NativeRecord()
@@ -91,6 +98,7 @@ class NativeStore(file: File) {
         record.registrationId?.let { obj.put(REGISTRATION, it) }
         record.signingKey?.let { obj.put(SIGNING_KEY, it) }
         record.cursor?.let { obj.put(CURSOR, it) }
+        if (record.streamConnected) obj.put(STREAM_CONNECTED, true)
         file.baseFile.parentFile?.mkdirs()
         val out = file.startWrite()
         try {
@@ -110,5 +118,6 @@ class NativeStore(file: File) {
         const val REGISTRATION = "registrationId"
         const val SIGNING_KEY = "signingKey"
         const val CURSOR = "cursor"
+        const val STREAM_CONNECTED = "streamConnected"
     }
 }
