@@ -99,7 +99,12 @@ class NativePushService : Service() {
         }
         network.registerDefaultNetworkCallback(networkCallback)
         // A registration replaced under the open stream (a new pairing) ends it.
-        BuiltInPush.receiver(this).onRegistrationChanged = ::wake
+        // The stream was the old registration's: not connected now, so a new
+        // pairing's external endpoint is kept until the new stream connects.
+        BuiltInPush.receiver(this).onRegistrationChanged = {
+            NativeStatus.set(NativeState.RetryLater)
+            wake()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
