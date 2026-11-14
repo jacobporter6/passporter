@@ -123,9 +123,9 @@ pub enum Ask {
     Toast,
     /// The user closed the surface named `a`.
     Close,
-    /// The bridge started agent `a`: wait (briefly) for the agent list to
-    /// show it, toast `b` (if a string), open it and close the "New agent"
-    /// sheet. A promise of when that is done.
+    /// The bridge started an agent (`a`: [`crate::spawn::sheet::Opened`] as
+    /// JSON): keep its unsent prompt, wait briefly for the agent list, toast
+    /// the note, open it and close the sheet. A promise of when that is done.
     OpenAgent,
     /// Mounts the "New agent" prompt's dictation (the page's): its strip
     /// in element `a`, its mic button in element `b`.
