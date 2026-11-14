@@ -93,7 +93,11 @@ pub(crate) enum NativeError {
     /// Even with every notice dropped the message does not fit.
     #[error("notice message too large for the built-in transport")]
     TooLarge,
-    /// RFC 8291 encryption failed (a bad subscription key).
+    /// The registration's public key does not agree (ECDH fails): it can
+    /// never be encrypted to, so the registration is forgotten.
+    #[error("the built-in registration's key is invalid")]
+    InvalidKey,
+    /// RFC 8291 encryption failed otherwise (the crypto backend).
     #[error("encrypting the notice failed")]
     Encrypt,
     /// The VAPID key could not sign.
@@ -390,7 +394,10 @@ fn seal(
         &plaintext,
         &ring::rand::SystemRandom::new(),
     )
-    .map_err(|_| NativeError::Encrypt)?;
+    .map_err(|error| match error {
+        ece::EncryptError::InvalidKey => NativeError::InvalidKey,
+        ece::EncryptError::TooLarge | ece::EncryptError::Crypto => NativeError::Encrypt,
+    })?;
     let body = BASE64URL.encode(ciphertext);
     let expires_at = now + LIFETIME_SECS;
     let signature = key
@@ -680,19 +687,54 @@ mod tests {
         (address, published)
     }
 
+    /// Push with the companion at `address`, its files in `dir`, signing with `key`.
+    fn push_with_companion(
+        dir: &std::path::Path,
+        address: SocketAddr,
+        key: &Arc<VapidKey>,
+    ) -> Arc<Push> {
+        let mut settings = super::super::PushSettings::new(
+            Arc::clone(key),
+            "mailto:ops@example.com".parse().expect("subject"),
+            dir.join(super::super::store::STORE_FILE),
+            Arc::new(super::super::sender::tests::FakeSender::new()),
+        );
+        settings.native_ntfy = Some(address);
+        Arc::new(Push::open(settings).expect("opens"))
+    }
+
+    #[tokio::test]
+    async fn a_registration_whose_key_cannot_be_encrypted_to_is_forgotten() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let key = Arc::new(super::super::vapid::tests::key());
+        // Never reached: sealing fails first.
+        let push = push_with_companion(dir.path(), ([127, 0, 0, 1], 9).into(), &key);
+        let mut subscription = super::super::store::tests::subscription("unused");
+        subscription.endpoint = endpoint_of(&registration_id()).expect("endpoint");
+        // Not on P-256 (parsing refuses such a key; one could still be stored).
+        let mut off_curve = [0u8; 65];
+        off_curve[0] = 0x04;
+        subscription.p256dh = super::super::subscription::P256dh::unchecked(off_curve);
+        let device = "dev-0000000000000001";
+        push.store
+            .put(device, subscription.clone())
+            .expect("registered");
+        let message = PushMessage {
+            ping: "ping".into(),
+            notices: vec![],
+        };
+        Arc::clone(&push).deliver(subscription, &message).await;
+        assert!(push.store.of(device).is_empty(), "forgotten");
+        let companion = push.native.as_ref().expect("companion");
+        assert!(companion.spool.snapshot().is_empty(), "nothing spooled");
+    }
+
     #[tokio::test]
     async fn a_shutdown_mid_pass_still_unspools_what_was_published() {
         let dir = tempfile::tempdir().expect("tmp");
         let (address, published) = stalling_companion().await;
         let key = Arc::new(super::super::vapid::tests::key());
-        let mut settings = super::super::PushSettings::new(
-            Arc::clone(&key),
-            "mailto:ops@example.com".parse().expect("subject"),
-            dir.path().join(super::super::store::STORE_FILE),
-            Arc::new(super::super::sender::tests::FakeSender::new()),
-        );
-        settings.native_ntfy = Some(address);
-        let push = Arc::new(Push::open(settings).expect("opens"));
+        let push = push_with_companion(dir.path(), address, &key);
         let receiver = ece::tests::Receiver::new();
         let mut subscription = subscription_for(&receiver);
         subscription.endpoint = endpoint_of(&registration_id()).expect("endpoint");
