@@ -90,14 +90,11 @@ class NativePushService : Service() {
             // ForegroundServiceStartNotAllowedException (Android 12+) is one.
             Log.w(PUSH_TAG, "Android refused the built-in transport's service: ${e.javaClass.simpleName}")
             running = false
+            BuiltInPush.fallBack(this)
             stopSelf()
             return
         }
         network.registerDefaultNetworkCallback(networkCallback)
-        inForeground = true
-        // In the foreground now: the external registration can go.
-        val app = applicationContext
-        PushWork.run { Log.i(PUSH_TAG, "external registration: ${PushWork.sync(app).leave()}") }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -107,7 +104,10 @@ class NativePushService : Service() {
         return START_STICKY
     }
 
-    /** Starts the connection thread unless it runs. Main thread. */
+    /**
+     * Starts the connection thread unless one runs. Main thread. A thread
+     * that has decided to end clears [worker] first, so it never counts.
+     */
     private fun ensureWorker() {
         if (worker?.isAlive == true) return
         worker = Thread(::listen, "passporter-builtin-push").apply {
@@ -125,7 +125,6 @@ class NativePushService : Service() {
     }
 
     override fun onDestroy() {
-        inForeground = false
         running = false
         wake()
         try {
@@ -153,6 +152,10 @@ class NativePushService : Service() {
                 connected = {
                     failures = 0
                     NativeStatus.set(NativeState.Connected)
+                    // News arrives this way now: the external registration can go
+                    // (kept until here, so a stream that never connects loses nothing).
+                    val app = applicationContext
+                    PushWork.run { Log.i(PUSH_TAG, "external registration: ${PushWork.sync(app).leave()}") }
                 },
                 guard = { work ->
                     val lock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKE_LOCK_TAG)
@@ -175,11 +178,17 @@ class NativePushService : Service() {
                 Log.i(PUSH_TAG, "built-in transport stopped: $state")
                 // The external registration was dropped when this one took
                 // over: say so rather than go quiet until the app is opened.
-                if (state == NativeState.BridgeHasNone || state is NativeState.Refused) tellStopped()
+                if (state == NativeState.BridgeHasNone || state is NativeState.Refused) {
+                    BuiltInPush.fallBack(this)
+                    tellStopped()
+                }
                 val startId = lastStart
-                // Before the stop takes effect: a new endpoint from the distributor is posted again.
-                inForeground = false
-                ContextCompat.getMainExecutor(this).execute { stopUnlessStartedAgain(startId) }
+                val me = Thread.currentThread()
+                ContextCompat.getMainExecutor(this).execute {
+                    // This thread is ending: a start after startId gets a fresh one.
+                    if (worker === me) worker = null
+                    stopUnlessStartedAgain(startId)
+                }
                 break
             }
             failures = (failures + 1).coerceAtMost(MAX_DOUBLINGS)
@@ -188,7 +197,11 @@ class NativePushService : Service() {
         }
     }
 
-    /** A notification that news stopped coming; its tap opens the setup, which falls back. */
+    /**
+     * A notification that the built-in transport stopped; its tap opens the
+     * setup. Shown also when the ntfy app takes over ([BuiltInPush.fallBack]),
+     * since that may need the app (no distributor saved, the picker).
+     */
     private fun tellStopped() {
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
@@ -225,15 +238,6 @@ class NativePushService : Service() {
     }
 
     companion object {
-        /**
-         * Whether the service runs in the foreground: the built-in transport
-         * brings news, so the external registration is not wanted
-         * (`PassporterPushService` drops a new endpoint meanwhile).
-         */
-        @Volatile
-        var inForeground = false
-            private set
-
         private const val CHANNEL = "builtin_push"
         private const val ID = 702
         private const val STOPPED_CHANNEL = "builtin_push_stopped"

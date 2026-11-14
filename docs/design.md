@@ -360,7 +360,7 @@ Risks:     anything it flagged or skipped (failing tests, TODOs, assumptions)
   8291), so the push service (or the companion) only sees ciphertext. The
   app registers while paired and shows a notice as a notification with no
   network call, also with its process cold (T31a, T32a; the built-in
-  receiver keeps its stream open in a foreground service, BP); a tap opens
+  receiver keeps its stream open in a foreground service); a tap opens
   that agent (T30c), and it can be answered from the
   shade (T31b); Android Auto reads announced notices aloud and takes
   spoken replies (T33). Web Push (PWA) subscriptions keep the

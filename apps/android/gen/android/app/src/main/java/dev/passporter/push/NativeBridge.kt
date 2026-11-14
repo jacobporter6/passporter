@@ -62,11 +62,11 @@ interface NativeBridge {
     fun deviceId(): DeviceId?
 
     /**
-     * `POST /v1/push/native` with [json].
+     * `POST /v1/push/native` with [json], as [device] only.
      *
-     * @throws DeviceAuthException when there is no session.
+     * @throws DeviceAuthException when there is no session for [device].
      */
-    fun register(json: String): HttpResponse
+    fun register(json: String, device: DeviceId): HttpResponse
 
     /**
      * `DELETE /v1/push/subscriptions` with [json], as [device] only.
@@ -89,7 +89,8 @@ interface NativeBridge {
 class DeviceAuthNativeBridge(private val context: Context, private val auth: DeviceAuth) : NativeBridge {
     override fun deviceId(): DeviceId? = auth.status().deviceId
 
-    override fun register(json: String): HttpResponse = auth.send(Scope.APP, Method.POST, REGISTER_PATH, json)
+    override fun register(json: String, device: DeviceId): HttpResponse =
+        auth.send(Scope.APP, Method.POST, REGISTER_PATH, json, device)
 
     override fun unsubscribe(json: String, device: DeviceId): HttpResponse =
         auth.send(Scope.APP, Method.DELETE, SUBSCRIPTIONS_PATH, json, device)

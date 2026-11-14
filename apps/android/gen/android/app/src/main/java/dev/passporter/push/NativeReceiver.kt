@@ -161,7 +161,7 @@ class NativeReceiver(
             .put("auth", public.auth)
             .toString()
         val response = try {
-            bridge.register(body)
+            bridge.register(body, device)
         } catch (e: DeviceAuthException) {
             return failed(e)
         }
@@ -294,7 +294,8 @@ class NativeReceiver(
                         confirmed = false
                         save(store.load().copy(signingKey = null))
                     }
-                    return register()
+                    // Not after a stop: that would make keys and a registration nobody wants.
+                    return if (running()) register() else NativeState.RetryLater
                 }
                 else -> return NativeState.RetryLater
             }
@@ -304,7 +305,7 @@ class NativeReceiver(
                     val line = stream.nextLine() ?: break
                     val outcome = guard { ingest(line) }
                     if (outcome !is Ingested.Ignored) Log.i(PUSH_TAG, "built-in message: $outcome")
-                    if (forged >= MAX_FORGED && mayReregister()) {
+                    if (forged >= MAX_FORGED && running() && mayReregister()) {
                         Log.w(PUSH_TAG, "envelopes keep failing the signature: registering again")
                         forged = 0
                         confirmed = false

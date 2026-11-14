@@ -40,7 +40,7 @@ class PassporterPushService : PushService() {
         val app = applicationContext
         PushWork.run {
             // An endpoint that arrives after the built-in transport took over is dropped, not posted.
-            if (NativePushService.inForeground) {
+            if (BuiltInPush.bringsNews(app)) {
                 Log.i(PUSH_TAG, "new endpoint while the built-in transport runs: ${PushWork.sync(app).leave()}")
                 return@run
             }

@@ -154,15 +154,17 @@ sequenceDiagram
   envelopes in a private file (`push-native-spool.json` beside the
   subscription store; at most 256, 16 per phone, each for an hour) and
   publishes them in order once the companion answers (one it refuses for
-  good, a 4xx, is dropped, never holding back the rest). The companion
+  good, a 4xx other than 408 or 429, is dropped, never holding back the
+  rest; anything else is retried). The companion
   keeps an hour of them for a phone that is offline. Delivery is at least
   once; the app drops a message it has shown.
 - **The phone keeps one connection.** A foreground service (a quiet,
   minimised notification, *Listening for agent news*) holds the stream,
   reconnects with backoff, waits for a network, and starts again after a
   reboot (once you unlock) or an app update. If the bridge stops offering
-  the transport (its companion removed), the app posts *Agent news
-  stopped*; its tap opens the setup, which falls back to the ntfy app.
+  the transport (its companion removed), or Android refuses the service,
+  the app falls back to the ntfy app on its own when you have used it
+  before, and posts *Agent news stopped* (its tap opens the setup).
   After pairing, the app asks
   once to run without battery restrictions: without that, Doze may hold
   news back for minutes. A force stop ends it until you open the app.

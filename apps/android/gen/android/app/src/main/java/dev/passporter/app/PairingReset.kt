@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.work.WorkManager
 import dev.passporter.car.CarOutbox
+import dev.passporter.device.DeviceAuth
 import dev.passporter.notify.NoticeNotification
 import dev.passporter.notify.NotificationLock
 import dev.passporter.notify.actions.Outbox
@@ -52,9 +53,13 @@ object PairingReset {
         val app = context.applicationContext
         // First, so no notice of the old pairing is shown after the shade is cleared.
         step("the built-in transport") {
-            NativePushService.stop(app)
-            BuiltInPush.receiver(app).reset()
-            NativeStatus.reset()
+            val receiver = BuiltInPush.receiver(app)
+            // Unless it is already the new pairing's (a refresh that ran first).
+            if (receiver.record().owner != DeviceAuth.get(app).savedDevice()?.value) {
+                NativePushService.stop(app)
+                receiver.reset()
+                NativeStatus.reset()
+            }
         }
         step("the queued answers") {
             val work = WorkManager.getInstance(app)

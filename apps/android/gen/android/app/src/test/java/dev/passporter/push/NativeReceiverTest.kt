@@ -70,9 +70,10 @@ class NativeReceiverTest {
 
         override fun deviceId(): DeviceId? = device
 
-        override fun register(json: String): HttpResponse {
+        override fun register(json: String, device: DeviceId): HttpResponse {
             failure?.let { throw it }
             val id = JSONObject(json).getString("registrationId")
+            check(device == this.device) { "registered as ${device.value}, paired as ${this.device?.value}" }
             calls += "POST $id"
             val status = answers.removeFirstOrNull() ?: 200
             val body = JSONObject()

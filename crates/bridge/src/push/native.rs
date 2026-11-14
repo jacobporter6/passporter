@@ -503,6 +503,9 @@ pub(crate) async fn stream(
         return Err(StatusCode::NOT_FOUND);
     }
     let since = since(raw.as_deref())?;
+    // A free slot first, if there is one: a request refused for capacity
+    // then never costs the companion a subscription.
+    let free = Arc::clone(&companion.streams).try_acquire_owned().ok();
     let request = Request::get(format!(
         "http://{}/{}/json?since={since}",
         companion.address,
@@ -518,14 +521,19 @@ pub(crate) async fn stream(
         return Err(StatusCode::BAD_GATEWAY);
     }
     // Only now, with the companion answering, does this stream replace the
-    // phone's previous one (a connection it has left), whose permit comes
-    // back as it ends: hence the short wait for one.
+    // phone's previous one (a connection it has left). Without a free slot,
+    // that one's permit comes back as it ends: hence the short wait.
     let (number, superseded) = companion.take_over(&registration);
-    let permit =
-        tokio::time::timeout(PERMIT_WAIT, Arc::clone(&companion.streams).acquire_owned()).await;
-    let Ok(Ok(permit)) = permit else {
-        companion.release(&registration, number);
-        return Err(StatusCode::TOO_MANY_REQUESTS);
+    let permit = if let Some(permit) = free {
+        permit
+    } else {
+        let waited =
+            tokio::time::timeout(PERMIT_WAIT, Arc::clone(&companion.streams).acquire_owned()).await;
+        let Ok(Ok(permit)) = waited else {
+            companion.release(&registration, number);
+            return Err(StatusCode::TOO_MANY_REQUESTS);
+        };
+        permit
     };
     // The static token never expires: such a stream still ends every
     // quarter hour.

@@ -567,8 +567,10 @@ Android app](../operations/push.md#the-android-app)):
 and right after pairing: it registers the built-in transport if that is
 the choice and the bridge has it, and only otherwise lets
 `PushRegistration` register with a distributor as before. Taking over, it
-drops the distributor's registration (bridge copy first, `PushSync.leave`);
-an endpoint the distributor sends later is dropped, not posted. The bridge
+drops the distributor's registration (bridge copy first, `PushSync.leave`)
+once its stream first connects, so a stream that never connects loses
+nothing; while the stream is connected, an endpoint the distributor sends
+is dropped, not posted. The bridge
 gives all of a device's subscriptions one message id (`ping`), which the
 notifier remembers, so a switch never notifies twice.
 
@@ -622,9 +624,10 @@ bridge holds the external registration.
   callback wakes it), holding a 10-second wake lock per line. It stops
   itself when the transport is off; if that is because the bridge no
   longer offers it, it first posts *Agent news stopped* (a tap opens the
-  setup). The external registration is dropped only once the service runs
-  in the foreground, and while it does a new endpoint from the distributor
-  is dropped too. `BOOT_COMPLETED` and
+  setup), and registers with the distributor you chose before, if any
+  (`BuiltInPush.fallBack`), as it does when Android refuses the service.
+  The bridge keeps one built-in registration per device: a new one
+  replaces the one the phone left. `BOOT_COMPLETED` and
   `MY_PACKAGE_REPLACED` start it again if it was on; a force stop is final
   until you open the app. Its notification is on a minimum-importance
   channel (*Connection to your bridge*), which you may hide.

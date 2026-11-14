@@ -2,10 +2,12 @@ package dev.passporter.push
 
 import android.content.Context
 import android.util.Log
+import dev.passporter.app.R
 import dev.passporter.device.DeviceAuth
 import dev.passporter.notify.NoticeNotifier
 import dev.passporter.notify.actions.PairedAs
 import java.io.File
+import org.unifiedpush.android.connector.UnifiedPush
 import org.unifiedpush.android.connector.keys.DefaultKeyManager
 
 /** Which transport [BuiltInPush.refresh] settled on. */
@@ -23,8 +25,8 @@ enum class Settled {
  *
  * - by default the bridge's own transport, when it has one: registered,
  *   the [NativePushService] started, and any external registration dropped
- *   ([PushSync.leave]) once the service is in the foreground, so the bridge
- *   sends each notice once;
+ *   ([PushSync.leave]) once its stream first connects, so the bridge sends
+ *   each notice once and a stream that never connects loses nothing;
  * - the external distributor (T32a's path, unchanged) when the bridge has
  *   no companion, refuses the registration, or you chose it
  *   ([Transport.EXTERNAL]).
@@ -78,20 +80,43 @@ object BuiltInPush {
         }
         // Android refuses the start if the app went to the background meanwhile.
         // The external registration is dropped by the service itself, once
-        // it is in the foreground (NativePushService.onCreate).
+        // its stream connects.
         if (!NativePushService.start(app)) return Settled.EXTERNAL
         Log.i(PUSH_TAG, "built-in transport: $state")
         return Settled.BUILT_IN
     }
 
-    /**
-     * Whether the built-in transport is the choice and registered (what
-     * starts it after a reboot). Whether it brings news now is
-     * [NativePushService.inForeground].
-     */
+    /** Whether the built-in transport is the choice and registered (what starts it after a reboot). */
     fun active(context: Context): Boolean {
         val record = receiver(context).record()
         return record.choice == Transport.BUILT_IN && record.registered
+    }
+
+    /**
+     * Whether the built-in transport brings news now: chosen (a durable
+     * choice, so a switch to the ntfy app counts at once), registered, and
+     * its stream connected. An external endpoint is not wanted then.
+     */
+    fun bringsNews(context: Context): Boolean = active(context) && NativeStatus.get() == NativeState.Connected
+
+    /**
+     * The built-in transport stopped (or could not start) while the app may
+     * be in the background: registers with the distributor you chose
+     * before, if the bridge allows it, so news keeps coming. Without a saved
+     * distributor it waits for the app (the picker needs it).
+     */
+    fun fallBack(context: Context) {
+        val app = context.applicationContext
+        PushWork.run {
+            val distributor = UnifiedPush.getSavedDistributor(app) ?: return@run
+            when (val readiness = PushWork.sync(app).readiness()) {
+                is Readiness.Register -> {
+                    UnifiedPush.register(app, PushWork.INSTANCE, app.getString(R.string.app_name), readiness.vapidKey)
+                    Log.i(PUSH_TAG, "fell back to the distributor ($distributor)")
+                }
+                else -> Log.i(PUSH_TAG, "no fallback to the distributor: $readiness")
+            }
+        }
     }
 }
 
