@@ -22,7 +22,12 @@ import dev.passporter.notify.actions.Outbox
 import dev.passporter.notify.actions.PreferenceFrozenBodies
 import dev.passporter.notify.actions.job
 import dev.passporter.notify.notice
+import dev.passporter.push.BuiltInPush
+import dev.passporter.push.NativeState
+import dev.passporter.push.NativeStatus
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -92,6 +97,17 @@ class PairingResetTest {
         assertReset()
         PairingReset.run(context) // idempotent
         assertReset()
+    }
+
+    /** Not paired, with no built-in registration either: what the built-in transport said goes too. */
+    @Test
+    fun unpairedTheBuiltInStatusGoesEvenWithoutARegistration() {
+        check(BuiltInPush.receiver(context).record().owner == null)
+        NativeStatus.set(NativeState.Connected)
+        NativeStatus.clockOff = true
+        PairingReset.run(context)
+        assertNull(NativeStatus.get())
+        assertFalse(NativeStatus.clockOff)
     }
 
     /** The application's listener: forgetting the pairing (from the PWA too) resets. */

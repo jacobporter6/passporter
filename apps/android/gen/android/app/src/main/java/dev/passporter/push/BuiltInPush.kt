@@ -120,13 +120,19 @@ object BuiltInPush {
         PushWork.run {
             try {
                 val distributor = UnifiedPush.getSavedDistributor(app)
-                val readiness = distributor?.let { PushWork.sync(app).readiness() }
-                if (readiness is Readiness.Register) {
-                    UnifiedPush.register(app, PushWork.INSTANCE, app.getString(R.string.app_name), readiness.vapidKey)
-                    Log.i(PUSH_TAG, "fell back to the distributor ($distributor)")
-                } else {
-                    Log.i(PUSH_TAG, "no fallback to a distributor: ${readiness ?: "none saved"}")
-                    tellStopped(app)
+                when (val fallback = Fallback.decide(distributor) { PushWork.sync(app).readiness() }) {
+                    is Fallback.Register -> {
+                        UnifiedPush.register(app, PushWork.INSTANCE, app.getString(R.string.app_name), fallback.vapidKey)
+                        Log.i(PUSH_TAG, "fell back to the distributor ($distributor)")
+                    }
+                    is Fallback.Tell -> {
+                        Log.i(PUSH_TAG, "no fallback to the distributor: ${fallback.readiness}")
+                        tellStopped(app)
+                    }
+                    Fallback.NoDistributor -> {
+                        Log.i(PUSH_TAG, "no fallback: no distributor saved")
+                        tellStopped(app)
+                    }
                 }
             } finally {
                 done()
@@ -161,6 +167,39 @@ object BuiltInPush {
             manager.notify(STOPPED_ID, notification)
         } catch (e: SecurityException) {
             // Notifications are off: nothing would show anyway.
+        }
+    }
+}
+
+/** What [BuiltInPush.fallBack] does once the built-in transport stopped. */
+internal sealed interface Fallback {
+    /** Register with the saved distributor, for the bridge's [vapidKey]. */
+    data class Register(
+        /** The bridge's VAPID public key. */
+        val vapidKey: String,
+    ) : Fallback
+
+    /** Post that agent news stopped: the saved distributor cannot take over, the bridge is not ready. */
+    data class Tell(
+        /** The bridge's answer. */
+        val readiness: Readiness,
+    ) : Fallback
+
+    /** Post that agent news stopped: no distributor is saved (choosing one needs the app's picker). */
+    data object NoDistributor : Fallback
+
+    companion object {
+        /**
+         * The fallback for the saved [distributor] (null if none): only it can
+         * take over without the app's picker, and only if the bridge is ready
+         * ([readiness], asked only when one is saved).
+         */
+        fun decide(distributor: String?, readiness: () -> Readiness): Fallback {
+            if (distributor == null) return NoDistributor
+            return when (val ready = readiness()) {
+                is Readiness.Register -> Register(ready.vapidKey)
+                else -> Tell(ready)
+            }
         }
     }
 }

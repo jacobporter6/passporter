@@ -117,6 +117,14 @@ class NativeReceiver(
     @Volatile
     var onRegistrationChanged: (() -> Unit)? = null
 
+    /**
+     * Registration posts finished so far ([post]), so the stream's
+     * [registerAgain] can tell that another ended while it waited (a
+     * refresh's). Written under [lock].
+     */
+    @Volatile
+    private var attempts = 0L
+
     /** Whether the bridge confirmed the registration in this process: registered once per process. */
     @Volatile
     private var confirmed = false
@@ -152,6 +160,16 @@ class NativeReceiver(
         if (record.choice == Transport.EXTERNAL) return leave()
         if (record.owner != null && record.owner != device.value) record = reset()
         if (record.registered && confirmed) return NativeState.Registered
+        return try {
+            post(device, record)
+        } finally {
+            attempts++
+        }
+    }
+
+    /** Posts the registration of [owned] (made for [device]) with this app's keys. Under [lock]. */
+    private fun post(device: DeviceId, owned: NativeRecord): NativeState {
+        var record = owned
         val public = try {
             if (!keys.exists(KEY_INSTANCE)) keys.generate(KEY_INSTANCE)
             keys.getPublicKeySet(KEY_INSTANCE)
@@ -269,11 +287,12 @@ class NativeReceiver(
     /**
      * Reads the stream once, until it ends, it fails, or [running] turns
      * false (closing what [opened] was given also ends it, from another
-     * thread). [connected] is called once the stream is open; each line is
+     * thread). [connected] is called once the stream is open, if it is
+     * still the record's (under the receiver's lock: keep it quick); each line is
      * handled inside [guard] (a wake lock). Answers why
      * it ended: [NativeState.RetryLater] when worth reconnecting, else what
-     * stops the service. A registration the bridge no longer holds (404)
-     * is made afresh first.
+     * stops the service. A registration the bridge no longer holds (404),
+     * or one that has no signing key yet, is made afresh first.
      */
     fun listen(
         running: () -> Boolean,
@@ -281,14 +300,18 @@ class NativeReceiver(
         connected: () -> Unit,
         guard: (() -> Ingested) -> Ingested = { it() },
     ): NativeState {
+        // Before the record is read: an attempt after this one decides for it.
+        val seen = attempts
         val record = store.load()
         if (record.choice == Transport.EXTERNAL) return NativeState.Off
         val owner = record.owner?.let(DeviceId::parse)
         val id = record.registrationId
         if (owner == null || id == null) return NativeState.NotPaired
-        // Owner and id but no key yet: a registration in progress (a new
-        // pairing's, say). Come back shortly rather than stop.
-        if (!record.registered) return NativeState.RetryLater
+        // Owner and id but no key: a registration in progress (a new pairing's,
+        // which register() waits for under the lock) or one whose post failed
+        // (after a 404 here, or a refresh). Nothing else on this path would
+        // register again, so register here, as after a 404.
+        if (!record.registered) return registerAgain(running, seen)
         val path = streamPath(id) + "?since=" + (record.cursor ?: "all")
         val stream = try {
             bridge.openStream(path, owner)
@@ -302,16 +325,23 @@ class NativeReceiver(
             when (stream.status) {
                 200 -> Unit
                 404 -> {
+                    val now = attempts
                     synchronized(lock) {
                         confirmed = false
                         save(store.load().copy(signingKey = null))
                     }
                     // Not after a stop: that would make keys and a registration nobody wants.
-                    return if (running()) register() else NativeState.RetryLater
+                    return registerAgain(running, now)
                 }
                 else -> return NativeState.RetryLater
             }
-            connected()
+            // Under the lock, so a reset (a new pairing's registration) comes
+            // either before, and this stream is not the record's, or after,
+            // and its onRegistrationChanged sees the connection.
+            val current = synchronized(lock) {
+                store.load().let { it.registrationId == id && it.owner == owner.value }.also { if (it) connected() }
+            }
+            if (!current) return NativeState.RetryLater
             try {
                 // Read only while the record is still the one this stream was opened for.
                 while (running() && store.load().let { it.registrationId == id && it.owner == owner.value }) {
@@ -330,6 +360,22 @@ class NativeReceiver(
             }
         }
         return NativeState.RetryLater
+    }
+
+    /**
+     * Registers again for the stream ([listen]) of the record it read after
+     * [seen] attempts, unless the service stopped or another attempt (a
+     * refresh's) ran while it waited for the lock: one that succeeded
+     * answers [NativeState.Registered], one that failed [NativeState.RetryLater]
+     * (backed off, not posted again at once). Checked under the lock: a stop
+     * during a refresh's registration must make none.
+     */
+    private fun registerAgain(running: () -> Boolean, seen: Long): NativeState = synchronized(lock) {
+        when {
+            !running() -> NativeState.RetryLater
+            attempts != seen -> if (store.load().registered && confirmed) NativeState.Registered else NativeState.RetryLater
+            else -> registerLocked()
+        }
     }
 
     /**
