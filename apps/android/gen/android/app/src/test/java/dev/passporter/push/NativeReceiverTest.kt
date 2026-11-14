@@ -39,11 +39,15 @@ class NativeReceiverTest {
     private var pairedNow: PairedAs = PairedAs.Device(device("dev-0000000000000001"))
     private var ids = ArrayDeque(listOf(EnvelopeVector.registration, "00000000-0000-4000-8000-000000000002"))
     private var clockMs = 0L
+
+    /** Thrown by the notifier (the platform refusing it), when set. */
+    private var showFailure: RuntimeException? = null
     private val receiver = NativeReceiver(
         store = store,
         bridge = bridge,
         keys = keys,
         show = { owner, text ->
+            showFailure?.let { throw it }
             shown += owner to text
             NoticeOutcome.Posted(1)
         },
@@ -98,6 +102,9 @@ class NativeReceiverTest {
     private class FakeKeys : KeyManager {
         var exists = false
         var generated = 0
+
+        /** Thrown by [decrypt] (a Keystore provider failure), when set. */
+        var failure: RuntimeException? = null
         var deleted = 0
 
         override fun exists(instance: String) = exists && instance == NativeReceiver.KEY_INSTANCE
@@ -115,6 +122,7 @@ class NativeReceiverTest {
         override fun getPublicKeySet(instance: String) = if (exists) PublicKeySet(TestVector.uaPublic, TestVector.auth) else null
 
         override fun decrypt(instance: String, sealed: ByteArray): ByteArray? {
+            failure?.let { throw it }
             if (!exists) return null
             val b64 = Base64.getUrlDecoder()
             return WebPushHybridDecrypt.Builder()
@@ -230,6 +238,37 @@ class NativeReceiverTest {
         val foreign = EnvelopeVector.with("registrationId", "00000000-0000-4000-8000-000000000009")
         assertEquals(Ingested.Refused(EnvelopeRefusal.OTHER_REGISTRATION), receiver.ingest(message("m2", foreign)))
         assertTrue(shown.isEmpty())
+    }
+
+    @Test
+    fun aMessageThatFailsUnexpectedlyIsReadPastNotRetriedInALoop() {
+        receiver.register()
+        keys.failure = java.security.ProviderException("keystore")
+        assertEquals(Ingested.Failed, receiver.ingest(message("m1")))
+        assertEquals("read past", "m1", store.load().cursor)
+        keys.failure = null
+        showFailure = SecurityException("no notification permission")
+        assertEquals(Ingested.Failed, receiver.ingest(message("m2")))
+        assertEquals("m2", store.load().cursor)
+        assertTrue(shown.isEmpty())
+    }
+
+    @Test
+    fun aFailingMessageDoesNotEndTheStream() {
+        receiver.register()
+        showFailure = IllegalStateException("notifier")
+        val outcomes = mutableListOf<Ingested>()
+        bridge.streams += stream(message("m1"), message("m2"))
+        val state = receiver.listen({ true }, {}, {}) { work ->
+            work().also {
+                outcomes += it
+                showFailure = null
+            }
+        }
+        assertEquals(NativeState.RetryLater, state)
+        assertEquals(Ingested.Failed, outcomes.first())
+        check(outcomes.last() is Ingested.Shown)
+        assertEquals("m2", store.load().cursor)
     }
 
     @Test

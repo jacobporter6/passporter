@@ -59,6 +59,13 @@ sealed interface Ingested {
     /** The pairing changed since registering: dropped, as [IncomingPush] drops it. */
     data object OtherPairing : Ingested
 
+    /**
+     * Decrypting or showing it failed unexpectedly (a Keystore provider
+     * error, the notifier refused by the platform): logged, and read past,
+     * so the same message cannot fail again on every reconnect.
+     */
+    data object Failed : Ingested
+
     /** Shown by the notifier, which did [outcome]. */
     data class Shown(
         /** What the notifier did. */
@@ -87,9 +94,10 @@ sealed interface Ingested {
  *   [IncomingPush]). Its notices' actions answer as the owner.
  * - Several envelopes in a row that fail the signature mean the bridge's
  *   key changed (a new VAPID key): it registers again for the new key.
- * - The stream's cursor advances after a message is shown, so a crash in
- *   between shows it once more at worst; the notifier drops a ping it has
- *   shown.
+ * - The stream's cursor advances after each message, whatever became of
+ *   it (shown, refused, failed), so a crash in between shows it once more
+ *   at worst; the notifier drops a ping it has shown. A message that fails
+ *   unexpectedly ([Ingested.Failed]) is read past, never retried.
  */
 class NativeReceiver(
     private val store: NativeStore,
@@ -405,17 +413,26 @@ class NativeReceiver(
         val registration = record.registrationId
         val key = record.signingKey
         if (owner == null || registration == null || key == null) return Ingested.OtherPairing
-        val opened = NativeEnvelope.open(event.optString("message"), registration, key, nowSecs())
-        forged = if (opened == Opened.Refused(EnvelopeRefusal.FORGED)) forged + 1 else 0
-        val outcome = when (opened) {
-            is Opened.Refused -> Ingested.Refused(opened.reason)
-            is Opened.Ciphertext -> deliver(opened.body, owner)
+        try {
+            val opened = NativeEnvelope.open(event.optString("message"), registration, key, nowSecs())
+            forged = if (opened == Opened.Refused(EnvelopeRefusal.FORGED)) forged + 1 else 0
+            return when (opened) {
+                is Opened.Refused -> Ingested.Refused(opened.reason)
+                is Opened.Ciphertext -> try {
+                    deliver(opened.body, owner)
+                } catch (e: RuntimeException) {
+                    // Never with content: the exception's class only.
+                    Log.e(PUSH_TAG, "could not decrypt or show a built-in message: ${e.javaClass.name}")
+                    Ingested.Failed
+                }
+            }
+        } finally {
+            // Read past it whatever became of it: a refused message stays refused, and
+            // one that failed must not fail again on every reconnect.
+            synchronized(lock) {
+                if (store.load().registrationId == registration) save(store.load().copy(cursor = id))
+            }
         }
-        // Read past it either way: a refused message stays refused.
-        synchronized(lock) {
-            if (store.load().registrationId == registration) save(store.load().copy(cursor = id))
-        }
-        return outcome
     }
 
     private fun deliver(body: ByteArray, owner: DeviceId): Ingested {
