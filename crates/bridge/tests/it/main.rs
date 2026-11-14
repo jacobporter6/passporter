@@ -17,6 +17,7 @@ mod harness;
 mod headlines;
 mod hooks;
 mod http;
+mod native_push;
 mod pairing;
 mod pending;
 mod pki;

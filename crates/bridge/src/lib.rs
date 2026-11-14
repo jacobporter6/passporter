@@ -201,6 +201,7 @@ impl Settings {
                 );
                 settings.hosts =
                     PushHosts::new(push.extra_hosts.clone()).with_ntfy(push.ntfy_host.clone());
+                settings.native_ntfy = push.native_ntfy;
                 settings.car_announce = push.car_announce_done;
                 settings.quiet_done = quiet_done(push);
                 Some(settings)

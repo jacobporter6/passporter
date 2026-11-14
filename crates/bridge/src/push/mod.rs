@@ -48,6 +48,8 @@
 
 pub mod ece;
 pub mod lookup;
+pub mod native;
+mod native_spool;
 mod notice;
 pub mod schedule;
 pub mod sender;
@@ -89,6 +91,9 @@ use crate::shutdown::Shutdown;
 /// What [`Push`] needs.
 #[derive(Clone)]
 pub struct PushSettings {
+    /// The private ntfy companion of the built-in Android transport
+    /// ([`native`]), loopback only; `None` turns that transport off.
+    pub native_ntfy: Option<std::net::SocketAddr>,
     /// The VAPID signing key.
     pub vapid: Arc<VapidKey>,
     /// The VAPID contact.
@@ -123,6 +128,7 @@ impl PushSettings {
         sender: Arc<dyn PushSender>,
     ) -> Self {
         Self {
+            native_ntfy: None,
             vapid,
             subject,
             store: store.into(),
@@ -152,6 +158,8 @@ impl fmt::Debug for PushSettings {
 
 /// The push service: subscriptions plus the dispatcher that pings them.
 pub struct Push {
+    /// The built-in transport's companion, when configured.
+    native: Option<native::Companion>,
     store: SubscriptionStore,
     vapid: Arc<VapidKey>,
     subject: Subject,
@@ -195,9 +203,20 @@ enum PrepareError {
 }
 
 impl Push {
-    /// Opens the subscription store named in `settings`.
+    /// Opens the subscription store named in `settings`, and the built-in
+    /// transport's spool beside it ([`native_spool::SPOOL_FILE`]) when a
+    /// companion is configured.
     pub fn open(settings: PushSettings) -> Result<Self, StoreError> {
         Ok(Self {
+            native: settings
+                .native_ntfy
+                .map(|address| {
+                    native::Companion::new(
+                        address,
+                        &settings.store.with_file_name(native_spool::SPOOL_FILE),
+                    )
+                })
+                .transpose()?,
             store: SubscriptionStore::open(&settings.store)?,
             vapid: settings.vapid,
             subject: settings.subject,
@@ -238,7 +257,14 @@ impl Push {
         lookup: Arc<dyn PlacementLookup>,
         shutdown: Shutdown,
     ) -> JoinHandle<()> {
-        tokio::spawn(Arc::clone(self).dispatch(Arc::clone(hub), lookup, shutdown))
+        let push = Arc::clone(self);
+        let hub = Arc::clone(hub);
+        tokio::spawn(async move {
+            tokio::join!(
+                Arc::clone(&push).dispatch(hub, lookup, shutdown.clone()),
+                native::forward(push, shutdown),
+            );
+        })
     }
 
     /// Keeps subscriptions in step with `auth`'s devices: drops those of
@@ -519,6 +545,16 @@ impl Push {
 
     async fn deliver(self: Arc<Self>, subscription: Subscription, message: &PushMessage) {
         let host = subscription.endpoint.host();
+        if let Some(registration) = native::registration(&subscription.endpoint) {
+            if let Some(companion) = &self.native
+                && let Err(error) = companion
+                    .publish(&registration, &subscription, message, &self.vapid)
+                    .await
+            {
+                tracing::warn!(%error, "built-in notice not spooled");
+            }
+            return;
+        }
         if !self.hosts.permits(&subscription.endpoint) {
             // Stored while its host was configured; kept in case it returns.
             tracing::warn!(%host, "not pinging a push service that is no longer allowed");

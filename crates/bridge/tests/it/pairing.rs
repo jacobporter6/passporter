@@ -33,7 +33,7 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-fn key(seed: u8) -> SigningKey {
+pub(crate) fn key(seed: u8) -> SigningKey {
     SigningKey::from_slice(&[seed; 32]).expect("valid scalar")
 }
 
@@ -47,9 +47,9 @@ fn sign(key: &SigningKey, device: &DeviceId, challenge: &Challenge) -> String {
 }
 
 /// A bridge running [`DeviceAuth`] with its state in a temp dir.
-struct Paired {
-    bridge: Bridge,
-    auth: Arc<DeviceAuth>,
+pub(crate) struct Paired {
+    pub(crate) bridge: Bridge,
+    pub(crate) auth: Arc<DeviceAuth>,
     state: tempfile::TempDir,
 }
 
@@ -59,14 +59,24 @@ async fn start(settings: AuthSettings, static_token: Option<StaticToken>) -> Pai
 
 /// [`start`], adjusting the bridge settings first; `adjust` also gets the
 /// state dir.
-async fn start_with(
+pub(crate) async fn start_with(
+    settings: AuthSettings,
+    static_token: Option<StaticToken>,
+    adjust: impl FnOnce(&mut bridge::Settings, &Path),
+) -> Paired {
+    start_on(CuttableHerdr::new(), settings, static_token, adjust).await
+}
+
+/// [`start_with`], in front of `herdr`.
+pub(crate) async fn start_on(
+    herdr: CuttableHerdr,
     settings: AuthSettings,
     static_token: Option<StaticToken>,
     adjust: impl FnOnce(&mut bridge::Settings, &Path),
 ) -> Paired {
     let state = tempfile::tempdir().expect("tmp");
     let auth = Arc::new(DeviceAuth::open(state.path(), settings, static_token).expect("auth"));
-    let bridge = Bridge::start_full(CuttableHerdr::new(), auth.clone(), |bridge| {
+    let bridge = Bridge::start_full(herdr, auth.clone(), |bridge| {
         adjust(bridge, state.path());
     })
     .await;
@@ -117,7 +127,7 @@ impl Paired {
         self.post("/v1/auth/pair", &body).await
     }
 
-    async fn paired_device(&self, key: &SigningKey) -> DeviceId {
+    pub(crate) async fn paired_device(&self, key: &SigningKey) -> DeviceId {
         let code = self.auth.start_pairing(None).expect("code").code;
         let response = self.pair(&code, key).await;
         assert_eq!(response.status, 200, "{}", response.body);
@@ -151,7 +161,7 @@ impl Paired {
         self.post("/v1/auth/session", &body).await
     }
 
-    async fn session(&self, device: &DeviceId, key: &SigningKey) -> String {
+    pub(crate) async fn session(&self, device: &DeviceId, key: &SigningKey) -> String {
         let challenge = self.challenge(device).await;
         let response = self
             .redeem(device, &challenge, &sign(key, device, &challenge))
@@ -162,7 +172,7 @@ impl Paired {
     }
 
     /// A session token of scope `car` (Android Auto).
-    async fn car_session(&self, device: &DeviceId, key: &SigningKey) -> String {
+    pub(crate) async fn car_session(&self, device: &DeviceId, key: &SigningKey) -> String {
         let challenge = self.challenge(device).await;
         let body = format!(
             r#"{{"deviceId":"{device}","challenge":"{challenge}","signature":"{}","scope":"car"}}"#,
@@ -176,11 +186,17 @@ impl Paired {
     }
 
     /// `method path` with `token` and a JSON `body`: the status.
-    async fn status_of(&self, token: &str, method: &str, path: &str, body: &str) -> u16 {
+    pub(crate) async fn status_of(&self, token: &str, method: &str, path: &str, body: &str) -> u16 {
         self.with(token, method, path, body).await.status
     }
 
-    async fn with(&self, token: &str, method: &str, path: &str, body: &str) -> HttpResponse {
+    pub(crate) async fn with(
+        &self,
+        token: &str,
+        method: &str,
+        path: &str,
+        body: &str,
+    ) -> HttpResponse {
         let tcp = TcpStream::connect(self.bridge.addr).await.expect("connect");
         let auth = format!("Bearer {token}");
         request(

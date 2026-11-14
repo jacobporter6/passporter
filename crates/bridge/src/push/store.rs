@@ -28,6 +28,9 @@ pub const STORE_FILE: &str = "push-subscriptions.json";
 /// Why the store could not be read or changed.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
+    /// A built-in registration cannot be reassigned to another device.
+    #[error("native registration belongs to another device")]
+    Owned,
     /// The file could not be read or written.
     #[error("push subscription store {}: {source}", path.display())]
     Io {
@@ -131,6 +134,16 @@ impl SubscriptionStore {
         let mut devices = self.lock();
         if revoked() {
             return Ok(None);
+        }
+        if super::native::registration(&subscription.endpoint).is_some()
+            && devices.iter().any(|(owner, subscriptions)| {
+                owner != device
+                    && subscriptions
+                        .iter()
+                        .any(|s| s.endpoint == subscription.endpoint)
+            })
+        {
+            return Err(StoreError::Owned);
         }
         let mut next = devices.clone();
         let existed = remove_endpoint(&mut next, &subscription.endpoint);
