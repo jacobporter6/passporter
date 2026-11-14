@@ -164,7 +164,8 @@ sequenceDiagram
   reboot (once you unlock) or an app update. If the bridge stops offering
   the transport (its companion removed), or Android refuses the service,
   the app falls back to the ntfy app on its own when you have used it
-  before, and posts *Agent news stopped* (its tap opens the setup).
+  before; when it cannot, it posts *Agent news stopped* (its tap opens the
+  setup).
   After pairing, the app asks
   once to run without battery restrictions: without that, Doze may hold
   news back for minutes. A force stop ends it until you open the app.

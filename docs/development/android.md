@@ -626,9 +626,10 @@ bridge holds the external registration.
   backoff from 1 s doubling to 5 minutes, waiting for a network (a network
   callback wakes it), holding a 10-second wake lock per line. It stops
   itself when the transport is off; if that is because the bridge no
-  longer offers it, it first posts *Agent news stopped* (a tap opens the
-  setup), and registers with the distributor you chose before, if any
-  (`BuiltInPush.fallBack`), as it does when Android refuses the service.
+  longer offers it, it first registers with the distributor you chose
+  before (`BuiltInPush.fallBack`), as it does when Android refuses the
+  service (also after a reboot); when there is none, or the bridge says
+  no, it posts *Agent news stopped* (a tap opens the setup).
   The bridge keeps one built-in registration per device: a new one
   replaces the one the phone left. `BOOT_COMPLETED` and
   `MY_PACKAGE_REPLACED` start it again if it was on; a force stop is final

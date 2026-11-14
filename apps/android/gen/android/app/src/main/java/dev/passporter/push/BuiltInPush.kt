@@ -1,7 +1,13 @@
 package dev.passporter.push
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import dev.passporter.app.MainActivity
 import dev.passporter.app.R
 import dev.passporter.device.DeviceAuth
 import dev.passporter.notify.NoticeNotifier
@@ -38,6 +44,9 @@ enum class Settled {
 object BuiltInPush {
     /** The record's file in `noBackupFilesDir`. */
     private const val RECORD_FILE = "passporter-builtin-push.json"
+
+    private const val STOPPED_CHANNEL = "builtin_push_stopped"
+    private const val STOPPED_ID = 703
 
     @Volatile
     private var receiver: NativeReceiver? = null
@@ -102,20 +111,56 @@ object BuiltInPush {
     /**
      * The built-in transport stopped (or could not start) while the app may
      * be in the background: registers with the distributor you chose
-     * before, if the bridge allows it, so news keeps coming. Without a saved
-     * distributor it waits for the app (the picker needs it).
+     * before, if the bridge allows it, so news keeps coming. Otherwise (no
+     * saved distributor, which needs the app's picker, or the bridge says
+     * no) it posts that agent news stopped. [done] runs afterwards.
      */
-    fun fallBack(context: Context) {
+    fun fallBack(context: Context, done: () -> Unit = {}) {
         val app = context.applicationContext
         PushWork.run {
-            val distributor = UnifiedPush.getSavedDistributor(app) ?: return@run
-            when (val readiness = PushWork.sync(app).readiness()) {
-                is Readiness.Register -> {
+            try {
+                val distributor = UnifiedPush.getSavedDistributor(app)
+                val readiness = distributor?.let { PushWork.sync(app).readiness() }
+                if (readiness is Readiness.Register) {
                     UnifiedPush.register(app, PushWork.INSTANCE, app.getString(R.string.app_name), readiness.vapidKey)
                     Log.i(PUSH_TAG, "fell back to the distributor ($distributor)")
+                } else {
+                    Log.i(PUSH_TAG, "no fallback to a distributor: ${readiness ?: "none saved"}")
+                    tellStopped(app)
                 }
-                else -> Log.i(PUSH_TAG, "no fallback to the distributor: $readiness")
+            } finally {
+                done()
             }
+        }
+    }
+
+    /**
+     * A notification that nothing brings news any more (the built-in
+     * transport stopped and the distributor could not take over); its tap
+     * opens the setup.
+     */
+    private fun tellStopped(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(STOPPED_CHANNEL, context.getString(R.string.push_stopped_channel), NotificationManager.IMPORTANCE_DEFAULT),
+        )
+        val tap = PendingIntent.getActivity(
+            context,
+            1,
+            Intent(context, MainActivity::class.java).setAction(NotificationSetup.ACTION),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(context, STOPPED_CHANNEL)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(context.getString(R.string.push_stopped_title))
+            .setContentText(context.getString(R.string.push_stopped_text))
+            .setContentIntent(tap)
+            .setAutoCancel(true)
+            .build()
+        try {
+            manager.notify(STOPPED_ID, notification)
+        } catch (e: SecurityException) {
+            // Notifications are off: nothing would show anyway.
         }
     }
 }

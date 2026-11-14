@@ -291,7 +291,11 @@ class NativeReceiverTest {
     fun aNewPairingsRegistrationEndsTheStreamOfTheOldOne() {
         receiver.register()
         var reconnects = 0
-        receiver.onRegistrationChanged = { reconnects++ }
+        receiver.onRegistrationChanged = {
+            // Told once the old registration is forgotten, so a reconnect never reads it.
+            assertNull(receiver.record().registrationId)
+            reconnects++
+        }
         // A resume's refresh registers the new pairing first (before PairingReset runs).
         bridge.device = device("dev-0000000000000002")
         assertEquals(NativeState.Registered, receiver.register())
@@ -312,6 +316,13 @@ class NativeReceiverTest {
         }
         assertEquals(NativeState.RetryLater, outcome)
         assertEquals("the old stream's next line is not read", 1, lines)
+    }
+
+    @Test
+    fun aRegistrationInProgressIsWaitedForNotAStop() {
+        receiver.register()
+        store.save(store.load().copy(signingKey = null))
+        assertEquals(NativeState.RetryLater, receiver.listen({ true }, {}, {}))
     }
 
     @Test

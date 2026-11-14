@@ -19,7 +19,6 @@ import androidx.core.content.ContextCompat
 import dev.passporter.app.MainActivity
 import dev.passporter.app.R
 import java.util.concurrent.ThreadLocalRandom
-import org.unifiedpush.android.connector.UnifiedPush
 
 /**
  * Keeps the built-in transport's stream open while the app is closed and
@@ -48,6 +47,9 @@ class NativePushService : Service() {
     @Volatile
     private var lastStart = 0
     private val signal = Object()
+
+    /** Set by [wake], cleared by [pause]: a wake between two waits is not lost. Guarded by [signal]. */
+    private var woken = false
 
     private val network: ConnectivityManager by lazy { getSystemService(ConnectivityManager::class.java) }
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -92,8 +94,6 @@ class NativePushService : Service() {
             Log.w(PUSH_TAG, "Android refused the built-in transport's service: ${e.javaClass.simpleName}")
             running = false
             BuiltInPush.fallBack(this)
-            // Without a distributor to fall back to, nothing brings news: say so.
-            if (UnifiedPush.getSavedDistributor(this) == null) tellStopped()
             stopSelf()
             return
         }
@@ -189,10 +189,7 @@ class NativePushService : Service() {
                 Log.i(PUSH_TAG, "built-in transport stopped: $state")
                 // The external registration was dropped when this one took
                 // over: say so rather than go quiet until the app is opened.
-                if (state == NativeState.BridgeHasNone || state is NativeState.Refused) {
-                    BuiltInPush.fallBack(this)
-                    tellStopped()
-                }
+                if (state == NativeState.BridgeHasNone || state is NativeState.Refused) BuiltInPush.fallBack(this)
                 val startId = lastStart
                 val me = Thread.currentThread()
                 ContextCompat.getMainExecutor(this).execute {
@@ -208,51 +205,24 @@ class NativePushService : Service() {
         }
     }
 
-    /**
-     * A notification that the built-in transport stopped; its tap opens the
-     * setup. Shown also when the ntfy app takes over ([BuiltInPush.fallBack]),
-     * since that may need the app (no distributor saved, the picker).
-     */
-    private fun tellStopped() {
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
-            NotificationChannel(STOPPED_CHANNEL, getString(R.string.push_stopped_channel), NotificationManager.IMPORTANCE_DEFAULT),
-        )
-        val tap = PendingIntent.getActivity(
-            this,
-            1,
-            Intent(this, MainActivity::class.java).setAction(NotificationSetup.ACTION),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
-        val notification = NotificationCompat.Builder(this, STOPPED_CHANNEL)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(getString(R.string.push_stopped_title))
-            .setContentText(getString(R.string.push_stopped_text))
-            .setContentIntent(tap)
-            .setAutoCancel(true)
-            .build()
-        try {
-            manager.notify(STOPPED_ID, notification)
-        } catch (e: SecurityException) {
-            // Notifications are off: nothing would show anyway.
-        }
-    }
-
     private fun pause(ms: Long) = synchronized(signal) {
-        if (running) signal.wait(ms)
+        // A wake that came before the wait still counts.
+        if (running && !woken) signal.wait(ms)
+        woken = false
     }
 
     /** Ends a wait and the open stream, so the thread reconnects now (or ends). */
     private fun wake() {
         stream?.close()
-        synchronized(signal) { signal.notifyAll() }
+        synchronized(signal) {
+            woken = true
+            signal.notifyAll()
+        }
     }
 
     companion object {
         private const val CHANNEL = "builtin_push"
         private const val ID = 702
-        private const val STOPPED_CHANNEL = "builtin_push_stopped"
-        private const val STOPPED_ID = 703
         private const val WAKE_LOCK_TAG = "Passporter:notice"
         private const val WAKE_LOCK_MS = 10_000L
         private const val NO_NETWORK_WAIT_MS = 60_000L
@@ -287,6 +257,9 @@ class NativePushService : Service() {
 class NativePushBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED && intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
-        if (BuiltInPush.active(context) && !NativePushService.start(context)) BuiltInPush.fallBack(context)
+        if (!BuiltInPush.active(context) || NativePushService.start(context)) return
+        // Kept alive until the fallback (a bridge request) is done.
+        val pending = goAsync()
+        BuiltInPush.fallBack(context) { pending.finish() }
     }
 }

@@ -285,7 +285,10 @@ class NativeReceiver(
         if (record.choice == Transport.EXTERNAL) return NativeState.Off
         val owner = record.owner?.let(DeviceId::parse)
         val id = record.registrationId
-        if (!record.registered || owner == null || id == null) return NativeState.NotPaired
+        if (owner == null || id == null) return NativeState.NotPaired
+        // Owner and id but no key yet: a registration in progress (a new
+        // pairing's, say). Come back shortly rather than stop.
+        if (!record.registered) return NativeState.RetryLater
         val path = streamPath(id) + "?since=" + (record.cursor ?: "all")
         val stream = try {
             bridge.openStream(path, owner)
@@ -311,7 +314,7 @@ class NativeReceiver(
             connected()
             try {
                 // Read only while the record is still the one this stream was opened for.
-                while (running() && store.load().registrationId == id && store.load().owner == owner.value) {
+                while (running() && store.load().let { it.registrationId == id && it.owner == owner.value }) {
                     val line = stream.nextLine() ?: break
                     val outcome = guard { ingest(line) }
                     if (outcome !is Ingested.Ignored) Log.i(PUSH_TAG, "built-in message: $outcome")

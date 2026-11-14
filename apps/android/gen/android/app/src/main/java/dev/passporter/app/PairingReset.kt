@@ -59,8 +59,11 @@ object PairingReset {
             if (receiver.record().owner != DeviceAuth.get(app).savedDevice()?.value) {
                 NativePushService.stop(app)
                 receiver.reset()
+                NativeStatus.reset()
+            } else {
+                // The new pairing's state stands; only a clock verdict from before goes.
+                NativeStatus.clockOff = false
             }
-            NativeStatus.reset()
         }
         step("the queued answers") {
             val work = WorkManager.getInstance(app)
