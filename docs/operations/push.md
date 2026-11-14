@@ -4,6 +4,7 @@ sidebar:
   order: 3
 sources:
   - crates/bridge/src/push/mod.rs
+  - crates/bridge/src/push/native.rs
   - crates/bridge/src/push/schedule.rs
   - crates/web/src/push/notice.rs
   - crates/web/public/sw.js
@@ -91,17 +92,111 @@ key means every device subscribes again.
 
 ## The Android app
 
-The [Android app](../development/android.md#push) registers with a
-UnifiedPush distributor on the phone (ntfy) instead of Web Push, and its
-subscription opts into short **encrypted notices** rather than the bare
-ping, because Android's Doze often blocks the fetch after a wake: per agent
-with news, its name, state, one line, and the TL;DR *Decide* line once
-there is one. They are end-to-end encrypted to the phone like the ping, so
-the push service still sees only ciphertext, and the app shows them with no
-network at all. Allow the distributor's server with `[push] ntfy_host`
-([Deploy › Push](../deploy.md#push-wake-pings-and-native-notices)). Inside
-the app the PWA's switch stays off: the app's own subscription is the one.
+The [Android app](../development/android.md#push) cannot use Web Push (its
+webview has none), and Android's Doze often blocks the fetch after a wake.
+So its subscriptions opt into short **encrypted notices** rather than the
+bare ping: per agent with news, its name, state, one line, and the TL;DR
+*Decide* line once there is one. They are end-to-end encrypted to the phone
+like the ping, so whatever carries them sees only ciphertext, and the app
+shows them with no network at all. Inside the app the PWA's switch is
+replaced by the app's own status light and *Set up* button.
 
-Android Auto (planned) announces blocked agents, and finished ones only
+They reach the phone one of two ways, one at a time:
+
+- **Built-in** ([below](#built-in-delivery-android)), the default when the
+  bridge has it: the bridge's own private ntfy companion holds them, and the
+  app collects them from the bridge. Nothing else to install.
+- **The ntfy app** (UnifiedPush): when the bridge has no companion, or when
+  you choose it in the app's setup (*Use the ntfy app*). Allow the
+  distributor's server with `[push] ntfy_host`
+  ([Deploy › Push](../deploy.md#push-wake-pings-and-native-notices)).
+
+Switching drops the other registration. A notice that arrives both ways
+during a switch is shown once: the bridge gives all of a device's
+subscriptions the same message id, which the app remembers.
+
+## Built-in delivery (Android)
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as Bridge
+  participant C as ntfy companion (loopback)
+  participant P as Phone (Passporter)
+  P->>B: POST /v1/push/native (app session, receiver keys)
+  B-->>P: signing key, stream path
+  P->>B: GET /v1/push/native/:id/stream (app session)
+  B->>C: subscribe to pp-:id
+  Note over B: agent blocked
+  B->>B: encrypt to the phone, sign, spool
+  B->>C: publish envelope to pp-:id
+  C-->>B: envelope
+  B-->>P: envelope
+  Note over P: verify signature, decrypt,<br/>show the notification
+```
+
+- **The companion is private.** ntfy listens on loopback, and the bridge
+  refuses a `native_ntfy` that is not loopback. The phone talks only to the
+  bridge, on its usual HTTPS origin, with its native device session: the
+  registration and the stream are app-scope routes (a car session is
+  refused), and a stream is only ever the caller's own registration. Device
+  tokens never reach the companion. **Never proxy or expose the
+  companion's port.**
+- **The companion cannot forge a notice.** Each envelope carries the
+  ciphertext, the registration it is for and an expiry (one hour), signed by
+  the bridge's VAPID key; the app checks all three before decrypting, with
+  the key the bridge named at registration. Another local user on the
+  bridge machine can reach the loopback port: they can see ciphertext sizes
+  and timing, or disrupt delivery, but not read, forge or answer a notice.
+  On a shared machine that matters to you, isolate the port further.
+- **Nothing is lost while the companion is down.** The bridge spools sealed
+  envelopes in a private file (`push-native-spool.json` beside the
+  subscription store; at most 256, 16 per phone, each for an hour) and
+  publishes them, oldest first, once the companion answers. The companion
+  keeps an hour of them for a phone that is offline. Delivery is at least
+  once; the app drops a message it has shown.
+- **The phone keeps one connection.** A foreground service (a quiet,
+  minimised notification, *Listening for agent news*) holds the stream,
+  reconnects with backoff, waits for a network, and starts again after a
+  reboot (once you unlock) or an app update. After pairing, the app asks
+  once to run without battery restrictions: without that, Doze may hold
+  news back for minutes. A force stop ends it until you open the app.
+- **A pairing change starts afresh.** Forgetting or re-pairing stops the
+  stream and deletes the receiver's keys; the new pairing registers new
+  ones, so whatever the old pairing's bridge still sends cannot be
+  decrypted. Revoking the device on the bridge drops its registration.
+
+### Turning it on
+
+Run ntfy next to the bridge, on loopback, and tell the bridge where:
+
+```toml
+[push]
+subject = "mailto:you@example.com"
+native_ntfy = "127.0.0.1:2586"   # the companion; loopback only
+```
+
+Restart the bridge; the app registers the next time it opens (its
+Settings › Notifications light turns on). For the companion itself, either
+run the pinned image yourself, for example with Docker:
+
+```sh
+docker run -d --name passporter-ntfy --restart unless-stopped \
+  --network host --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  --user "$(id -u):$(id -g)" -v "$HOME/.local/state/passporter/ntfy:/var/cache/ntfy" \
+  binwiederhier/ntfy@sha256:1875ddcf815c8a3c981d6d78c67a93452d0abba79b1ab9520b1f5f5238902bd7 \
+  serve --listen-http=127.0.0.1:2586 --cache-file=/var/cache/ntfy/cache.db \
+  --cache-duration=1h --keepalive-interval=20s
+```
+
+(make the cache directory first, mode 0700), or generate a whole new
+deployment for one herdr session with
+[`deploy/session/create.py`](../deploy.md#a-new-deployment-with-the-built-in-transport).
+The image is ntfy 2.37.2, pinned by digest. Your HTTPS proxy must pass the
+stream through unbuffered and leave it open: the companion sends a
+keepalive every 20 s, and the app reconnects when its session (15 min)
+ends.
+
+Android Auto announces blocked agents, and finished ones only
 when their TL;DR has a *Decide* line (`car_announce_done`). See
 [design §6.6](../design.md#66-notifications-and-android-auto).

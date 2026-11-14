@@ -17,8 +17,9 @@ asks for your bridge's HTTPS address (the one you open in Chrome), then
 loads the PWA from there, so the app shows exactly what the browser shows
 and picks up PWA updates without a new APK. You pair the phone in the PWA
 as usual; in the app the device key is made and kept by native code (see
-[Device identity](#device-identity)). Agent news arrives through
-UnifiedPush as native notifications ([Push](#push)); [Android
+[Device identity](#device-identity)). Agent news arrives as native
+notifications, from the bridge's own transport or through UnifiedPush
+([Push](#push)); [Android
 Auto](#android-auto) and the dictation recorder ([Dictation](#dictation))
 are native too.
 
@@ -177,7 +178,7 @@ safe and the change out of commits (`SecurityConfigTest` rejects it on purpose).
 | `src/origin.rs`, `src/navigation.rs`, `src/store.rs`, `src/connect.rs`, `src/destination.rs` | The rules, in plain Rust tested on any host: what counts as a bridge origin (`plugins/device/android/src/test/resources/bridge-origins.json` holds the cases the Kotlin reader checks too), how connecting chooses the bridge, which pages the webview may show, where the origin is saved, which page the webview opens on, where a notification tap, the shortcut, a failed load or a rebuilt webview sends it |
 | `connect/` | The bundled pages (`frontendDist`): the Connect page (`index.html`) and the Bridge page (`bridge.html`) |
 | `gen/android/app/src/main/java/dev/passporter/app/` | `MainActivity` (wraps each new webview's client); `ShellPlugin` (the shell's Kotlin side: intents, restart), `ShellRequest` (what it asks the shell to show), `ShellWebViewClient` (wraps wry's client: refused links to the browser, failed loads, history), `WebViewBuilds` (tells the shell when wry rebuilds the webview), `BridgeShortcutActivity` (the shortcut's trampoline) |
-| `gen/android/app/src/main/java/dev/passporter/push/` | UnifiedPush registration and incoming notices ([Push](#push)) |
+| `gen/android/app/src/main/java/dev/passporter/push/` | The built-in receiver, UnifiedPush registration, incoming notices and the notification setup ([Push](#push)) |
 | `plugins/device/` | The device identity plugin: Keystore key, native bridge client, the PWA's `device` commands ([Device identity](#device-identity)) |
 | `plugins/recorder/` | The dictation recorder plugin: a foreground service that records takes to app-private files, the PWA's `recorder` commands ([Dictation](#dictation)) |
 | `tauri.conf.json` | App id `dev.passporter.app`, name, the Connect page's CSP |
@@ -549,16 +550,96 @@ What to expect:
 
 ## Push
 
-The app gets agent news through [UnifiedPush](https://unifiedpush.org):
-a distributor app on the phone (ntfy) holds one connection to its server
-for every app that uses it, and wakes Passporter when a message comes, even
-with the app swiped away and the phone in Doze. Passporter's subscription
-opts into encrypted notices (`"payload": "notice"`,
-[design §6.6](../design.md#66-notifications-and-android-auto)), so a
-message carries everything a notification shows and needs no network to
-show it.
+Agent news reaches the app as encrypted notices
+([design §6.6](../design.md#66-notifications-and-android-auto)): a message
+carries everything a notification shows, so it needs no network to show
+it. Two transports bring them, one at a time ([Push notifications › The
+Android app](../operations/push.md#the-android-app)):
 
-What you set up, once:
+- **Built-in**, the default whenever the bridge runs a companion
+  (`[push] native_ntfy`): the app collects its notices from the bridge
+  itself. Nothing to install.
+- **UnifiedPush**: a distributor app on the phone (ntfy) holds one
+  connection to its server for every app that uses it. Used when the
+  bridge has no companion, or when you choose it.
+
+`BuiltInPush` decides, on the push thread, whenever the activity resumes
+and right after pairing: it registers the built-in transport if that is
+the choice and the bridge has it, and only otherwise lets
+`PushRegistration` register with a distributor as before. Taking over, it
+drops the distributor's registration (bridge copy first, `PushSync.leave`);
+an endpoint the distributor sends later is dropped, not posted. The bridge
+gives all of a device's subscriptions one message id (`ping`), which the
+notifier remembers, so a switch never notifies twice.
+
+**Settings.** Inside the app the PWA's notification switch is replaced by
+a light (*On*, *Needs attention*), the app's sentence on how news arrives
+or what is wrong, and *Set up*, which opens the app's own dialog: *Retry*,
+*Use the ntfy app* / *Use built-in*, and, for the built-in transport,
+*Allow* to run without battery restrictions (Android's own prompt). The
+launcher's *Notifications* shortcut and the built-in transport's ongoing
+notification open the same dialog. The status is in-process: what the
+service saw last, whether notifications are allowed, and whether the
+bridge holds the external registration.
+
+### The built-in receiver
+
+| File | What |
+|---|---|
+| `BuiltInPush.kt` | Chooses the transport, starts and stops the service; `NativeStatus`, the last state, for Settings |
+| `NativeReceiver.kt` | Registers (`POST /v1/push/native`, app scope, once per process and pairing), leaves (drops the registration as its owner), resets, reads the stream (`listen`) and handles each line (`ingest`) |
+| `NativeEnvelope.kt` | Checks an envelope before anything is decrypted: version, this registration, not expired (nor more than an hour and ten minutes ahead), and the bridge's ECDSA P-256 signature over the same text the bridge signs |
+| `NativeBridge.kt` | The bridge as the receiver needs it, through `DeviceAuth`: the stream goes only as the device that registered (`DeviceAuth.token(scope, device)`), a 401 retried once |
+| `NativeStore.kt` | The record (`passporter-builtin-push.json` in `noBackupFilesDir`): your choice, the owner device, the registration id, the signing key, the stream cursor |
+| `NativePushService.kt` | The `specialUse` foreground service and its boot receiver |
+| `NotificationSetup.kt` | The status Settings shows and the setup dialog |
+
+- **Keys.** The receiver's Web Push keys are the connector's key
+  manager's (`DefaultKeyManager`, instance `passporter-builtin`), apart
+  from the distributor registration's. A new pairing, or none, deletes
+  them and the registration, so whatever the old pairing's bridge still
+  sends cannot be decrypted; `PairingReset` also stops the service.
+- **What is shown.** Only an envelope that verifies with the key the
+  bridge named at registration, is for this registration, has not expired
+  and decrypts with this app's keys, and only while the device it was
+  registered for is still the pairing (else dropped, as `IncomingPush`
+  drops a push for older keys). Its notices go to `NoticeNotifier` as the
+  owner's, so every action is stamped with the owner device.
+- **The stream.** `?since=<last message id>` resumes after a reconnect; the
+  cursor advances after a message is shown (a crash in between shows it
+  once more at worst, and the notifier drops a ping it has shown). A 404
+  means the bridge lost the registration: it registers again. A 400 drops
+  the cursor. Lines over 16 KiB end the stream.
+- **The service.** One connection thread, reconnecting with a jittered
+  backoff from 1 s doubling to 5 minutes, waiting for a network (a network
+  callback wakes it), holding a 10-second wake lock per line. It stops
+  itself when the transport is off. `BOOT_COMPLETED` and
+  `MY_PACKAGE_REPLACED` start it again if it was on; a force stop is final
+  until you open the app. Its notification is on a minimum-importance
+  channel (*Connection to your bridge*), which you may hide.
+
+To try it against a real companion from the dev machine, run a disposable
+ntfy on loopback (never a live one) and point the bridge's integration
+tests at it:
+
+```sh
+mkdir -m 700 /tmp/pp-ntfy
+docker run -d --rm --name pp-test-ntfy --network host --read-only --cap-drop ALL \
+  --user "$(id -u):$(id -g)" -v /tmp/pp-ntfy:/var/cache/ntfy \
+  binwiederhier/ntfy@sha256:1875ddcf815c8a3c981d6d78c67a93452d0abba79b1ab9520b1f5f5238902bd7 \
+  serve --listen-http=127.0.0.1:12586 --cache-file=/var/cache/ntfy/cache.db --cache-duration=1h
+PASSPORTER_TEST_NTFY=127.0.0.1:12586 cargo nextest run -p bridge native_push
+docker stop pp-test-ntfy
+```
+
+`NativeEnvelopeTest` opens an envelope the bridge's own test pins
+(`crates/bridge/src/push/fixtures/native-envelope-vector.json`, around the
+notice vector's ciphertext), and `NativeReceiverTest` decrypts it end to
+end with RFC 8291's example keys, so the two sides are proven to agree.
+
+### UnifiedPush
+
+What you set up, once, to use it:
 
 1. Install ntfy on the phone (F-Droid or Google Play). To use your own ntfy
    server, set it as ntfy's default server first (*Settings → Default
@@ -566,10 +647,11 @@ What you set up, once:
 2. Allow that server on the bridge: `[push] ntfy_host = "ntfy.example.org"`
    (or `"ntfy.sh"`, the public one), and restart the bridge
    ([Deploy › Push](../deploy.md#push-wake-pings-and-native-notices)).
-3. Open Passporter, paired. It registers with ntfy and posts the endpoint
-   to the bridge; the bridge's log shows `push subscription stored` with
-   ntfy's host. Without ntfy installed, the app says once that
-   notifications need it.
+3. Open Passporter, paired (and, if the bridge has a companion, choose
+   *Use the ntfy app* in the notification setup). It registers with ntfy
+   and posts the endpoint to the bridge; the bridge's log shows
+   `push subscription stored` with ntfy's host. Without ntfy installed,
+   the app says once that notifications need it.
 
 The Kotlin package `dev.passporter.push` (in `gen/android/app/src/main/java/`)
 uses the official connector library, `org.unifiedpush.android:connector`
@@ -578,9 +660,9 @@ decrypts each message (RFC 8291, `aes128gcm`, with Tink):
 
 | File | What |
 |---|---|
-| `PushRegistration.kt` | From the activity: on every resume and right after pairing, if paired and the bridge has push on (`GET /v1/push/key`, asked once per process), registers with the saved distributor, the phone's default one (Android may show a picker, once per pairing), or says that none is installed; the picker and that dialog wait until you have answered the notification permission's prompt, so two prompts never come at once |
+| `PushRegistration.kt` | From the activity: on every resume and right after pairing, unless the built-in transport took over, if paired and the bridge has push on (`GET /v1/push/key`, asked once per process), registers with the saved distributor, the phone's default one (Android may show a picker, once per pairing), or says that none is installed; the picker and that dialog wait until you have answered the notification permission's prompt, so two prompts never come at once |
 | `PassporterPushService.kt` | The connector's `PushService`, started by the distributor also with the app's process cold: messages go to `IncomingPush` at once, in the callback (local work only, never queued behind a bridge call); new endpoints and unregistrations go to `PushSync` on its worker thread |
-| `PushSync.kt`, `PushStore.kt`, `PushBridge.kt` | Keeps the bridge's copy in step: posts a new endpoint (`POST /v1/push/subscriptions`, app scope, through `DeviceAuth`), drops the one it replaces (again at the next sync if the bridge could not be told), keeps the distributor you chose, posts it once more in each new process (in case the bridge dropped it), and when the app is unpaired or paired anew (perhaps with another bridge) forgets the registration and leaves the distributor, which deletes the keys; a new pairing registers with new keys. The state of the last step is a `PushState` (`Subscribed`, `Refused` with the bridge's reason, `BridgeOff`, `RetryLater`, ...), logged under the tag `PassporterPush` |
+| `PushSync.kt`, `PushStore.kt`, `PushBridge.kt` | Keeps the bridge's copy in step: posts a new endpoint (`POST /v1/push/subscriptions`, app scope, through `DeviceAuth`), drops the one it replaces (again at the next sync if the bridge could not be told), keeps the distributor you chose, posts it once more in each new process (in case the bridge dropped it), and when the app is unpaired or paired anew (perhaps with another bridge), or the built-in transport takes over (`leave`), forgets the registration and leaves the distributor, which deletes the keys; a new pairing registers with new keys. The state of the last step is a `PushState` (`Subscribed`, `Refused` with the bridge's reason, `BridgeOff`, `Left`, `RetryLater`, ...), logged under the tag `PassporterPush` |
 | `IncomingPush.kt` | A message the connector decrypted, while the app holds a registration, goes to `NoticeNotifier.show`. One it could not decrypt with the app's keys is dropped unseen, so only the bridge can make the app post a notice |
 | `Registration.kt` | The endpoint and public keys, and the subscribe body in the bridge's shape |
 
@@ -599,23 +681,20 @@ bridge's own encryption produced (`crates/bridge/src/push/fixtures/`,
 pinned by a test in `crates/bridge/src/push/ece.rs`), so the two sides are
 proven to agree.
 
-Inside the app the PWA's notification switch stays off and says why
-(`Unavailable::NativeApp`): the webview has no Push API, and the app's own
-subscription is the one, so a phone never gets the same news twice. That
-subscription needs the native identity, so where the page signs in without
-it the switch says so instead: on a WebView too old for native IPC
-(`NativeOff`: update Android System WebView), or with a WebCrypto key paired
-before the native layer could be used (`PairInApp`: forget and pair again).
+Where the page signs in without the native identity, Settings keeps the
+PWA's switch, disabled, with the reason: on a WebView too old for native
+IPC (`NativeOff`: update Android System WebView), or with a WebCrypto key
+paired before the native layer could be used (`PairInApp`: forget and pair
+again).
 
-Known gaps: forgetting the pairing from the phone leaves the distributor,
-so nothing reaches the phone, but the bridge keeps the old device's
-subscription (it can no longer sign in to remove it) until you revoke the
-device with `passporter devices revoke`, as you would anyway. Registration
-state reaches only logcat; the PWA cannot show it yet. Removing Passporter inside ntfy lasts
-until the app next opens; to silence it, turn its notifications off in
-Android's settings. A debug build can
-fake a message without a distributor through the sample receiver in
-[Notifications](#notifications).
+Known gaps: forgetting the pairing from the phone leaves the bridge's
+copy of the old device's subscription (built-in or external: it can no
+longer sign in to remove it), so nothing reaches the phone but the bridge
+keeps it until you revoke the device with `passporter devices revoke`, as
+you would anyway. Removing Passporter inside ntfy lasts until the app next
+opens; to silence it, turn its notifications off in Android's settings. A
+debug build can fake a message without either transport through the
+sample receiver in [Notifications](#notifications).
 
 ## Links, taps and the Bridge page
 
@@ -750,8 +829,10 @@ registration and Android Auto can sign in with the app closed
 
 The PWA reaches it through `plugin:device|status`, `pair`, `session` (a
 fresh **app**-scope token; the webview never gets a car token) and
-`forget` (`crates/web/src/pair/native.rs`). Without the plugin (Chrome, an
-old WebView) the PWA uses WebCrypto, unchanged.
+`forget` (`crates/web/src/pair/native.rs`), plus `notificationStatus` and
+`notificationSetup` for Settings' notification light ([Push](#push)).
+Without the plugin (Chrome, an old WebView) the PWA uses WebCrypto,
+unchanged.
 
 Native code calls `DeviceAuth` directly, from a worker thread (every call
 may do network or Keystore work):
