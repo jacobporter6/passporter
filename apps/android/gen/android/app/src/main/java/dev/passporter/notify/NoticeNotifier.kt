@@ -9,6 +9,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import dev.passporter.device.DeviceId
+import dev.passporter.notify.actions.PairedAs
 
 /** What [NoticeNotifier.show] did with a payload. */
 sealed interface NoticeOutcome {
@@ -23,6 +24,12 @@ sealed interface NoticeOutcome {
 
     /** Notifications are off for the app (or not yet allowed): nothing posted. */
     data object NotAllowed : NoticeOutcome
+
+    /**
+     * The app is no longer paired as the message's device (a new pairing,
+     * or none, since the caller checked): nothing posted.
+     */
+    data object OtherPairing : NoticeOutcome
 
     /** Not a notice message ([NoticeParser]): nothing posted. */
     data class Invalid(
@@ -39,11 +46,16 @@ sealed interface NoticeOutcome {
  * a message delivered twice is recognised by its ping ([RecentPings]).
  * Its actions are made for [device], the pairing the message came to
  * ([dev.passporter.notify.actions.DeviceStamp]); without one it has none.
+ * The pairing is checked again under [NotificationLock], which a pairing
+ * reset clears the shade under, so a notice of the old pairing cannot
+ * come back after it.
  */
 class NoticeNotifier(
     context: Context,
     /** The device the push keys were registered for (`PushRecord.owner`). */
     private val device: () -> DeviceId?,
+    /** What the app is paired as now, cheaply (`DeviceAuth.savedDevice`). */
+    private val paired: () -> PairedAs,
 ) {
     private val context = context.applicationContext
     private val manager = NotificationManagerCompat.from(this.context)
@@ -71,12 +83,14 @@ class NoticeNotifier(
         // and never in the middle of an answer's update of the same
         // conversation (dev.passporter.notify.actions.ActionFeedback).
         synchronized(NotificationLock) {
+            val device = device()
+            // Again under the lock: a reset between the caller's check and here cleared the shade.
+            if (paired().isNot(device)) return NoticeOutcome.OtherPairing
             if (message.ping in pings.all()) return NoticeOutcome.Duplicate
             pings.add(message.ping)
             val notices = NotificationPlanner.plan(message)
             NoticeNotification.createChannels(context)
             val now = System.currentTimeMillis()
-            val device = device()
             for ((posted, notice) in notices.withIndex()) {
                 try {
                     ShortcutManagerCompat.pushDynamicShortcut(context, NoticeNotification.shortcut(context, notice))

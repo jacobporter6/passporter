@@ -27,7 +27,8 @@ class IncomingPushTest {
     private val context: Application = RuntimeEnvironment.getApplication()
     private val manager = context.getSystemService(NotificationManager::class.java)
     private var registered = true
-    private val incoming = IncomingPush(NoticeNotifier(context) { DEVICE }::show) { registered }
+    private val paired: PairedAs = PairedAs.Device(DEVICE)
+    private val incoming = IncomingPush(NoticeNotifier(context, { DEVICE }) { paired }::show) { registered }
 
     private val blocked =
         """{"ping":"0123456789abcdef0123456789abcdef","notices":[{"agentId":"w1:p1","name":"widget",

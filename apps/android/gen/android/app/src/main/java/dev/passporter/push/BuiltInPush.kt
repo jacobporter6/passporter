@@ -56,13 +56,14 @@ object BuiltInPush {
     fun receiver(context: Context): NativeReceiver = receiver ?: synchronized(this) {
         receiver ?: context.applicationContext.let { app ->
             val auth = DeviceAuth.get(app)
+            // The saved record only: no Keystore call per message.
+            val paired = { auth.savedDevice()?.let(PairedAs::Device) ?: PairedAs.Nothing }
             NativeReceiver(
                 store = NativeStore(File(app.noBackupFilesDir, RECORD_FILE)),
                 bridge = DeviceAuthNativeBridge(app, auth),
                 keys = DefaultKeyManager(app),
-                show = { owner, text -> NoticeNotifier(app) { owner }.show(text) },
-                // The saved record only: no Keystore call per message.
-                paired = { auth.savedDevice()?.let(PairedAs::Device) ?: PairedAs.Nothing },
+                show = { owner, text -> NoticeNotifier(app, { owner }, paired).show(text) },
+                paired = paired,
             )
         }.also { receiver = it }
     }
