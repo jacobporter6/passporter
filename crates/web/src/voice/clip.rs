@@ -1,8 +1,8 @@
 //! A dictation clip kept on the device (design §6.3, "record first,
 //! transcribe later"): written to durable storage the moment recording
 //! stops, before anything touches the network, and removed once the user
-//! has used or discarded its transcript, or after seven days (the
-//! bridge's own retention; it also clears clips of agents that are gone).
+//! has used or discarded its transcript, or after ninety days (which also
+//! clears clips of agents that are gone).
 
 use core::future::Future;
 

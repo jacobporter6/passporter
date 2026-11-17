@@ -138,9 +138,9 @@ impl<S: ClipStore, T: AudioTransport> Courier<S, T> {
     /// from one read of the store.
     ///
     /// With `sweep_before`, every clip recorded before it, for any agent,
-    /// is deleted first: by then the bridge has swept its copy, and a clip
-    /// whose agent is gone (so no screen will ever show it) doesn't stay on
-    /// the phone forever.
+    /// is deleted first, so a clip that was never sent or never looked at
+    /// (its agent may be gone, so no screen will ever show it) doesn't stay
+    /// on the phone forever.
     pub async fn waiting(
         &self,
         agent: &AgentId,

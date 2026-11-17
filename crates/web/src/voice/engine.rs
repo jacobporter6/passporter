@@ -21,6 +21,8 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use protocol::{AgentId, AudioId, Timestamp};
+use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen_futures::spawn_local;
 
@@ -44,12 +46,20 @@ use crate::ui::format::now;
 /// Waits before retrying a delivery that found the bridge unreachable, in
 /// ms; the last repeats while it stays unreachable.
 const RETRY_DELAYS_MS: [i32; 5] = [2_000, 5_000, 10_000, 20_000, 30_000];
-/// How long a clip may stay on the phone, in ms: the bridge's default
-/// record retention (seven days), after which its transcript is gone too.
-const CLIP_RETENTION_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
-/// Unattended retries in a row that make no upload progress, before a
-/// delivery waits for the user.
-const MAX_AUTO_RETRIES: u32 = 12;
+/// How long a clip may stay on the phone, in ms: ninety days. Until it is
+/// delivered it is the only copy of what was said, so it outlives the
+/// bridge's own retention (seven days by default): a bridge that has
+/// forgotten the upload is sent it again.
+const CLIP_RETENTION_MS: u64 = 90 * 24 * 60 * 60 * 1_000;
+/// How long a delivery retries by itself without upload progress, in ms,
+/// before it waits: for Retry, the phone coming back online, or the next
+/// visit (see [`Dictation::parked`]).
+const AUTO_RETRY_MS: u64 = 12 * 60 * 1_000;
+/// Added to the message of a delivery that stopped retrying by itself.
+const RETRIES_LATER: &str =
+    "It tries again when this phone is back online or the app reopens, or tap Retry.";
+/// The browser event for the network coming back.
+const ONLINE: &str = "online";
 /// A waiting retry checks for "Retry now" this often, in ms.
 const WAKE_CHECK_MS: i32 = 250;
 
@@ -106,6 +116,23 @@ thread_local! {
 /// Hands over the page's [`Host`]. Called once, right after loading.
 pub fn init(host: Host) {
     HOST.set(Some(host));
+    listen_online();
+}
+
+/// Retries parked deliveries whenever the browser reports the network
+/// back, for the page's lifetime.
+fn listen_online() {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let on_online = Closure::<dyn Fn()>::new(|| {
+        let all: Vec<_> = AGENTS.with_borrow(|all| all.values().cloned().collect());
+        for dictation in all {
+            dictation.retry_parked();
+        }
+    })
+    .into_js_value();
+    let _ = window.add_event_listener_with_callback(ONLINE, on_online.unchecked_ref());
 }
 
 fn host() -> Option<Host> {
@@ -169,6 +196,7 @@ pub fn dictation(agent: &AgentId) -> Rc<Dictation> {
                     takes: Cell::new(0),
                     send: Cell::new(true),
                     awake: Cell::new(false),
+                    parked: Cell::new(false),
                 })
             })
             .clone()
@@ -200,6 +228,11 @@ pub struct Dictation {
     send: Cell<bool>,
     /// Whether this agent's take is keeping the screen on ([`wake`]).
     awake: Cell<bool>,
+    /// Whether the failure shown is a delivery that stopped retrying by
+    /// itself (the bridge stayed unreachable): not stored as a failure, so
+    /// the next visit delivers the clip again, and retried as soon as the
+    /// browser reports the network back.
+    parked: Cell<bool>,
 }
 
 impl core::fmt::Debug for Dictation {
@@ -223,6 +256,9 @@ impl Dictation {
     /// Every phase change goes through here, so the screen is kept on for
     /// exactly as long as a take is under way, whichever way it ends.
     fn set_phase(&self, phase: Phase) {
+        if !matches!(phase, Phase::Failed { .. }) {
+            self.parked.set(false);
+        }
         let awake = phase.keeps_awake();
         if self.awake.replace(awake) != awake {
             wake::keep_on(awake);
@@ -469,8 +505,8 @@ impl Dictation {
 
     /// Picks up where a previous screen or page load left off: the oldest
     /// stored clip for this agent, if the strip is free. The first call in
-    /// a page session also deletes clips (of any agent) past the bridge's
-    /// retention.
+    /// a page session also deletes clips (of any agent) past
+    /// [`CLIP_RETENTION_MS`].
     pub fn resume(self: &Rc<Self>) {
         if !self.is_free() {
             return;
@@ -544,8 +580,10 @@ impl Dictation {
         let courier = courier();
         let mut attempt: u32 = 0;
         // The furthest offset the bridge has confirmed: an attempt that
-        // moved it was worth making, so it doesn't count against retries.
+        // moved it was worth making, so it restarts the retry clock.
         let furthest = Cell::new(0);
+        let mut stalled_since = now().unix_millis();
+        let mut parked = false;
         let outcome = loop {
             let before = furthest.get();
             let result = courier
@@ -579,34 +617,30 @@ impl Dictation {
                     break Phase::Ready { id, text, note };
                 }
                 Err(_) if !self.is_current(generation) => break Phase::Idle,
-                Err(error)
-                    if retries_by_itself(&error, host().is_some_and(|h| h.token_rejected()))
-                        && (attempt < MAX_AUTO_RETRIES || furthest.get() > before) =>
-                {
+                Err(error) => {
+                    let at = now().unix_millis();
                     if furthest.get() > before {
                         attempt = 0;
+                        stalled_since = at;
                     }
-                    self.set_phase(Phase::Waiting {
-                        id,
-                        message: waiting_message(&error),
-                    });
-                    let delay = RETRY_DELAYS_MS[(attempt as usize).min(RETRY_DELAYS_MS.len() - 1)];
-                    attempt += 1;
-                    if !self.pause(delay, generation).await {
-                        break Phase::Idle;
+                    let token_rejected = host().is_some_and(|h| h.token_rejected());
+                    if retries_by_itself(&error, token_rejected)
+                        && at.saturating_sub(stalled_since) < AUTO_RETRY_MS
+                    {
+                        self.set_phase(Phase::Waiting {
+                            id,
+                            message: waiting_message(&error),
+                        });
+                        let delay =
+                            RETRY_DELAYS_MS[(attempt as usize).min(RETRY_DELAYS_MS.len() - 1)];
+                        attempt += 1;
+                        if !self.pause(delay, generation).await {
+                            break Phase::Idle;
+                        }
+                        continue;
                     }
-                }
-                Err(error) => {
-                    let message = deliver_message(&error);
-                    // Remembered, so the next visit doesn't send it again
-                    // by itself.
-                    if let Err(error) = courier.record_failure(&clip, message.clone()).await {
-                        warn(&error.to_string());
-                    }
-                    break Phase::Failed {
-                        id: Some(id),
-                        message,
-                    };
+                    parked = parks(&error);
+                    break give_up(&courier, &clip, &error, parked).await;
                 }
             }
         };
@@ -623,7 +657,10 @@ impl Dictation {
         }
         match outcome {
             Phase::Ready { id, text, note } => self.arrive(Arrival::of(id, text, send, note)),
-            outcome => self.set_phase(outcome),
+            outcome => {
+                self.set_phase(outcome);
+                self.parked.set(parked);
+            }
         }
     }
 
@@ -665,6 +702,13 @@ impl Dictation {
             left -= WAKE_CHECK_MS;
         }
         self.is_current(generation)
+    }
+
+    /// Retries a parked delivery (the network is back).
+    fn retry_parked(self: &Rc<Self>) {
+        if self.parked.get() {
+            self.retry();
+        }
     }
 
     /// "Retry": try the stored clip again now. Its stored failure goes
@@ -733,6 +777,31 @@ impl Dictation {
         if self.phase_is(|p| matches!(p, Phase::Failed { id: None, .. })) {
             self.set_phase(Phase::Idle);
         }
+    }
+}
+
+/// The failure a delivery ends in once it stops retrying after `error`.
+/// A `parked` one is not stored as a failure, so the next visit (or the
+/// network coming back) delivers the clip again; any other is remembered,
+/// so the next visit doesn't send it again by itself.
+async fn give_up(
+    courier: &BrowserCourier,
+    clip: &PendingClip,
+    error: &DeliverError,
+    parked: bool,
+) -> Phase {
+    let message = if parked {
+        parked_message(error)
+    } else {
+        let message = deliver_message(error);
+        if let Err(error) = courier.record_failure(clip, message.clone()).await {
+            warn(&error.to_string());
+        }
+        message
+    };
+    Phase::Failed {
+        id: Some(clip.meta.audio_id.clone()),
+        message,
     }
 }
 
@@ -822,6 +891,28 @@ pub fn deliver_message(error: &DeliverError) -> String {
         DeliverError::Slow => "The bridge is still transcribing.".to_owned(),
         DeliverError::Cancelled => "The recording was discarded.".to_owned(),
     }
+}
+
+/// Whether a delivery that ran out of time retrying by itself after
+/// `error` waits to be tried again (the bridge was unreachable or still
+/// transcribing), rather than failing until the user acts.
+const fn parks(error: &DeliverError) -> bool {
+    match error {
+        DeliverError::Slow => true,
+        DeliverError::Upload(UploadError::Api(ApiError::Unauthorized))
+        | DeliverError::Store(_)
+        | DeliverError::Transcription
+        | DeliverError::TooLong
+        | DeliverError::Cancelled => false,
+        DeliverError::Upload(error) => error.is_retryable(),
+    }
+}
+
+/// What the strip says once a delivery stops retrying by itself after
+/// `error` (see [`parks`]): the clip is kept and will be tried again.
+#[must_use]
+pub fn parked_message(error: &DeliverError) -> String {
+    format!("{} {RETRIES_LATER}", deliver_message(error))
 }
 
 /// What the strip says while it retries by itself after `error`.
@@ -916,5 +1007,25 @@ mod tests {
         assert!(deliver_message(&unauthorized).contains("Settings"));
         assert!(!retries_by_itself(&DeliverError::Cancelled, false));
         assert!(capture_message(&CaptureError::Denied).contains("site settings"));
+    }
+
+    #[test]
+    fn only_an_unreachable_or_busy_bridge_parks_a_clip() {
+        let offline = DeliverError::Upload(UploadError::Api(ApiError::Transport("x".into())));
+        assert!(parks(&offline));
+        assert!(parks(&DeliverError::Slow));
+        assert!(parks(&DeliverError::Upload(UploadError::Gone)));
+        let message = parked_message(&offline);
+        assert!(message.contains("saved on this phone"), "{message}");
+        assert!(message.contains("back online"), "{message}");
+        for stays_failed in [
+            DeliverError::Upload(UploadError::Api(ApiError::Unauthorized)),
+            DeliverError::Upload(UploadError::Refused("Too big.".into())),
+            DeliverError::Transcription,
+            DeliverError::TooLong,
+            DeliverError::Cancelled,
+        ] {
+            assert!(!parks(&stays_failed), "{stays_failed:?}");
+        }
     }
 }
