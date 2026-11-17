@@ -68,6 +68,11 @@ sequenceDiagram
 - **Record first, transcribe later.** The clip is in the phone's storage
   before anything touches the network. A tunnel mid-upload resumes from the
   last stored offset instead of starting over.
+- **Offline for longer.** The phone retries by itself for 12 minutes without
+  progress, then keeps the clip with **Retry**. It tries again as soon as
+  the browser reports the network back, and whenever the app reopens; a
+  clip that comes through that way waits for you to review it. An unsent
+  clip stays on the phone for 90 days unless you discard it.
 - **Audio stays home.** whisper.cpp runs on the dev machine, on loopback;
   the bridge is its only client. About half a second for an 11-second clip
   on a mid-range NVIDIA GPU with `large-v3-turbo`; a CPU build with a
