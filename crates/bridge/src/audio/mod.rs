@@ -97,7 +97,7 @@ pub struct AudioSettings {
 }
 
 impl AudioSettings {
-    /// Default caps for clips in `dir`: 25 MiB and 5 minutes per clip,
+    /// Default caps for clips in `dir`: 100 MiB and an hour per clip,
     /// 1 MiB chunks with two minutes each (64 kbit/s), 64 clips in flight
     /// (idle uploads make way after 10 minutes), 7 days of retention, swept
     /// every 10 minutes, and about four minutes of retries for an
@@ -108,8 +108,8 @@ impl AudioSettings {
         const WEEK: Duration = Duration::from_hours(7 * 24);
         Self {
             dir: dir.into(),
-            max_upload_bytes: 25 * 1024 * 1024,
-            max_duration: Duration::from_secs(300),
+            max_upload_bytes: 100 * 1024 * 1024,
+            max_duration: Duration::from_hours(1),
             max_chunk_bytes: 1024 * 1024,
             chunk_timeout: Duration::from_mins(2),
             max_clips: 64,

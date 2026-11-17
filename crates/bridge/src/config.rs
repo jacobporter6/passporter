@@ -39,8 +39,8 @@
 //! [audio]                             # dictation (design §6.3); all optional
 //! whisper = "127.0.0.1:8178"          # whisper-server (deploy/whisper); loopback only
 //! retention_hours = 168               # keep transcribed audio this long (0: delete at once)
-//! max_upload_mib = 25                 # per clip
-//! max_duration_secs = 300             # per clip
+//! max_upload_mib = 100                # per clip
+//! max_duration_secs = 3600            # per clip
 //!
 //! [tldr]                              # TL;DRs of long turns (design §6.4)
 //! enabled = true                      # false: never run the summarizer
@@ -399,8 +399,8 @@ impl Default for AudioConfig {
         Self {
             whisper: DEFAULT_WHISPER,
             retention: Duration::from_hours(7 * 24),
-            max_upload_bytes: 25 * MIB,
-            max_duration: Duration::from_secs(300),
+            max_upload_bytes: 100 * MIB,
+            max_duration: Duration::from_hours(1),
         }
     }
 }
