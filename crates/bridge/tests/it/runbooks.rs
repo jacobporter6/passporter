@@ -328,19 +328,26 @@ async fn runs_in_a_tab_and_reports_exit_code_and_last_lines() {
         f.list().await.runbooks[0].run.as_ref().map(|r| r.state),
         Some(RunState::Running)
     );
-    let pane = f.shell_runs(0).await;
+    // The pane shows the output before the runner reports the end (as a
+    // real terminal does): the watcher stops reading the pane once the run
+    // has ended, so a screen set afterwards might never be seen.
+    let [(pane, _)] = f
+        .typed_at_least(1)
+        .await
+        .try_into()
+        .expect("one line typed");
     f.bridge.fake().set_screen(
         &pane,
         "$ passporter-bridge runbook …\n▶ Hello\nhello from a runbook\n■ Hello: exit 0\n\n",
     );
+    f.shell_runs(0).await;
     let done = f.run_where("Hello", RunbookRun::is_finished).await;
     assert!(done.succeeded(), "{done:?}");
     assert!(done.finished_at.is_some());
-    let done = f
-        .run_where("Hello", |run| {
-            run.last_lines.iter().any(|l| l == "hello from a runbook")
-        })
-        .await;
+    assert!(
+        done.last_lines.iter().any(|l| l == "hello from a runbook"),
+        "{done:?}"
+    );
     assert_eq!(
         done.last_lines.last().map(String::as_str),
         Some("■ Hello: exit 0")
@@ -793,5 +800,33 @@ async fn the_stream_carries_each_change_of_a_run() {
         }
     }
     assert_eq!(states.first(), Some(&RunState::Running));
+    f.bridge.stop().await.expect("clean stop");
+}
+
+#[tokio::test]
+async fn a_run_seen_ending_may_run_again_at_once() {
+    let f = fixture().await;
+    let mut stream = f.bridge.stream().await;
+    assert!(matches!(
+        stream.next_event().await,
+        protocol::AgentEvent::Snapshot { .. }
+    ));
+    f.run("Hello", &body(KEY1, "app")).await;
+    f.shell_runs(0).await;
+    loop {
+        if let protocol::AgentEvent::RunbookUpdated { run: Some(run) } = stream.next_event().await
+            && run.is_finished()
+        {
+            break;
+        }
+    }
+    // The end is published only once it is audited and the runbook is
+    // free: a tap the moment the phone shows it is not refused as busy.
+    assert!(
+        f.runbook_lines().iter().any(|l| l["phase"] == "finish"),
+        "audited before it was published"
+    );
+    let (status, again) = f.run("Hello", &body(KEY2, "app")).await;
+    assert_eq!(status, 200, "{again:?}");
     f.bridge.stop().await.expect("clean stop");
 }

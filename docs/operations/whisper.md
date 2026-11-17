@@ -58,8 +58,8 @@ The `[audio]` table; every key is optional:
 [audio]
 whisper = "127.0.0.1:8178"   # must be loopback; the bridge refuses anything else
 retention_hours = 168        # keep transcribed audio this long; 0 deletes it once transcribed
-max_upload_mib = 25          # per clip
-max_duration_secs = 300      # per clip
+max_upload_mib = 100         # per clip
+max_duration_secs = 3600     # per clip
 ```
 
 ## Retention
