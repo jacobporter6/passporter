@@ -1,14 +1,19 @@
 //! The dictation strip, drawn by the dictation WASM into an element the
-//! app hands it (design §6.3): the live meter while recording (its button
-//! sends), then upload and transcription progress with a Cancel. With
-//! review on, the transcript card follows, whose "Use" fills the composer
-//! through the app.
+//! app hands it (design §6.3): a stack of rows, one per note on its way
+//! (upload and transcription progress with a Cancel, a card to retry, or
+//! with review on the transcript card, whose "Use" fills the composer
+//! through the app), then the live meter while recording (its button
+//! sends).
 //!
 //! Plain DOM, not Leptos: this module has no Leptos in it, which is what
-//! keeps it small. What to show is decided by the pure [`Strip::of`];
-//! this only builds it. Buttons carry a `data-action`, read by one click
-//! listener on the root, so redrawing from inside a click never drops
-//! the handler that is running.
+//! keeps it small. What to show is decided by the pure [`rows`]; this
+//! only builds it, row by row: a row is rebuilt only when what it shows
+//! changed, so one note's progress never resets a transcript being edited
+//! in another. Each row carries a `data-key` and its buttons a
+//! `data-action`, read by one click listener on the root, so redrawing
+//! from inside a click never drops the handler that is running.
+//!
+//! [`rows`]: super::phase::rows
 
 use std::rc::Weak;
 
@@ -18,7 +23,7 @@ use web_sys::{Document, Element, Event, HtmlTextAreaElement};
 
 use super::engine::Dictation;
 use super::level::METER_BARS;
-use super::phase::{Action, Strip, bar_step, clock};
+use super::phase::{Action, RowKey, Strip, bar_step, clock};
 use crate::platform;
 use crate::ui::icons;
 
@@ -31,7 +36,7 @@ const PRIMARY_BUTTON: &str = "button button-primary button-small";
 pub enum Act {
     /// Stop (or cancel) the recording.
     Stop,
-    /// Discard the clip while it uploads or transcribes.
+    /// Stop delivering the note and forget it.
     Cancel,
     /// Retry the stored clip.
     Retry,
@@ -75,16 +80,43 @@ impl Act {
     const fn of(action: Action) -> Self {
         match action {
             Action::Retry { .. } => Self::Retry,
+            Action::Cancel => Self::Cancel,
             Action::Discard => Self::Discard,
             Action::Dismiss => Self::Dismiss,
         }
     }
 }
 
+/// A row's `data-key`.
+fn key_name(key: RowKey) -> String {
+    match key {
+        RowKey::Take => "take".to_owned(),
+        RowKey::Note(key) => key.to_string(),
+    }
+}
+
+/// The row a `data-key` names.
+fn parse_key(name: &str) -> Option<RowKey> {
+    if name == "take" {
+        Some(RowKey::Take)
+    } else {
+        name.parse().ok().map(RowKey::Note)
+    }
+}
+
+/// One drawn row.
+struct Row {
+    key: RowKey,
+    strip: Strip,
+    element: Element,
+}
+
 /// The strip in one mounted element.
 pub struct Panel {
     root: Element,
     document: Document,
+    /// The rows drawn, top to bottom.
+    rows: Vec<Row>,
     /// The meter's bars and clock, while recording.
     bars: Vec<Element>,
     time: Option<Element>,
@@ -103,14 +135,24 @@ impl Panel {
     pub fn new(root: Element, dictation: Weak<Dictation>) -> Option<Self> {
         let document = root.owner_document()?;
         let on_click = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
-            let act = event
+            let Some(button) = event
                 .target()
                 .and_then(|t| t.dyn_into::<Element>().ok())
                 .and_then(|t| t.closest("[data-action]").ok().flatten())
-                .and_then(|button| button.get_attribute("data-action"))
+            else {
+                return;
+            };
+            let act = button
+                .get_attribute("data-action")
                 .and_then(|name| Act::parse(&name));
-            if let (Some(act), Some(dictation)) = (act, dictation.upgrade()) {
-                dictation.act(act);
+            let key = button
+                .closest("[data-key]")
+                .ok()
+                .flatten()
+                .and_then(|row| row.get_attribute("data-key"))
+                .and_then(|name| parse_key(&name));
+            if let (Some(act), Some(key), Some(dictation)) = (act, key, dictation.upgrade()) {
+                dictation.act(act, key);
             }
         });
         // "Use" waits for some text.
@@ -138,6 +180,7 @@ impl Panel {
         Some(Self {
             root,
             document,
+            rows: Vec::new(),
             bars: Vec::new(),
             time: None,
             listeners: [on_click, on_input],
@@ -150,25 +193,64 @@ impl Panel {
         self.root == *root
     }
 
-    /// The edited transcript, while the card shows.
+    /// The edited transcript on note `key`'s card, while it shows.
     #[must_use]
-    pub fn transcript(&self) -> Option<String> {
-        self.root
-            .query_selector("textarea")
-            .ok()
-            .flatten()
+    pub fn transcript(&self, key: u32) -> Option<String> {
+        self.rows
+            .iter()
+            .find(|row| row.key == RowKey::Note(key))
+            .and_then(|row| row.element.query_selector("textarea").ok().flatten())
             .and_then(|t| t.dyn_into::<HtmlTextAreaElement>().ok())
             .map(|t| t.value())
     }
 
-    /// Replaces what the strip shows with `strip`.
-    pub fn draw(&mut self, strip: &Strip) {
-        self.root.set_text_content(None);
-        self.bars.clear();
-        self.time = None;
-        if let Err(error) = self.build(strip) {
+    /// Makes the strip show `rows`, top to bottom. Rows that show the same
+    /// as before stay as they are (with any edits and focus in them).
+    pub fn draw(&mut self, rows: &[(RowKey, Strip)]) {
+        if let Err(error) = self.reconcile(rows) {
             platform::log_error("could not draw the dictation strip", &error);
         }
+    }
+
+    fn reconcile(&mut self, rows: &[(RowKey, Strip)]) -> Result<(), JsValue> {
+        let mut old = core::mem::take(&mut self.rows);
+        if !rows
+            .iter()
+            .any(|(_, strip)| matches!(strip, Strip::Live { .. }))
+        {
+            self.bars.clear();
+            self.time = None;
+        }
+        for (key, strip) in rows {
+            let kept = old.iter().position(|row| row.key == *key);
+            let element = match kept.map(|i| old.remove(i)) {
+                Some(row) if row.strip == *strip => row.element,
+                Some(row) => {
+                    let element = self.build(*key, strip)?;
+                    row.element.replace_with_with_node_1(&element)?;
+                    element
+                }
+                None => self.build(*key, strip)?,
+            };
+            self.rows.push(Row {
+                key: *key,
+                strip: strip.clone(),
+                element,
+            });
+        }
+        for gone in old {
+            gone.element.remove();
+        }
+        // In order, moving only rows that are out of place.
+        let children = self.root.children();
+        for (i, row) in self.rows.iter().enumerate() {
+            let at = children.item(u32::try_from(i).unwrap_or(u32::MAX));
+            if at.as_ref() != Some(&row.element) {
+                self.root
+                    .insert_before(&row.element, at.as_ref().map(AsRef::as_ref))?;
+            }
+        }
+        Ok(())
     }
 
     /// Moves the meter (while recording).
@@ -181,8 +263,11 @@ impl Panel {
         }
     }
 
-    fn build(&mut self, strip: &Strip) -> Result<(), JsValue> {
-        let root = self.root.clone();
+    /// A detached row for `strip`.
+    fn build(&mut self, key: RowKey, strip: &Strip) -> Result<Element, JsValue> {
+        let root = self.document.create_element("div")?;
+        root.set_class_name("dictation-row");
+        root.set_attribute("data-key", &key_name(key))?;
         match strip {
             Strip::Empty => {}
             Strip::Live { opening, send } => {
@@ -202,6 +287,7 @@ impl Panel {
                     .set_attribute("aria-hidden", "true")?;
                 let meter = self.add(&live, "span", "meter", None)?;
                 meter.set_attribute("aria-hidden", "true")?;
+                self.bars.clear();
                 for _ in 0..METER_BARS {
                     let bar = self.add(&meter, "span", "meter-bar", None)?;
                     self.bars.push(bar);
@@ -219,8 +305,8 @@ impl Panel {
                 let line = self.add(&root, "div", class, None)?;
                 line.set_attribute("role", "status")?;
                 self.add(&line, "span", "dictation-status-text", Some(text))?;
-                if *cancel {
-                    self.button(&line, SMALL_BUTTON, "Cancel", Act::Cancel)?;
+                if let Some(cancel) = cancel {
+                    self.button(&line, SMALL_BUTTON, cancel.label(), Act::of(*cancel))?;
                 }
             }
             Strip::Card {
@@ -229,7 +315,6 @@ impl Panel {
                 message,
                 note,
                 actions,
-                ..
             } => {
                 let card = self.add(&root, "div", "outcome-card", None)?;
                 card.set_attribute("role", if *alert { "alert" } else { "status" })?;
@@ -250,9 +335,11 @@ impl Panel {
                     self.button(&row, class, action.label(), Act::of(*action))?;
                 }
             }
-            Strip::Transcript { text, note, .. } => self.transcript_card(&root, text, *note)?,
+            Strip::Transcript { title, text, note } => {
+                self.transcript_card(&root, key, title, text, *note)?;
+            }
         }
-        Ok(())
+        Ok(root)
     }
 
     /// The transcript card: `note` (why the take stopped, if it says),
@@ -260,6 +347,8 @@ impl Panel {
     fn transcript_card(
         &self,
         root: &Element,
+        key: RowKey,
+        heading: &str,
         text: &str,
         note: Option<&str>,
     ) -> Result<(), JsValue> {
@@ -269,18 +358,19 @@ impl Panel {
         let title = self.add(&card, "p", "outcome-title", None)?;
         let icon = self.icon(icons::MIC)?;
         title.append_child(&icon)?;
-        title.append_with_str_1("Transcript")?;
+        title.append_with_str_1(heading)?;
         if let Some(note) = note {
             self.add(&card, "p", "outcome-text", Some(note))?;
         }
         let heard = !text.trim().is_empty();
         if heard {
             let label = self.add(&card, "label", "visually-hidden", Some("Transcript"))?;
-            label.set_attribute("for", "dictation-text")?;
+            let id = format!("dictation-text-{}", key_name(key));
+            label.set_attribute("for", &id)?;
             let area: HtmlTextAreaElement = self
                 .add(&card, "textarea", "composer-input dictation-text", None)?
                 .unchecked_into();
-            area.set_id("dictation-text");
+            area.set_id(&id);
             area.set_rows(2);
             area.set_value(text);
         } else {
@@ -363,5 +453,14 @@ mod tests {
         }
         assert_eq!(Act::parse("send"), None);
         assert_eq!(Act::of(Action::Retry { now: true }), Act::Retry);
+        assert_eq!(Act::of(Action::Cancel), Act::Cancel);
+    }
+
+    #[test]
+    fn every_row_reads_back_from_its_key() {
+        for key in [RowKey::Take, RowKey::Note(0), RowKey::Note(41)] {
+            assert_eq!(parse_key(&key_name(key)), Some(key));
+        }
+        assert_eq!(parse_key("note"), None);
     }
 }

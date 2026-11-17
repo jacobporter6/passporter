@@ -1,15 +1,23 @@
-//! Where one agent's dictation is ([`Phase`]), what its strip shows
-//! ([`Strip`], drawn by [`super::panel`]) and what the app's mic button
-//! needs to know of it ([`Mic`]). Pure, so tested on the host.
+//! Where one agent's dictation is: the take being recorded ([`Take`]) and
+//! the notes on their way to a transcript ([`Note`], oldest first). What
+//! the strip shows ([`rows`], each a [`Strip`] drawn by
+//! [`super::panel`]) and what the app's mic button needs to know of it
+//! ([`Mic`]) follow from those. Pure, so tested on the host.
+//!
+//! Notes are sticky: one stays on the strip until its transcript is sent
+//! or used, or the user discards it. They are delivered one at a time,
+//! oldest first ([`next_to_deliver`]), so prompts reach the agent in the
+//! order they were said; a note that failed holds back the ones behind it
+//! until it is retried or discarded.
 
 use protocol::AudioId;
 
 use super::upload::Progress;
 
-/// What the dictation strip shows.
+/// The take: the microphone's side of the strip.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum Phase {
-    /// Nothing going on.
+pub enum Take {
+    /// Not recording.
     #[default]
     Idle,
     /// Waiting for the microphone (the permission prompt, the first time).
@@ -18,91 +26,226 @@ pub enum Phase {
     Recording,
     /// Stopped; saving the clip on the device.
     Saving,
-    /// Sending the clip.
-    Uploading(Progress),
-    /// Waiting for the transcript.
-    Transcribing,
-    /// The bridge is unreachable; retrying by itself.
-    Waiting {
-        /// The stored clip.
-        id: AudioId,
-        /// Why, for people.
-        message: String,
-    },
-    /// The transcript, for the user to review (the "Review dictation
-    /// before sending" setting, or a clip left from an earlier visit).
-    Ready {
-        /// The stored clip.
-        id: AudioId,
-        /// What the bridge heard (may be empty).
-        text: String,
-        /// Why the take stopped, when the user may not know (see
-        /// [`SCREEN_OFF`]).
-        note: Option<&'static str>,
-    },
-    /// Stopped short. With `id`, the clip is stored and can be retried.
-    Failed {
-        /// The stored clip, if there is one.
-        id: Option<AudioId>,
-        /// What happened, for people.
-        message: String,
-    },
+    /// Recording could not start or finish, and nothing was stored.
+    Failed(String),
 }
 
-impl Phase {
-    /// Whether the mic button may start (or stop) a recording now.
-    #[must_use]
-    pub const fn mic_enabled(&self) -> bool {
-        matches!(
-            self,
-            Self::Idle | Self::Opening | Self::Recording | Self::Failed { id: None, .. }
-        )
-    }
-
-    /// Whether Cancel may discard the clip now: while it uploads or
-    /// transcribes (while saving there is nothing stored yet).
-    #[must_use]
-    pub const fn can_cancel(&self) -> bool {
-        matches!(self, Self::Uploading(_) | Self::Transcribing)
-    }
-
+impl Take {
     /// Whether the microphone is (being) used.
     #[must_use]
     pub const fn is_live(&self) -> bool {
         matches!(self, Self::Opening | Self::Recording)
     }
 
-    /// Whether a take is under way, so the screen is kept on: from the
-    /// tap until the transcript is in (or the take is cancelled or fails).
-    /// A card (a transcript to review, a failure, an upload waiting for
-    /// the bridge) waits for the user with the clip safe on the phone, so
-    /// the screen may sleep.
+    /// Whether a new take may start: not while one is recording or
+    /// saving. Notes on their way don't stop it.
     #[must_use]
-    pub const fn keeps_awake(&self) -> bool {
-        matches!(
-            self,
-            Self::Opening
-                | Self::Recording
-                | Self::Saving
-                | Self::Uploading(_)
-                | Self::Transcribing
-        )
+    pub const fn can_start(&self) -> bool {
+        matches!(self, Self::Idle | Self::Failed(_))
     }
 
-    /// What the mic button can do in this phase.
+    /// What the mic button can do.
     #[must_use]
     pub const fn mic(&self) -> Mic {
-        if self.is_live() {
-            Mic::Live
-        } else if self.mic_enabled() {
-            Mic::Ready
-        } else {
-            Mic::Busy
+        match self {
+            Self::Opening | Self::Recording => Mic::Live,
+            Self::Saving => Mic::Busy,
+            Self::Idle | Self::Failed(_) => Mic::Ready,
+        }
+    }
+
+    /// The take's row; `send` when stopping sends the transcript.
+    #[must_use]
+    pub fn strip(&self, send: bool) -> Strip {
+        match self {
+            Self::Idle => Strip::Empty,
+            Self::Opening => Strip::Live {
+                opening: true,
+                send,
+            },
+            Self::Recording => Strip::Live {
+                opening: false,
+                send,
+            },
+            Self::Saving => Strip::Status {
+                text: "Saving…".to_owned(),
+                busy: false,
+                cancel: None,
+            },
+            Self::Failed(message) => Strip::Card {
+                alert: true,
+                title: None,
+                message: message.clone(),
+                note: None,
+                actions: vec![Action::Dismiss],
+            },
         }
     }
 }
 
-/// The mic button's state: all the app needs to know of a [`Phase`]. It
+/// Where one stored note is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoteState {
+    /// Stored; waiting for the notes before it.
+    Queued,
+    /// Sending the clip.
+    Uploading(Progress),
+    /// Waiting for the transcript.
+    Transcribing,
+    /// The bridge is unreachable; retrying by itself.
+    Waiting {
+        /// Why, for people.
+        message: String,
+    },
+    /// Stopped short; the clip is stored and can be retried.
+    Failed {
+        /// What happened, for people.
+        message: String,
+        /// The delivery stopped retrying by itself (the bridge stayed
+        /// unreachable): it is tried again when the network comes back.
+        parked: bool,
+    },
+    /// The transcript, for the user to review (the "Review dictation
+    /// before sending" setting, or a note left from an earlier visit).
+    Ready {
+        /// What the bridge heard (may be empty).
+        text: String,
+        /// Why the take stopped, when the user may not know (see
+        /// [`SCREEN_OFF`]).
+        note: Option<&'static str>,
+    },
+}
+
+/// A stored note on the strip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Note {
+    /// The strip's own key for it: unlike `id`, it never changes (the
+    /// bridge can make a clip move to a fresh id).
+    pub key: u32,
+    /// The stored clip.
+    pub id: AudioId,
+    /// How long it is, for its label.
+    pub duration_ms: u64,
+    /// Whether its transcript is sent without review.
+    pub send: bool,
+    /// Why its take stopped, for its transcript card, when the user may
+    /// not know (see [`SCREEN_OFF`]).
+    pub stopped: Option<&'static str>,
+    /// Where it is.
+    pub state: NoteState,
+}
+
+impl Note {
+    /// Whether it is being uploaded or transcribed now.
+    #[must_use]
+    pub const fn is_delivering(&self) -> bool {
+        matches!(
+            self.state,
+            NoteState::Uploading(_) | NoteState::Transcribing
+        )
+    }
+
+    /// Whether it has a transcript waiting for review.
+    #[must_use]
+    pub const fn is_ready(&self) -> bool {
+        matches!(self.state, NoteState::Ready { .. })
+    }
+
+    /// Its row on the strip.
+    #[must_use]
+    pub fn strip(&self) -> Strip {
+        let length = clock(self.duration_ms);
+        let status = |text: String, busy, cancel| Strip::Status {
+            text,
+            busy,
+            cancel: Some(cancel),
+        };
+        match &self.state {
+            NoteState::Queued => status(format!("{length} · Queued"), false, Action::Discard),
+            NoteState::Uploading(progress) => {
+                let percent = progress.sent.saturating_mul(100) / progress.total.max(1);
+                status(
+                    format!("{length} · Uploading… {percent}%"),
+                    false,
+                    Action::Cancel,
+                )
+            }
+            NoteState::Transcribing => {
+                status(format!("{length} · Transcribing…"), true, Action::Cancel)
+            }
+            NoteState::Waiting { message } => Strip::Card {
+                alert: false,
+                title: Some(format!("Dictation ({length})")),
+                message: message.clone(),
+                note: Some("Retrying by itself."),
+                actions: vec![Action::Retry { now: true }, Action::Discard],
+            },
+            NoteState::Failed { message, .. } => Strip::Card {
+                alert: true,
+                title: Some(format!("Dictation ({length}) not transcribed")),
+                message: message.clone(),
+                note: None,
+                actions: vec![Action::Retry { now: false }, Action::Discard],
+            },
+            NoteState::Ready { text, note } => Strip::Transcript {
+                title: format!("Transcript ({length})"),
+                text: text.clone(),
+                note: *note,
+            },
+        }
+    }
+}
+
+/// The next note to deliver, by key: the oldest one without a
+/// transcript, if it is queued. A note that failed (or is retrying)
+/// holds back the ones behind it; one waiting for review does not.
+#[must_use]
+pub fn next_to_deliver(notes: &[Note]) -> Option<u32> {
+    notes
+        .iter()
+        .find(|note| !note.is_ready())
+        .filter(|note| note.state == NoteState::Queued)
+        .map(|note| note.key)
+}
+
+/// Whether the screen is kept on: from the tap until the take is saved,
+/// and while a note is uploading or transcribing or is next to be (so the
+/// lock isn't dropped between saving a take and sending it). A card (a
+/// transcript to review, a failure, a note waiting for the bridge, and
+/// any note queued behind one) waits for the user with the clip safe on
+/// the phone, so the screen may sleep.
+#[must_use]
+pub fn keeps_awake(take: &Take, notes: &[Note]) -> bool {
+    matches!(take, Take::Opening | Take::Recording | Take::Saving)
+        || notes.iter().any(Note::is_delivering)
+        || next_to_deliver(notes).is_some()
+}
+
+/// Which row of the strip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowKey {
+    /// The take.
+    Take,
+    /// The note with this [`Note::key`].
+    Note(u32),
+}
+
+/// The strip's rows, top to bottom: the notes, oldest first, then the
+/// take (nearest the composer) unless it is idle.
+#[must_use]
+pub fn rows(take: &Take, notes: &[Note], send: bool) -> Vec<(RowKey, Strip)> {
+    let mut rows: Vec<_> = notes
+        .iter()
+        .map(|note| (RowKey::Note(note.key), note.strip()))
+        .collect();
+    let take = take.strip(send);
+    if take != Strip::Empty {
+        rows.push((RowKey::Take, take));
+    }
+    rows
+}
+
+/// The mic button's state: all the app needs to know of a [`Take`]. It
 /// crosses from the dictation WASM to the page as [`Mic::code`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mic {
@@ -111,7 +254,7 @@ pub enum Mic {
     Ready,
     /// Recording (or opening): tap to stop.
     Live,
-    /// A clip is on its way: wait for its card.
+    /// Saving the take just stopped: wait a moment.
     Busy,
 }
 
@@ -137,7 +280,7 @@ impl Mic {
     }
 }
 
-/// What the strip shows for a phase: a few shapes the phases share.
+/// What one row of the strip shows: a few shapes the states share.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Strip {
     /// Nothing.
@@ -157,17 +300,15 @@ pub enum Strip {
         text: String,
         /// Show the spinner.
         busy: bool,
-        /// Offer Cancel, which discards the clip.
-        cancel: bool,
+        /// The button that discards the note, if any.
+        cancel: Option<Action>,
     },
-    /// A message with actions on the stored clip `id`, if any.
+    /// A message with actions.
     Card {
-        /// The stored clip.
-        id: Option<AudioId>,
         /// Announce it as an alert (a failure), not a status.
         alert: bool,
         /// A heading.
-        title: Option<&'static str>,
+        title: Option<String>,
         /// What happened.
         message: String,
         /// A second line.
@@ -177,8 +318,8 @@ pub enum Strip {
     },
     /// The transcript card.
     Transcript {
-        /// The stored clip.
-        id: AudioId,
+        /// Its heading.
+        title: String,
         /// What the bridge heard (may be empty).
         text: String,
         /// Why the take stopped, if the user may not know.
@@ -186,15 +327,17 @@ pub enum Strip {
     },
 }
 
-/// A button on a [`Strip::Card`].
+/// A button on a [`Strip::Card`] or [`Strip::Status`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
-    /// Deliver the stored clip again (now, if it is waiting to).
+    /// Deliver the stored note again (now, if it is waiting to).
     Retry {
         /// It is already retrying by itself: cut the wait short.
         now: bool,
     },
-    /// Forget the stored clip.
+    /// Stop delivering the note and forget it.
+    Cancel,
+    /// Forget the stored note.
     Discard,
     /// Clear a failure that left nothing stored.
     Dismiss,
@@ -207,6 +350,7 @@ impl Action {
         match self {
             Self::Retry { now: true } => "Retry now",
             Self::Retry { now: false } => "Retry",
+            Self::Cancel => "Cancel",
             Self::Discard => "Discard",
             Self::Dismiss => "Dismiss",
         }
@@ -219,82 +363,15 @@ impl Action {
     }
 }
 
-impl Strip {
-    /// What the strip shows in `phase`; `send` when stopping the take
-    /// sends its transcript (no review).
-    #[must_use]
-    pub fn of(phase: &Phase, send: bool) -> Self {
-        let status = |text: &str, busy| Self::Status {
-            text: text.to_owned(),
-            busy,
-            cancel: phase.can_cancel(),
-        };
-        match phase.clone() {
-            Phase::Idle => Self::Empty,
-            Phase::Opening => Self::Live {
-                opening: true,
-                send,
-            },
-            Phase::Recording => Self::Live {
-                opening: false,
-                send,
-            },
-            Phase::Saving => status("Saving…", false),
-            Phase::Uploading(progress) => {
-                let percent = progress.sent.saturating_mul(100) / progress.total.max(1);
-                status(&format!("Uploading… {percent}%"), false)
-            }
-            Phase::Transcribing => status("Transcribing…", true),
-            Phase::Waiting { id, message } => Self::Card {
-                id: Some(id),
-                alert: false,
-                title: None,
-                message,
-                note: Some("Retrying by itself."),
-                actions: vec![Action::Retry { now: true }, Action::Discard],
-            },
-            Phase::Ready { id, text, note } => Self::Transcript { id, text, note },
-            Phase::Failed {
-                id: Some(id),
-                message,
-            } => Self::Card {
-                id: Some(id),
-                alert: true,
-                title: Some("Dictation not transcribed"),
-                message,
-                note: None,
-                actions: vec![Action::Retry { now: false }, Action::Discard],
-            },
-            Phase::Failed { id: None, message } => Self::Card {
-                id: None,
-                alert: true,
-                title: None,
-                message,
-                note: None,
-                actions: vec![Action::Dismiss],
-            },
-        }
-    }
-}
-
-/// What becomes of a transcript that just arrived for the stored clip
-/// `id`.
+/// What becomes of a transcript that just arrived.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Arrival {
-    /// Show it for review ([`Phase::Ready`]).
-    Review(Phase),
-    /// Send it to the agent as a prompt, then forget the clip.
-    Send {
-        /// The stored clip.
-        id: AudioId,
-        /// What to send, trimmed.
-        text: String,
-    },
-    /// Nothing was heard: forget the clip and say so.
-    Empty {
-        /// The stored clip.
-        id: AudioId,
-    },
+    /// Show it for review ([`NoteState::Ready`]).
+    Review(NoteState),
+    /// Send it to the agent as a prompt (trimmed), then forget the note.
+    Send(String),
+    /// Nothing was heard: forget the note and say so.
+    Empty,
 }
 
 /// The note for a dictation that heard nothing, when there is no card to
@@ -307,20 +384,18 @@ pub const NOTHING_HEARD: &str = "Didn't catch that";
 pub const SCREEN_OFF: &str = "Recording stopped when the screen turned off or you switched apps.";
 
 impl Arrival {
-    /// What to do with `text`, transcribed from the clip `id`: `send` when
-    /// the take sends without review; a review card shows `note`.
+    /// What to do with `text`: `send` when it goes without review (the
+    /// take sends, and no older note waits for review ahead of it); a
+    /// review card shows `note`.
     #[must_use]
-    pub fn of(id: AudioId, text: String, send: bool, note: Option<&'static str>) -> Self {
+    pub fn of(text: String, send: bool, note: Option<&'static str>) -> Self {
         let trimmed = text.trim();
         if !send {
-            Self::Review(Phase::Ready { id, text, note })
+            Self::Review(NoteState::Ready { text, note })
         } else if trimmed.is_empty() {
-            Self::Empty { id }
+            Self::Empty
         } else {
-            Self::Send {
-                text: trimmed.to_owned(),
-                id,
-            }
+            Self::Send(trimmed.to_owned())
         }
     }
 }
@@ -357,251 +432,290 @@ pub fn append_transcript(composer: &str, transcript: &str) -> String {
 mod tests {
     use super::*;
 
+    fn clip() -> AudioId {
+        AudioId::new("9ca09978-ef89-46fd-9a85-118b84bee7b4").unwrap()
+    }
+
+    fn note(key: u32, state: NoteState) -> Note {
+        Note {
+            key,
+            id: clip(),
+            duration_ms: 42_000,
+            send: true,
+            stopped: None,
+            state,
+        }
+    }
+
+    fn failed(parked: bool) -> NoteState {
+        NoteState::Failed {
+            message: "No.".into(),
+            parked,
+        }
+    }
+
+    fn ready(text: &str) -> NoteState {
+        NoteState::Ready {
+            text: text.into(),
+            note: None,
+        }
+    }
+
     #[test]
     fn the_mic_state_crosses_as_a_code() {
         for mic in [Mic::Ready, Mic::Live, Mic::Busy] {
             assert_eq!(Mic::from_code(mic.code()), mic);
         }
         assert_eq!(Mic::from_code(7), Mic::Busy);
-        assert_eq!(Phase::Opening.mic(), Mic::Live);
-        assert_eq!(Phase::Idle.mic(), Mic::Ready);
-        assert_eq!(Phase::Saving.mic(), Mic::Busy);
+    }
+
+    /// The mic records again as soon as a take is saved: notes on their
+    /// way don't hold it.
+    #[test]
+    fn the_mic_waits_only_for_the_take_to_be_saved() {
+        assert_eq!(Take::Idle.mic(), Mic::Ready);
+        assert_eq!(Take::Opening.mic(), Mic::Live);
+        assert_eq!(Take::Recording.mic(), Mic::Live, "a second tap stops");
+        assert_eq!(Take::Saving.mic(), Mic::Busy);
+        assert_eq!(Take::Failed("No.".into()).mic(), Mic::Ready);
+        assert!(Take::Idle.can_start());
+        assert!(Take::Failed("No.".into()).can_start());
+        for take in [Take::Opening, Take::Recording, Take::Saving] {
+            assert!(!take.can_start(), "{take:?}");
+        }
     }
 
     #[test]
-    fn phases_share_a_few_strips() {
-        let id = AudioId::new("9ca09978-ef89-46fd-9a85-118b84bee7b4").unwrap();
-        assert_eq!(Strip::of(&Phase::Idle, true), Strip::Empty);
+    fn the_take_has_a_row_of_its_own() {
+        assert_eq!(Take::Idle.strip(true), Strip::Empty);
         assert_eq!(
-            Strip::of(&Phase::Opening, true),
+            Take::Opening.strip(true),
             Strip::Live {
                 opening: true,
                 send: true
             }
         );
         assert_eq!(
-            Strip::of(&Phase::Uploading(Progress { sent: 1, total: 4 }), true),
-            Strip::Status {
-                text: "Uploading… 25%".into(),
-                busy: false,
-                cancel: true,
+            Take::Recording.strip(false),
+            Strip::Live {
+                opening: false,
+                send: false
             }
         );
-        let Strip::Card { actions, note, .. } = Strip::of(
-            &Phase::Waiting {
-                id: id.clone(),
-                message: "Offline.".into(),
+        assert_eq!(
+            Take::Saving.strip(true),
+            Strip::Status {
+                text: "Saving…".into(),
+                busy: false,
+                cancel: None,
             },
-            true,
-        ) else {
-            panic!("a card")
-        };
-        assert_eq!(actions, [Action::Retry { now: true }, Action::Discard]);
-        assert!(note.is_some());
-        let Strip::Card { actions, alert, .. } = Strip::of(
-            &Phase::Failed {
-                id: Some(id),
-                message: "No.".into(),
-            },
-            true,
-        ) else {
+            "nothing is stored yet, so nothing to cancel"
+        );
+        let Strip::Card { actions, alert, .. } = Take::Failed("Blocked.".into()).strip(true) else {
             panic!("a card")
         };
         assert!(alert);
-        assert!(actions[0].is_primary());
-        assert_eq!(actions[0].label(), "Retry");
-        let Strip::Card { actions, id, .. } = Strip::of(
-            &Phase::Failed {
-                id: None,
-                message: "Blocked.".into(),
+        assert_eq!(actions, [Action::Dismiss]);
+    }
+
+    /// Each note's row is labelled with its length, so a stack of them
+    /// tells apart.
+    #[test]
+    fn notes_show_their_length_and_progress() {
+        assert_eq!(
+            note(1, NoteState::Queued).strip(),
+            Strip::Status {
+                text: "0:42 · Queued".into(),
+                busy: false,
+                cancel: Some(Action::Discard),
+            }
+        );
+        assert_eq!(
+            note(1, NoteState::Uploading(Progress { sent: 1, total: 4 })).strip(),
+            Strip::Status {
+                text: "0:42 · Uploading… 25%".into(),
+                busy: false,
+                cancel: Some(Action::Cancel),
+            }
+        );
+        assert_eq!(
+            note(1, NoteState::Transcribing).strip(),
+            Strip::Status {
+                text: "0:42 · Transcribing…".into(),
+                busy: true,
+                cancel: Some(Action::Cancel),
+            }
+        );
+        let Strip::Card {
+            actions,
+            note: line,
+            alert,
+            ..
+        } = note(
+            1,
+            NoteState::Waiting {
+                message: "Offline.".into(),
             },
-            true,
-        ) else {
+        )
+        .strip()
+        else {
             panic!("a card")
         };
-        assert_eq!((actions.as_slice(), id), (&[Action::Dismiss][..], None));
-    }
-
-    fn clip() -> AudioId {
-        AudioId::new("9ca09978-ef89-46fd-9a85-118b84bee7b4").unwrap()
-    }
-
-    /// The strip and mic through one take that sends: tap, record, tap
-    /// (the strip's button says Send), transcribe (Cancel offered), sent.
-    #[test]
-    fn a_take_records_then_sends_its_transcript() {
-        let send = true;
-        assert_eq!(Phase::Idle.mic(), Mic::Ready);
-        // Tap: the microphone opens, then records.
-        assert_eq!(Phase::Opening.mic(), Mic::Live);
-        assert_eq!(
-            Strip::of(&Phase::Recording, send),
-            Strip::Live {
-                opening: false,
-                send: true
-            }
-        );
-        assert_eq!(Phase::Recording.mic(), Mic::Live, "a second tap stops");
-        // Tap again: saved, uploaded, transcribed, the mic waiting.
-        for phase in [
-            Phase::Saving,
-            Phase::Uploading(Progress { sent: 0, total: 1 }),
-            Phase::Transcribing,
-        ] {
-            assert_eq!(phase.mic(), Mic::Busy);
+        assert_eq!(actions, [Action::Retry { now: true }, Action::Discard]);
+        assert!(line.is_some() && !alert);
+        for parked in [false, true] {
+            let Strip::Card {
+                actions,
+                alert,
+                title,
+                ..
+            } = note(1, failed(parked)).strip()
+            else {
+                panic!("a card")
+            };
+            assert!(alert);
+            assert_eq!(title.as_deref(), Some("Dictation (0:42) not transcribed"));
+            assert!(actions[0].is_primary());
+            assert_eq!(actions[0].label(), "Retry");
+            assert_eq!(actions[1], Action::Discard);
         }
         assert_eq!(
-            Strip::of(&Phase::Transcribing, send),
-            Strip::Status {
-                text: "Transcribing…".into(),
-                busy: true,
-                cancel: true,
+            note(1, ready("hi")).strip(),
+            Strip::Transcript {
+                title: "Transcript (0:42)".into(),
+                text: "hi".into(),
+                note: None,
             }
         );
-        // No card: the transcript is sent, trimmed, and the clip forgotten.
+    }
+
+    /// Notes stack oldest first, with the take nearest the composer.
+    #[test]
+    fn rows_stack_notes_above_the_take() {
+        let notes = [note(4, failed(true)), note(7, NoteState::Queued)];
+        let keys: Vec<_> = rows(&Take::Recording, &notes, true)
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        assert_eq!(keys, [RowKey::Note(4), RowKey::Note(7), RowKey::Take]);
+        let keys: Vec<_> = rows(&Take::Idle, &notes, true)
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
         assert_eq!(
-            Arrival::of(clip(), " run the tests\n".into(), send, None),
-            Arrival::Send {
-                id: clip(),
-                text: "run the tests".into()
-            }
+            keys,
+            [RowKey::Note(4), RowKey::Note(7)],
+            "idle: no take row"
+        );
+        assert_eq!(rows(&Take::Idle, &[], true), []);
+    }
+
+    /// One at a time, oldest first, so prompts arrive in the order they
+    /// were said. A failure holds the queue; a review card doesn't.
+    #[test]
+    fn notes_are_delivered_in_order() {
+        assert_eq!(next_to_deliver(&[]), None);
+        assert_eq!(
+            next_to_deliver(&[note(1, NoteState::Queued), note(2, NoteState::Queued)]),
+            Some(1)
+        );
+        assert_eq!(
+            next_to_deliver(&[note(1, ready("hi")), note(2, NoteState::Queued)]),
+            Some(2),
+            "a card waiting for review doesn't hold the queue"
+        );
+        for ahead in [
+            NoteState::Transcribing,
+            NoteState::Uploading(Progress { sent: 0, total: 1 }),
+            NoteState::Waiting {
+                message: "Offline.".into(),
+            },
+            failed(true),
+            failed(false),
+        ] {
+            assert_eq!(
+                next_to_deliver(&[note(1, ahead.clone()), note(2, NoteState::Queued)]),
+                None,
+                "{ahead:?}"
+            );
+        }
+    }
+
+    /// The screen stays on from the tap until the take is saved, and while
+    /// a note uploads or transcribes; not for cards waiting on the user.
+    #[test]
+    fn the_screen_stays_on_while_something_is_under_way() {
+        for take in [Take::Opening, Take::Recording, Take::Saving] {
+            assert!(keeps_awake(&take, &[]), "{take:?}");
+        }
+        for state in [
+            NoteState::Queued,
+            NoteState::Uploading(Progress { sent: 0, total: 1 }),
+            NoteState::Transcribing,
+        ] {
+            assert!(
+                keeps_awake(&Take::Idle, &[note(1, state.clone())]),
+                "{state:?}"
+            );
+        }
+        assert!(!keeps_awake(&Take::Idle, &[]));
+        assert!(!keeps_awake(&Take::Failed("No.".into()), &[]));
+        for state in [
+            ready("hi"),
+            failed(false),
+            failed(true),
+            NoteState::Waiting {
+                message: "Offline.".into(),
+            },
+        ] {
+            assert!(
+                !keeps_awake(&Take::Idle, &[note(1, state.clone())]),
+                "{state:?}"
+            );
+        }
+        assert!(
+            !keeps_awake(
+                &Take::Idle,
+                &[note(1, failed(true)), note(2, NoteState::Queued)]
+            ),
+            "queued behind a failure"
+        );
+    }
+
+    #[test]
+    fn a_transcript_that_sends_is_trimmed() {
+        assert_eq!(
+            Arrival::of(" run the tests\n".into(), true, None),
+            Arrival::Send("run the tests".into())
         );
     }
 
     #[test]
     fn nothing_heard_is_not_sent() {
         for heard in ["", "  \n "] {
-            assert_eq!(
-                Arrival::of(clip(), heard.into(), true, None),
-                Arrival::Empty { id: clip() }
-            );
+            assert_eq!(Arrival::of(heard.into(), true, None), Arrival::Empty);
         }
         assert_eq!(NOTHING_HEARD, "Didn't catch that");
     }
 
+    /// "Review dictation before sending" (or an older note waiting for
+    /// review): the transcript, even an empty one, waits on its card,
+    /// with a note saying why the take stopped if the user may not know.
     #[test]
-    fn saving_cant_be_cancelled_but_the_upload_can() {
-        let Strip::Status { cancel, .. } = Strip::of(&Phase::Saving, true) else {
-            panic!("a status")
-        };
-        assert!(!cancel, "nothing is stored yet");
-        let Strip::Status { cancel, .. } = Strip::of(&Phase::Transcribing, false) else {
-            panic!("a status")
-        };
-        assert!(cancel, "also when reviewing");
-        assert!(Phase::Uploading(Progress { sent: 0, total: 1 }).can_cancel());
-        assert!(
-            !Phase::Recording.can_cancel(),
-            "the strip's own button stops it"
-        );
-        assert!(
-            !Phase::Ready {
-                id: clip(),
-                text: "hi".into(),
-                note: None,
-            }
-            .can_cancel(),
-            "the card has Discard"
-        );
-    }
-
-    /// "Review dictation before sending": the button stops, and the
-    /// transcript (even an empty one) waits on its card.
-    #[test]
-    fn with_review_on_the_transcript_waits_for_the_user() {
-        assert_eq!(
-            Strip::of(&Phase::Recording, false),
-            Strip::Live {
-                opening: false,
-                send: false
-            }
-        );
+    fn a_reviewed_transcript_waits_on_its_card() {
         for heard in ["run the tests", ""] {
-            let ready = Phase::Ready {
-                id: clip(),
-                text: heard.into(),
-                note: None,
-            };
             assert_eq!(
-                Arrival::of(clip(), heard.into(), false, None),
-                Arrival::Review(ready.clone())
-            );
-            assert_eq!(
-                Strip::of(&ready, false),
-                Strip::Transcript {
-                    id: clip(),
-                    text: heard.into(),
-                    note: None,
-                }
+                Arrival::of(heard.into(), false, None),
+                Arrival::Review(ready(heard))
             );
         }
-    }
-
-    /// A take cut short by the screen turning off waits on its card, with
-    /// a note saying why it stopped.
-    #[test]
-    fn a_take_cut_short_says_why_on_its_card() {
         assert_eq!(
-            Strip::of(
-                &Phase::Ready {
-                    id: clip(),
-                    text: "so the".into(),
-                    note: Some(SCREEN_OFF),
-                },
-                true
-            ),
-            Strip::Transcript {
-                id: clip(),
-                text: "so the".into(),
-                note: Some(SCREEN_OFF),
-            }
-        );
-        assert_eq!(
-            Arrival::of(clip(), "so the".into(), false, Some(SCREEN_OFF)),
-            Arrival::Review(Phase::Ready {
-                id: clip(),
+            Arrival::of("so the".into(), false, Some(SCREEN_OFF)),
+            Arrival::Review(NoteState::Ready {
                 text: "so the".into(),
                 note: Some(SCREEN_OFF),
             })
         );
-    }
-
-    /// The screen stays on from the tap until the transcript is sent, and
-    /// may sleep once the take is sent, cancelled (both idle), waits on a
-    /// card for review, or failed.
-    #[test]
-    fn the_screen_stays_on_while_a_take_is_under_way() {
-        for phase in [
-            Phase::Opening,
-            Phase::Recording,
-            Phase::Saving,
-            Phase::Uploading(Progress { sent: 0, total: 1 }),
-            Phase::Transcribing,
-        ] {
-            assert!(phase.keeps_awake(), "{phase:?}");
-        }
-        for phase in [
-            Phase::Idle,
-            Phase::Ready {
-                id: clip(),
-                text: "hi".into(),
-                note: None,
-            },
-            Phase::Failed {
-                id: None,
-                message: "No.".into(),
-            },
-            Phase::Failed {
-                id: Some(clip()),
-                message: "No.".into(),
-            },
-            Phase::Waiting {
-                id: clip(),
-                message: "Offline.".into(),
-            },
-        ] {
-            assert!(!phase.keeps_awake(), "{phase:?}");
-        }
     }
 
     #[test]
@@ -622,35 +736,5 @@ mod tests {
         assert_eq!(append_transcript("   ", "go"), "go");
         assert_eq!(append_transcript("Then", "run them"), "Then run them");
         assert_eq!(append_transcript("Then\n", "run them"), "Then\nrun them");
-    }
-
-    #[test]
-    fn the_mic_waits_for_the_card() {
-        assert!(Phase::Idle.mic_enabled());
-        assert!(Phase::Recording.mic_enabled(), "to stop");
-        let id = AudioId::new("9ca09978-ef89-46fd-9a85-118b84bee7b4").unwrap();
-        assert!(
-            !Phase::Ready {
-                id: id.clone(),
-                text: "hi".into(),
-                note: None,
-            }
-            .mic_enabled()
-        );
-        assert!(!Phase::Transcribing.mic_enabled());
-        assert!(
-            !Phase::Failed {
-                id: Some(id),
-                message: String::new()
-            }
-            .mic_enabled()
-        );
-        assert!(
-            Phase::Failed {
-                id: None,
-                message: String::new()
-            }
-            .mic_enabled()
-        );
     }
 }

@@ -3013,8 +3013,10 @@ details[open] > .tool-summary::before {
   }
 }
 
-/* Drawn into by the dictation WASM; lays out as the reply bar's own. */
-.dictation-strip {
+/* Drawn into by the dictation WASM; lays out as the reply bar's own,
+   one row per note (oldest first), then the take. */
+.dictation-strip,
+.dictation-row {
   display: contents;
 }
 
