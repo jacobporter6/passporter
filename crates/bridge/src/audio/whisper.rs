@@ -97,8 +97,8 @@ impl TranscribeError {
     }
 }
 
-/// Largest reply read from `whisper-server`: a five-minute clip's
-/// `verbose_json` (text plus segments) is a few tens of KiB.
+/// Largest reply read from `whisper-server`: an hour-long clip's
+/// `verbose_json` (text plus segments) is well under a MiB.
 const MAX_REPLY_BYTES: usize = 4 * 1024 * 1024;
 
 /// A [`Transcriber`] backed by `whisper-server` over plain HTTP. The bridge
