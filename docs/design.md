@@ -251,7 +251,15 @@ PendingInput = {
   agent waits at a dialog the words go into the composer instead of a
   prompt the bridge would refuse.
   "Review dictation before sending" (Settings, per device, off by default)
-  brings back the editable card with Use / Re-record / Discard. Optional
+  brings back the editable card with Use / Re-record / Discard.
+- **Notes queue**: the mic is free again as soon as a take is saved, so a
+  slow link or a dead zone never stops the next take. Each note waiting to
+  go gets a row on the strip, labelled with its length, and stays there
+  until it is sent or used, or the user discards it. Notes go one at a
+  time, oldest first, so prompts reach the agent in the order they were
+  said: a note that failed holds back the ones behind it until it is
+  retried or discarded, and a note whose turn comes while an older one
+  waits for review becomes a card too. Optional
   auto-answer for transcripts that map with high confidence to a low-risk
   option ("yes"). The car path is special (§6.6).
 - **The screen stays on for a take**: from the tap until the transcript is

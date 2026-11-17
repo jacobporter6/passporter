@@ -1,7 +1,8 @@
 //! The dictation WASM's side of dictation (design §6.3, §7): one recorder
-//! and one clip on its way to a transcript per agent, kept for the whole
-//! page session, so a recording that is uploading when the user swipes to
-//! another agent is still there when they come back.
+//! per agent, and a queue of notes on their way to a transcript, kept for
+//! the whole page session, so a recording that is uploading when the user
+//! swipes to another agent is still there when they come back. A new take
+//! can be recorded while earlier notes wait for the bridge.
 //!
 //! This runs in `voice_bg.wasm` (`src/bin/voice.rs`), loaded by the page
 //! on demand ([`super::module`]). It draws the strip itself
@@ -12,9 +13,9 @@
 //!
 //! A take sends itself: once its transcript is in, the page sends it to
 //! the agent as a prompt, through the outbox ([`Arrival`]). With "Review
-//! dictation before sending" on, or for a clip left from an earlier visit
-//! (the user wasn't there to see it go), it shows as a card to edit and
-//! "Use" instead.
+//! dictation before sending" on, for a clip left from an earlier visit
+//! (the user wasn't there to see it go), or behind an older note waiting
+//! for review, it shows as a card to edit and "Use" instead.
 
 use core::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -30,7 +31,10 @@ use super::browser::{FetchAudio, IdbClips, MediaCapture};
 use super::clip::{PendingClip, Stage};
 use super::courier::{Courier, DeliverError, Delivery};
 use super::panel::{Act, Panel};
-use super::phase::{Arrival, NOTHING_HEARD, Phase, SCREEN_OFF, Strip};
+use super::phase::{
+    Arrival, NOTHING_HEARD, Note, NoteState, RowKey, SCREEN_OFF, Take, keeps_awake,
+    next_to_deliver, rows,
+};
 use super::recorder::{
     CaptureError, Dictaphone, Halt, MicGesture, MicIntent, RecorderConfig, Recording, StopReason,
     Update,
@@ -53,7 +57,7 @@ const RETRY_DELAYS_MS: [i32; 5] = [2_000, 5_000, 10_000, 20_000, 30_000];
 const CLIP_RETENTION_MS: u64 = 90 * 24 * 60 * 60 * 1_000;
 /// How long a delivery retries by itself without upload progress, in ms,
 /// before it waits: for Retry, the phone coming back online, or the next
-/// visit (see [`Dictation::parked`]).
+/// visit (see [`parks`]).
 const AUTO_RETRY_MS: u64 = 12 * 60 * 1_000;
 /// Added to the message of a delivery that stopped retrying by itself.
 const RETRIES_LATER: &str =
@@ -187,24 +191,25 @@ pub fn dictation(agent: &AgentId) -> Rc<Dictation> {
                     panel: RefCell::new(None),
                     agent: agent.clone(),
                     key: agent.to_string(),
-                    phase: RefCell::new(Phase::Idle),
+                    take: RefCell::new(Take::Idle),
+                    notes: RefCell::new(Vec::new()),
+                    next_key: Cell::new(0),
                     phone: Dictaphone::new(MediaCapture::default(), RecorderConfig::default()),
                     gesture: Cell::new(MicGesture::default()),
                     delivering: Cell::new(None),
-                    generation: Cell::new(0),
                     wake: Cell::new(false),
                     takes: Cell::new(0),
                     send: Cell::new(true),
                     awake: Cell::new(false),
-                    parked: Cell::new(false),
+                    loaded: Cell::new(false),
                 })
             })
             .clone()
     })
 }
 
-/// One agent's dictation: the recorder and the clip on its way to a
-/// transcript.
+/// One agent's dictation: the recorder, and the notes on their way to a
+/// transcript (see [`super::phase`]).
 pub struct Dictation {
     /// Itself, for the strip's buttons.
     this: Weak<Self>,
@@ -213,76 +218,126 @@ pub struct Dictation {
     agent: AgentId,
     /// `agent`, as the page knows it.
     key: String,
-    phase: RefCell<Phase>,
+    /// The take being recorded.
+    take: RefCell<Take>,
+    /// The stored notes, oldest first.
+    notes: RefCell<Vec<Note>>,
+    /// The next [`Note::key`].
+    next_key: Cell<u32>,
     phone: Dictaphone<MediaCapture>,
     gesture: Cell<MicGesture>,
-    /// The generation of the running delivery loop, if any.
+    /// The note being delivered, if any: one at a time.
     delivering: Cell<Option<u32>>,
-    /// Bumped to abandon a delivery loop (its clip was discarded).
-    generation: Cell<u32>,
     /// "Retry now": cut the current wait short.
     wake: Cell<bool>,
     /// Counts recordings started, to tell a late answer from an old take.
     takes: Cell<u32>,
     /// Whether the current take sends its transcript without review.
     send: Cell<bool>,
-    /// Whether this agent's take is keeping the screen on ([`wake`]).
+    /// Whether this agent is keeping the screen on ([`wake`]).
     awake: Cell<bool>,
-    /// Whether the failure shown is a delivery that stopped retrying by
-    /// itself (the bridge stayed unreachable): not stored as a failure, so
-    /// the next visit delivers the clip again, and retried as soon as the
-    /// browser reports the network back.
-    parked: Cell<bool>,
+    /// Whether the notes stored by earlier visits have been loaded.
+    loaded: Cell<bool>,
 }
 
 impl core::fmt::Debug for Dictation {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Dictation")
             .field("agent", &self.agent)
-            .field("phase", &self.phase)
+            .field("take", &self.take)
+            .field("notes", &self.notes)
             .finish_non_exhaustive()
     }
 }
 
 impl Dictation {
-    fn phase(&self) -> Phase {
-        self.phase.borrow().clone()
-    }
-
-    fn phase_is(&self, check: impl FnOnce(&Phase) -> bool) -> bool {
-        check(&self.phase.borrow())
-    }
-
-    /// Every phase change goes through here, so the screen is kept on for
-    /// exactly as long as a take is under way, whichever way it ends.
-    fn set_phase(&self, phase: Phase) {
-        if !matches!(phase, Phase::Failed { .. }) {
-            self.parked.set(false);
-        }
-        let awake = phase.keeps_awake();
+    /// Every change goes through here, so the screen is kept on for
+    /// exactly as long as something is under way, whichever way it ends.
+    fn redraw(&self) {
+        let (awake, mic, rows) = {
+            let take = self.take.borrow();
+            let notes = self.notes.borrow();
+            (
+                keeps_awake(&take, &notes),
+                take.mic(),
+                rows(&take, &notes, self.send.get()),
+            )
+        };
         if self.awake.replace(awake) != awake {
             wake::keep_on(awake);
         }
         if let Some(host) = host() {
-            host.mic(&self.key, phase.mic().code());
+            host.mic(&self.key, mic.code());
         }
         if let Some(panel) = self.panel.borrow_mut().as_mut() {
-            panel.draw(&Strip::of(&phase, self.send.get()));
+            panel.draw(&rows);
         }
-        *self.phase.borrow_mut() = phase;
+    }
+
+    fn set_take(&self, take: Take) {
+        *self.take.borrow_mut() = take;
+        self.redraw();
+    }
+
+    fn take_is(&self, check: impl FnOnce(&Take) -> bool) -> bool {
+        check(&self.take.borrow())
+    }
+
+    /// Note `key`, if it is still on the strip.
+    fn note(&self, key: u32) -> Option<Note> {
+        self.notes
+            .borrow()
+            .iter()
+            .find(|note| note.key == key)
+            .cloned()
+    }
+
+    /// Whether note `key` is still on the strip (not sent or discarded).
+    fn has(&self, key: u32) -> bool {
+        self.notes.borrow().iter().any(|note| note.key == key)
+    }
+
+    /// Changes note `key`, if it is still on the strip.
+    fn update(&self, key: u32, change: impl FnOnce(&mut Note)) {
+        let found = {
+            let mut notes = self.notes.borrow_mut();
+            notes
+                .iter_mut()
+                .find(|note| note.key == key)
+                .map(change)
+                .is_some()
+        };
+        if found {
+            self.redraw();
+        }
+    }
+
+    fn set_state(&self, key: u32, state: NoteState) {
+        self.update(key, |note| note.state = state);
+    }
+
+    /// Adds `note` under a fresh key, at the end (`newest`) or the start.
+    fn add_note(&self, mut note: Note, newest: bool) {
+        let key = self.next_key.get();
+        self.next_key.set(key.wrapping_add(1));
+        note.key = key;
+        {
+            let mut notes = self.notes.borrow_mut();
+            if newest {
+                notes.push(note);
+            } else {
+                notes.insert(0, note);
+            }
+        }
+        self.redraw();
     }
 
     /// Shows the strip in `root` (a screen mounting), in place of any
     /// other element.
     pub fn mount(&self, root: web_sys::Element) {
-        let mut panel = Panel::new(root, self.this.clone());
-        if let Some(panel) = &mut panel {
-            panel.draw(&Strip::of(&self.phase.borrow(), self.send.get()));
-        }
+        let panel = Panel::new(root, self.this.clone());
         *self.panel.borrow_mut() = panel;
-        if let Some(host) = host() {
-            host.mic(&self.key, self.phase.borrow().mic().code());
-        }
+        self.redraw();
     }
 
     /// Stops drawing into `root` (its screen went away). A newer screen's
@@ -294,25 +349,19 @@ impl Dictation {
         }
     }
 
-    /// A button on the strip.
-    pub fn act(self: &Rc<Self>, act: Act) {
-        let id = match &*self.phase.borrow() {
-            Phase::Waiting { id, .. } | Phase::Ready { id, .. } => Some(id.clone()),
-            Phase::Failed { id, .. } => id.clone(),
-            _ => None,
-        };
-        match (act, id) {
+    /// A button on row `row` of the strip.
+    pub fn act(self: &Rc<Self>, act: Act, row: RowKey) {
+        match (act, row) {
             (Act::Stop, _) => self.stop(),
-            (Act::Cancel, _) => self.cancel(),
-            (Act::Retry, _) => self.retry(),
             (Act::Dismiss, _) => self.dismiss(),
-            (Act::Discard, Some(id)) => self.finish(id),
-            (Act::Use, Some(id)) => {
+            (Act::Retry, RowKey::Note(key)) => self.retry(key),
+            (Act::Cancel | Act::Discard, RowKey::Note(key)) => self.finish(key),
+            (Act::Use, RowKey::Note(key)) => {
                 let text = self
                     .panel
                     .borrow()
                     .as_ref()
-                    .and_then(Panel::transcript)
+                    .and_then(|panel| panel.transcript(key))
                     .unwrap_or_default();
                 let text = text.trim();
                 if text.is_empty() {
@@ -321,13 +370,13 @@ impl Dictation {
                 if let Some(host) = host() {
                     host.take_text(&self.key, text, false);
                 }
-                self.finish(id);
+                self.finish(key);
             }
-            (Act::Rerecord, Some(id)) => {
-                self.finish(id);
+            (Act::Rerecord, RowKey::Note(key)) => {
+                self.finish(key);
                 self.start();
             }
-            (Act::Discard | Act::Use | Act::Rerecord, None) => {}
+            (Act::Retry | Act::Cancel | Act::Discard | Act::Use | Act::Rerecord, RowKey::Take) => {}
         }
     }
 
@@ -361,10 +410,11 @@ impl Dictation {
         }
     }
 
-    /// Starts recording, if the strip is free. Call it from a user gesture:
-    /// the meter's audio can only start inside one.
+    /// Starts recording, unless a take is already recording or saving.
+    /// Notes on their way don't stop it. Call it from a user gesture: the
+    /// meter's audio can only start inside one.
     pub fn start(self: &Rc<Self>) {
-        if !self.phase_is(Phase::mic_enabled) || self.phone.is_recording() {
+        if !self.take_is(Take::can_start) || self.phone.is_recording() {
             return;
         }
         self.phone.capture().prime();
@@ -373,7 +423,7 @@ impl Dictation {
         // end the take. Reviewing keeps silence auto-stop.
         self.send.set(sends());
         self.phone.auto_stop(!self.send.get());
-        self.set_phase(Phase::Opening);
+        self.set_take(Take::Opening);
         // Which take this is: a cancelled one that opens (or fails) late
         // must not touch the strip of the one after it.
         let take = self.takes.get().wrapping_add(1);
@@ -387,25 +437,22 @@ impl Dictation {
         let this = self.clone();
         spawn_local(async move {
             let result = opened.await;
-            let opening = this.takes.get() == take && this.phase_is(|p| *p == Phase::Opening);
+            let opening = this.takes.get() == take && this.take_is(|t| *t == Take::Opening);
             match result {
-                Ok(()) if opening => this.set_phase(Phase::Recording),
-                Err(error) if opening => this.set_phase(Phase::Failed {
-                    id: None,
-                    message: capture_message(&error),
-                }),
+                Ok(()) if opening => this.set_take(Take::Recording),
+                Err(error) if opening => this.set_take(Take::Failed(capture_message(&error))),
                 Ok(()) | Err(_) => {}
             }
         });
     }
 
-    /// Stops recording; the clip is then saved and delivered. While the
+    /// Stops recording; the clip is then saved and queued. While the
     /// microphone is still opening there is nothing to keep: it cancels.
     pub fn stop(&self) {
         self.gesture.set(MicGesture::default());
         self.phone.hold(false);
         if self.phone.stop() == Halt::Cancelled {
-            self.set_phase(Phase::Idle);
+            self.set_take(Take::Idle);
         }
     }
 
@@ -419,8 +466,8 @@ impl Dictation {
     fn on_update(self: &Rc<Self>, update: Update) {
         match update {
             Update::Level { bars, elapsed_ms } => {
-                if self.phase_is(|p| *p == Phase::Opening) {
-                    self.set_phase(Phase::Recording);
+                if self.take_is(|t| *t == Take::Opening) {
+                    self.set_take(Take::Recording);
                 }
                 if let Some(panel) = self.panel.borrow().as_ref() {
                     panel.meter(&bars, elapsed_ms);
@@ -429,27 +476,23 @@ impl Dictation {
             Update::Stopping(_) => {
                 self.release_mic();
                 platform::haptic_tick();
-                self.set_phase(Phase::Saving);
+                self.set_take(Take::Saving);
             }
             Update::Finished(recording) => {
                 self.release_mic();
                 platform::haptic_tick();
-                self.set_phase(Phase::Saving);
+                self.set_take(Take::Saving);
                 let send = sends_after(recording.stopped_by, self.send.get());
-                let note = card_note(recording.stopped_by);
-                self.send.set(send);
+                let stopped = card_note(recording.stopped_by);
                 if let (Some(note), Some(host)) = (stop_note(recording.stopped_by, send), host()) {
                     host.toast(note);
                 }
                 let this = self.clone();
-                spawn_local(async move { this.keep(recording, note).await });
+                spawn_local(async move { this.keep(recording, send, stopped).await });
             }
             Update::Failed(error) => {
                 self.release_mic();
-                self.set_phase(Phase::Failed {
-                    id: None,
-                    message: capture_message(&error),
-                });
+                self.set_take(Take::Failed(capture_message(&error)));
             }
         }
     }
@@ -461,54 +504,56 @@ impl Dictation {
         self.phone.hold(false);
     }
 
-    /// Stores the recording, then delivers it; a review card shows `note`.
-    async fn keep(self: &Rc<Self>, recording: Recording, note: Option<&'static str>) {
+    /// Stores the recording, queues it as a note (sent without review if
+    /// `send`; a review card shows `stopped`), and frees the mic.
+    async fn keep(
+        self: &Rc<Self>,
+        recording: Recording,
+        send: bool,
+        stopped: Option<&'static str>,
+    ) {
         let Some(id) = new_audio_id() else {
-            self.set_phase(Phase::Failed {
-                id: None,
-                message: "This browser can't make a recording id.".to_owned(),
-            });
+            self.set_take(Take::Failed(
+                "This browser can't make a recording id.".to_owned(),
+            ));
             return;
         };
+        let duration_ms = recording.duration_ms;
         match courier()
-            .keep(self.agent.clone(), id, recording, now())
+            .keep(self.agent.clone(), id.clone(), recording, now())
             .await
         {
-            Ok(clip) => {
+            Ok(_) => {
                 if let Some(host) = host() {
                     host.saved();
                 }
-                self.deliver(clip, self.send.get(), note).await;
+                *self.take.borrow_mut() = Take::Idle;
+                self.add_note(
+                    Note {
+                        key: 0,
+                        id,
+                        duration_ms,
+                        send,
+                        stopped,
+                        state: NoteState::Queued,
+                    },
+                    true,
+                );
+                self.pump();
             }
-            Err(error) => self.set_phase(Phase::Failed {
-                id: None,
-                message: format!("Couldn't save the recording on this phone: {}.", error.0),
-            }),
+            Err(error) => self.set_take(Take::Failed(format!(
+                "Couldn't save the recording on this phone: {}.",
+                error.0
+            ))),
         }
     }
 
-    /// Whether a delivery loop for the current clip is running. A loop
-    /// left behind by a discard belongs to an older generation and doesn't
-    /// count: it stops at its next check.
-    fn is_delivering(&self) -> bool {
-        self.delivering.get() == Some(self.generation.get())
-    }
-
-    /// Whether the clip that `generation` was delivering is still wanted.
-    fn is_current(&self, generation: u32) -> bool {
-        self.generation.get() == generation
-    }
-
-    fn is_free(&self) -> bool {
-        self.phase_is(|p| *p == Phase::Idle) && !self.is_delivering() && !self.phone.is_recording()
-    }
-
-    /// Picks up where a previous screen or page load left off: the oldest
-    /// stored clip for this agent, if the strip is free. The first call in
-    /// a page session also deletes clips (of any agent) past
+    /// Picks up the notes earlier visits left on the phone, once per page
+    /// session for each agent, ahead of any recorded since. The first call
+    /// in a page session also deletes clips (of any agent) past
     /// [`CLIP_RETENTION_MS`].
     pub fn resume(self: &Rc<Self>) {
-        if !self.is_free() {
+        if self.loaded.replace(true) {
             return;
         }
         let sweep_before = (!SWEPT.replace(true)).then(|| {
@@ -516,280 +561,289 @@ impl Dictation {
         });
         let this = self.clone();
         spawn_local(async move {
-            let courier = courier();
-            let waiting = match courier.waiting(&this.agent, sweep_before).await {
-                Ok(waiting) => waiting,
+            let stored = match courier().waiting(&this.agent, sweep_before).await {
+                Ok(stored) => stored,
                 Err(error) => {
                     warn(&error.to_string());
                     return;
                 }
             };
-            let Some(meta) = waiting.into_iter().next() else {
-                return;
-            };
-            if !this.is_free() {
-                return;
-            }
-            // A transcript needs no audio and no network; a clip that
-            // failed for good waits for the user's Retry or Discard.
-            match (meta.transcript, meta.failure) {
-                (Some(text), _) => this.set_phase(Phase::Ready {
-                    id: meta.audio_id,
-                    text,
-                    note: None,
-                }),
-                (None, Some(message)) => this.set_phase(Phase::Failed {
-                    id: Some(meta.audio_id),
-                    message,
-                }),
-                (None, None) => {
-                    let Ok(Some(clip)) = courier.load(&meta.audio_id).await else {
-                        return;
-                    };
-                    // Something may have started meanwhile. The user
-                    // wasn't there when it was said: they review it.
-                    if this.is_free() {
-                        this.deliver(clip, false, None).await;
-                    }
+            // Oldest last, so each goes in ahead of the one after it.
+            for meta in stored.into_iter().rev() {
+                let known = this
+                    .notes
+                    .borrow()
+                    .iter()
+                    .any(|note| note.id == meta.audio_id);
+                if known {
+                    continue;
                 }
+                // A transcript needs no audio and no network; a clip that
+                // failed for good waits for the user's Retry or Discard.
+                // The user wasn't there when the rest was said: they
+                // review it.
+                let state = match (meta.transcript, meta.failure) {
+                    (Some(text), _) => NoteState::Ready { text, note: None },
+                    (None, Some(message)) => NoteState::Failed {
+                        message,
+                        parked: false,
+                    },
+                    (None, None) => NoteState::Queued,
+                };
+                this.add_note(
+                    Note {
+                        key: 0,
+                        id: meta.audio_id,
+                        duration_ms: meta.duration_ms,
+                        send: false,
+                        stopped: None,
+                        state,
+                    },
+                    false,
+                );
             }
+            this.pump();
         });
     }
 
-    /// Delivers `clip`, retrying by itself while the bridge is unreachable;
-    /// its transcript is then sent if `send`, else shown for review (with
-    /// `note`). Discarding the clip (a new generation) abandons the loop.
-    async fn deliver(
-        self: &Rc<Self>,
-        mut clip: PendingClip,
-        send: bool,
-        note: Option<&'static str>,
-    ) {
-        if self.is_delivering() {
+    /// Starts delivering the next note, unless one is on its way already.
+    fn pump(self: &Rc<Self>) {
+        if self.delivering.get().is_some() {
             return;
         }
-        let generation = self.generation.get();
-        self.delivering.set(Some(generation));
+        let Some(key) = next_to_deliver(&self.notes.borrow()) else {
+            return;
+        };
+        let Some(id) = self.note(key).map(|note| note.id) else {
+            return;
+        };
+        self.delivering.set(Some(key));
         self.wake.set(false);
-        // Busy before the first request: the mic stays off until this
-        // clip is through, so a new recording can't land on top of it.
-        self.set_phase(Phase::Uploading(Progress {
-            sent: 0,
-            total: u64::try_from(clip.audio.len()).unwrap_or(u64::MAX),
-        }));
+        let this = self.clone();
+        spawn_local(async move {
+            match courier().load(&id).await {
+                Ok(Some(clip)) if this.has(key) => this.deliver(key, clip).await,
+                Ok(Some(_)) => {}
+                // Gone from the phone (another tab, or cleared storage).
+                Ok(None) => this.drop_note(key),
+                Err(error) => this.set_state(
+                    key,
+                    NoteState::Failed {
+                        message: deliver_message(&DeliverError::Store(error)),
+                        parked: false,
+                    },
+                ),
+            }
+            this.delivering.set(None);
+            this.pump();
+        });
+    }
+
+    /// Delivers note `key`'s `clip`, retrying by itself while the bridge
+    /// is unreachable; its transcript then [arrives](Self::arrive).
+    /// Discarding the note abandons the loop.
+    async fn deliver(self: &Rc<Self>, key: u32, mut clip: PendingClip) {
+        self.set_state(
+            key,
+            NoteState::Uploading(Progress {
+                sent: 0,
+                total: u64::try_from(clip.audio.len()).unwrap_or(u64::MAX),
+            }),
+        );
         let courier = courier();
         let mut attempt: u32 = 0;
         // The furthest offset the bridge has confirmed: an attempt that
         // moved it was worth making, so it restarts the retry clock.
         let furthest = Cell::new(0);
         let mut stalled_since = now().unix_millis();
-        let mut parked = false;
-        let outcome = loop {
+        loop {
             let before = furthest.get();
             let result = courier
                 .deliver(
                     &mut clip,
-                    |delivery| {
-                        if !self.is_current(generation) {
-                            return;
+                    |delivery| match delivery {
+                        Delivery::Uploading(progress) => {
+                            furthest.set(furthest.get().max(progress.sent));
+                            self.set_state(key, NoteState::Uploading(progress));
                         }
-                        match delivery {
-                            Delivery::Uploading(progress) => {
-                                furthest.set(furthest.get().max(progress.sent));
-                                self.set_phase(Phase::Uploading(progress));
-                            }
-                            Delivery::Transcribing => self.set_phase(Phase::Transcribing),
-                        }
+                        Delivery::Transcribing => self.set_state(key, NoteState::Transcribing),
                     },
                     wait,
-                    || !self.is_current(generation),
+                    || !self.has(key),
                 )
                 .await;
             // `deliver` moves `clip` to a fresh id if the bridge refused
-            // its id, so this is always the id it is stored under.
+            // its id: the note follows it.
             let id = clip.meta.audio_id.clone();
-            match result {
+            self.update(key, |note| note.id = id);
+            if !self.has(key) {
+                // Discarded: forgotten under the id it ended up with.
+                if let Err(error) = courier.forget(&clip.meta.audio_id).await {
+                    warn(&error.to_string());
+                }
+                return;
+            }
+            let error = match result {
                 Ok(done) => {
                     let text = match done.stage() {
                         Stage::Transcribed(text) => text.to_owned(),
                         Stage::Recorded => String::new(),
                     };
-                    break Phase::Ready { id, text, note };
+                    return self.arrive(key, text);
                 }
-                Err(_) if !self.is_current(generation) => break Phase::Idle,
-                Err(error) => {
-                    let at = now().unix_millis();
-                    if furthest.get() > before {
-                        attempt = 0;
-                        stalled_since = at;
-                    }
-                    let token_rejected = host().is_some_and(|h| h.token_rejected());
-                    if retries_by_itself(&error, token_rejected)
-                        && at.saturating_sub(stalled_since) < AUTO_RETRY_MS
-                    {
-                        self.set_phase(Phase::Waiting {
-                            id,
-                            message: waiting_message(&error),
-                        });
-                        let delay =
-                            RETRY_DELAYS_MS[(attempt as usize).min(RETRY_DELAYS_MS.len() - 1)];
-                        attempt += 1;
-                        if !self.pause(delay, generation).await {
-                            break Phase::Idle;
-                        }
-                        continue;
-                    }
-                    parked = parks(&error);
-                    break give_up(&courier, &clip, &error, parked).await;
-                }
+                Err(error) => error,
+            };
+            let at = now().unix_millis();
+            if furthest.get() > before {
+                attempt = 0;
+                stalled_since = at;
             }
-        };
-        if self.delivering.get() == Some(generation) {
-            self.delivering.set(None);
-        }
-        if !self.is_current(generation) {
-            // Cancelled or discarded: forgotten under the id it ended up
-            // with (an upload can move it to a fresh one).
-            if let Err(error) = courier.forget(&clip.meta.audio_id).await {
-                warn(&error.to_string());
+            let token_rejected = host().is_some_and(|h| h.token_rejected());
+            if !retries_by_itself(&error, token_rejected)
+                || at.saturating_sub(stalled_since) >= AUTO_RETRY_MS
+            {
+                let state = give_up(&courier, &clip, &error).await;
+                return self.set_state(key, state);
             }
-            return;
-        }
-        match outcome {
-            Phase::Ready { id, text, note } => self.arrive(Arrival::of(id, text, send, note)),
-            outcome => {
-                self.set_phase(outcome);
-                self.parked.set(parked);
+            self.set_state(
+                key,
+                NoteState::Waiting {
+                    message: waiting_message(&error),
+                },
+            );
+            let delay = RETRY_DELAYS_MS[(attempt as usize).min(RETRY_DELAYS_MS.len() - 1)];
+            attempt += 1;
+            if !self.pause(delay, key).await {
+                return;
             }
         }
     }
 
-    /// A transcript is in: sent (the clip is then forgotten), or shown for
-    /// review. One no screen took (the user left meanwhile) waits as a
-    /// card for their return.
-    fn arrive(self: &Rc<Self>, arrival: Arrival) {
-        match arrival {
-            Arrival::Review(phase) => self.set_phase(phase),
-            Arrival::Empty { id } => {
+    /// Note `key`'s transcript is in: sent (the note is then forgotten),
+    /// or shown for review. It is sent only if its take sends and no older
+    /// note waits for review ahead of it, so prompts keep their order. One
+    /// no screen took (the user left meanwhile) waits as a card for their
+    /// return.
+    fn arrive(self: &Rc<Self>, key: u32, text: String) {
+        let Some(note) = self.note(key) else {
+            return;
+        };
+        let first = self.notes.borrow().first().map(|n| n.key) == Some(key);
+        match Arrival::of(text, note.send && first, note.stopped) {
+            Arrival::Review(state) => self.set_state(key, state),
+            Arrival::Empty => {
                 if let Some(host) = host() {
                     host.toast(NOTHING_HEARD);
                 }
-                self.finish(id);
+                self.finish(key);
             }
-            Arrival::Send { id, text } => {
+            Arrival::Send(text) => {
                 if host().is_some_and(|host| host.take_text(&self.key, &text, true)) {
-                    self.finish(id);
+                    self.finish(key);
                 } else {
-                    self.set_phase(Phase::Ready {
-                        id,
-                        text,
-                        note: None,
-                    });
+                    self.set_state(key, NoteState::Ready { text, note: None });
                 }
             }
         }
     }
 
     /// Waits `ms`, or until "Retry now" (also one tapped during the attempt
-    /// that just failed). False if the clip was discarded meanwhile.
-    async fn pause(&self, ms: i32, generation: u32) -> bool {
+    /// that just failed). False if note `key` was discarded meanwhile.
+    async fn pause(&self, ms: i32, key: u32) -> bool {
         let mut left = ms;
         while left > 0 && !self.wake.replace(false) {
-            if !self.is_current(generation) {
+            if !self.has(key) {
                 return false;
             }
             sleep(WAKE_CHECK_MS.min(left)).await;
             left -= WAKE_CHECK_MS;
         }
-        self.is_current(generation)
+        self.has(key)
     }
 
-    /// Retries a parked delivery (the network is back).
+    /// Retries every parked note (the network is back).
     fn retry_parked(self: &Rc<Self>) {
-        if self.parked.get() {
-            self.retry();
+        let parked: Vec<u32> = self
+            .notes
+            .borrow()
+            .iter()
+            .filter(|note| matches!(note.state, NoteState::Failed { parked: true, .. }))
+            .map(|note| note.key)
+            .collect();
+        for key in parked {
+            self.retry(key);
         }
     }
 
-    /// "Retry": try the stored clip again now. Its stored failure goes
-    /// first, so a reload while the retry waits keeps delivering it.
-    pub fn retry(self: &Rc<Self>) {
-        if self.is_delivering() {
+    /// "Retry" on note `key`: cut its wait short if it is retrying by
+    /// itself, or queue it again if it failed. Its stored failure goes
+    /// first, so a reload meanwhile delivers it too.
+    pub fn retry(self: &Rc<Self>, key: u32) {
+        if self.delivering.get() == Some(key) {
             self.wake.set(true);
             return;
         }
-        let Phase::Failed { id: Some(id), .. } = self.phase() else {
+        let Some(Note {
+            id,
+            state: NoteState::Failed { .. },
+            ..
+        }) = self.note(key)
+        else {
             return;
         };
-        // A Discard while the clip loads wins: nothing is sent.
-        let generation = self.generation.get();
+        self.set_state(key, NoteState::Queued);
         let this = self.clone();
         spawn_local(async move {
             let courier = courier();
-            let loaded = courier.load(&id).await;
-            if !this.is_current(generation) {
-                return;
-            }
-            let mut clip = match loaded {
-                Ok(Some(clip)) => clip,
-                Ok(None) => return this.set_phase(Phase::Idle),
-                Err(error) => {
-                    return this.set_phase(Phase::Failed {
-                        id: Some(id),
-                        message: deliver_message(&DeliverError::Store(error)),
-                    });
+            match courier.load(&id).await {
+                Ok(Some(mut clip)) => {
+                    if let Err(error) = courier.clear_failure(&mut clip).await {
+                        warn(&error.to_string());
+                    }
                 }
-            };
-            if let Err(error) = courier.clear_failure(&mut clip).await {
-                warn(&error.to_string());
+                Ok(None) => return this.drop_note(key),
+                Err(error) => warn(&error.to_string()),
             }
-            if this.is_current(generation) {
-                this.deliver(clip, sends(), None).await;
-            }
+            this.pump();
         });
     }
 
-    /// The transcript was used or sent, or the clip discarded: abandon any delivery
-    /// of it, forget it, then move on to the next stored clip, if any.
-    pub fn finish(self: &Rc<Self>, id: AudioId) {
-        self.generation.set(self.generation.get().wrapping_add(1));
-        self.set_phase(Phase::Idle);
+    /// Takes note `key` off the strip without touching storage.
+    fn drop_note(&self, key: u32) {
+        self.notes.borrow_mut().retain(|note| note.key != key);
+        self.redraw();
+    }
+
+    /// Note `key`'s transcript was used or sent, or the note discarded:
+    /// abandon any delivery of it, forget it, then deliver the next one.
+    pub fn finish(self: &Rc<Self>, key: u32) {
+        let Some(note) = self.note(key) else {
+            return;
+        };
+        self.drop_note(key);
         let this = self.clone();
         spawn_local(async move {
-            if let Err(error) = courier().forget(&id).await {
+            if let Err(error) = courier().forget(&note.id).await {
                 warn(&error.to_string());
             }
-            this.resume();
+            this.pump();
         });
-    }
-
-    /// "Cancel" while the clip uploads or transcribes: it is discarded, and
-    /// nothing is sent. The delivery loop forgets it at its next check.
-    pub fn cancel(&self) {
-        if self.is_delivering() && self.phase_is(Phase::can_cancel) {
-            self.generation.set(self.generation.get().wrapping_add(1));
-            self.set_phase(Phase::Idle);
-        }
     }
 
     /// Clears a failure that left nothing stored.
     pub fn dismiss(&self) {
-        if self.phase_is(|p| matches!(p, Phase::Failed { id: None, .. })) {
-            self.set_phase(Phase::Idle);
+        if self.take_is(|t| matches!(t, Take::Failed(_))) {
+            self.set_take(Take::Idle);
         }
     }
 }
 
 /// The failure a delivery ends in once it stops retrying after `error`.
-/// A `parked` one is not stored as a failure, so the next visit (or the
-/// network coming back) delivers the clip again; any other is remembered,
-/// so the next visit doesn't send it again by itself.
-async fn give_up(
-    courier: &BrowserCourier,
-    clip: &PendingClip,
-    error: &DeliverError,
-    parked: bool,
-) -> Phase {
+/// A parked one (see [`parks`]) is not stored as a failure, so the next
+/// visit (or the network coming back) delivers the clip again; any other
+/// is remembered, so the next visit doesn't send it again by itself.
+async fn give_up(courier: &BrowserCourier, clip: &PendingClip, error: &DeliverError) -> NoteState {
+    let parked = parks(error);
     let message = if parked {
         parked_message(error)
     } else {
@@ -799,10 +853,7 @@ async fn give_up(
         }
         message
     };
-    Phase::Failed {
-        id: Some(clip.meta.audio_id.clone()),
-        message,
-    }
+    NoteState::Failed { message, parked }
 }
 
 /// Whether a take started (or retried by the user) now sends its

@@ -455,7 +455,7 @@ async fn settings_and_dictation_review() {
         &page,
         bridge,
         &format!(
-            "document.querySelector('.dictation-card #dictation-text')?.value === {}",
+            "document.querySelector('.dictation-card .dictation-text')?.value === {}",
             js(DICTATED)
         ),
         "review: the transcript card, editable",
@@ -558,7 +558,7 @@ async fn a_long_dictation_keeps_the_screen_on() {
         &page,
         bridge,
         &format!(
-            "document.querySelector('.dictation-card #dictation-text')?.value === {} \
+            "document.querySelector('.dictation-card .dictation-text')?.value === {} \
              && document.querySelector('.dictation-card')?.textContent.includes({}) \
              && wake.held === 0",
             js(DICTATED),
@@ -573,6 +573,71 @@ async fn a_long_dictation_keeps_the_screen_on() {
         1,
         "the cut-short take waits for review"
     );
+    rig.assert_no_problems();
+}
+
+/// Dictation doesn't wait for the network: while one note is still on its
+/// way (a slow link), the mic records the next, and the strip stacks them,
+/// oldest first. Each stays until it is sent; once the link clears, both
+/// reach the agent and the strip empties.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs Chromium and a web build: run `just e2e`"]
+async fn dictations_queue_while_one_is_on_its_way() {
+    let Some(rig) = rig(RigSpec::default()).await else {
+        return;
+    };
+    let page = rig.page().await;
+    let bridge = &rig.bridge;
+    connect_secure(&page, &rig).await;
+    segment_shows(&page, bridge, "done", DONE).await;
+    open_card(&page, bridge, DONE).await;
+
+    page.eval("audioNet = 'hold'").await.expect("holds uploads");
+    tap_mic(&page).await;
+    expect(&page, bridge, RECORDING, "the first take records").await;
+    tap_mic(&page).await;
+    expect(
+        &page,
+        bridge,
+        "document.querySelectorAll('.dictation-row').length === 1 \
+         && audioHeld.length > 0 \
+         && document.querySelector('.mic-fab')?.getAttribute('aria-pressed') === 'false' \
+         && !document.querySelector('.mic-fab')?.disabled",
+        "the first note is on its way, and the mic is free",
+    )
+    .await;
+    tap_mic(&page).await;
+    expect(
+        &page,
+        bridge,
+        &format!("{RECORDING} && document.querySelectorAll('.dictation-row').length === 2"),
+        "the second take records under the first note",
+    )
+    .await;
+    tap_mic(&page).await;
+    expect(
+        &page,
+        bridge,
+        "document.querySelectorAll('.dictation-row').length === 2 \
+         && document.querySelectorAll('.dictation-row')[1].textContent.includes('Queued')",
+        "two notes stacked, the second queued behind the first",
+    )
+    .await;
+    assert_eq!(prompts_executed(bridge, DICTATED), 0, "nothing sent yet");
+
+    page.eval("releaseAudio()").await.expect("sends uploads on");
+    until(bridge, "both notes reach the bridge", || {
+        prompts_executed(bridge, DICTATED) == 2
+    })
+    .await;
+    expect(
+        &page,
+        bridge,
+        "document.querySelectorAll('.dictation-row').length === 0",
+        "sent notes leave the strip",
+    )
+    .await;
+    assert_eq!(rig.whisper.served(), 2, "both takes were transcribed");
     rig.assert_no_problems();
 }
 
