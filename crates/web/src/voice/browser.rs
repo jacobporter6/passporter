@@ -36,6 +36,11 @@ const MIME_PREFERENCES: [&str; 3] = [
     "audio/ogg;codecs=opus",
     "audio/mp4",
 ];
+/// Encoder bitrate, in bits per second. Plenty for speech (whisper-server
+/// resamples to 16 kHz mono anyway), and it keeps an hour-long take near
+/// 14 MiB, under the bridge's default size cap. Browsers left to choose
+/// often pick 128 kbit/s.
+const AUDIO_BITS_PER_SECOND: u32 = 32_000;
 /// Longest wait for one chunk, in ms: a little over the bridge's own
 /// two-minute chunk timeout, so a hung upload becomes a retry.
 const CHUNK_TIMEOUT_MS: u32 = 150_000;
@@ -251,6 +256,7 @@ impl Mic {
         sink: &EventSink,
     ) -> Result<Rc<Self>, JsValue> {
         let options = MediaRecorderOptions::new();
+        options.set_audio_bits_per_second(AUDIO_BITS_PER_SECOND);
         let mime = MIME_PREFERENCES
             .into_iter()
             .find(|mime| MediaRecorder::is_type_supported(mime));

@@ -23,8 +23,8 @@ Dictation is a primary input, not an add-on ([design §6.3](../design.md#63-dict
 - **Cancel** while it transcribes discards the clip. If nothing was heard,
   nothing is sent.
 - A take that sends never stops on silence (a pause mid-thought would send
-  half a sentence). Only the length cap ends it early, and then it sends
-  with a note.
+  half a sentence). Only the length cap (an hour by default) ends it early,
+  and then it sends with a note.
 - While the agent waits at a dialog, the words go into the composer instead:
   the bridge refuses prompts to a blocked agent, which answers with chips or
   keys.

@@ -111,8 +111,8 @@ pub enum StopReason {
 pub struct RecorderConfig {
     /// Silence auto-stop; `None` records until stopped.
     pub silence: Option<SilenceConfig>,
-    /// Longest recording, in ms. Kept under the bridge's default cap (five
-    /// minutes), which also allows two seconds of slack.
+    /// Longest recording, in ms. Kept under the bridge's default cap (an
+    /// hour), which also allows two seconds of slack.
     pub max_ms: f64,
 }
 
@@ -120,7 +120,7 @@ impl Default for RecorderConfig {
     fn default() -> Self {
         Self {
             silence: Some(SilenceConfig::default()),
-            max_ms: 295_000.0,
+            max_ms: 3_595_000.0,
         }
     }
 }
