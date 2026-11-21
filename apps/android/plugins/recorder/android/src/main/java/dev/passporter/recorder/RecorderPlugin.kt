@@ -139,8 +139,8 @@ internal enum class MicAccess {
  * page and is refused ([RecorderException.InvalidInput]).
  */
 internal object Requests {
-    /** Longest take a page may ask for: the bridge refuses longer clips anyway (5 minutes by default). */
-    const val MAX_TAKE_MS = 30L * 60 * 1000
+    /** Longest take a page may ask for: the bridge refuses clips over an hour (its ceiling and default). */
+    const val MAX_TAKE_MS = 60L * 60 * 1000
 
     /** Shortest cap a page may ask for. */
     const val MIN_TAKE_MS = 1_000L

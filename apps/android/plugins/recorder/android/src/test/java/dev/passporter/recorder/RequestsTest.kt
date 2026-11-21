@@ -15,6 +15,8 @@ class RequestsTest {
         assertEquals("w1:p1", start.tag.value)
         assertEquals(295_000L, start.maxMs)
         assertEquals(295_000L, Requests.start(JSONObject("""{"tag":"w1:p1","maxMs":295000.0}""")).maxMs)
+        // The page's cap (crates/web RecorderConfig::max_ms): just under the bridge's hour.
+        assertEquals(3_595_000L, Requests.start(JSONObject("""{"tag":"w1:p1","maxMs":3595000.0}""")).maxMs)
         for (bad in listOf(
             """{"tag":"w1:p1"}""",
             """{"maxMs":295000}""",
