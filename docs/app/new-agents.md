@@ -23,7 +23,10 @@ table.
 
 If the agent asks something before it is ready (Claude's folder-trust
 dialog, say), the first prompt is not sent and the phone says so. Trust the
-project folders in Claude once, on the dev machine, to skip that dialog.
+project folders in Claude once, on the dev machine, to skip that dialog. The
+first prompt is kept in the new agent's composer: answer the dialog, then send
+it. A prompt whose delivery was uncertain is kept too; check the agent before
+sending it again.
 
 A start that takes longer than about two minutes answers "still starting".
 The phone keeps the request, even if you close the sheet, and tapping Start

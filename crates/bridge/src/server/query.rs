@@ -7,7 +7,7 @@ use axum::http::StatusCode;
 
 /// The `key=value` pairs of `query` (empty pairs skipped); a pair without
 /// `=` is a 400.
-pub(super) fn pairs(query: Option<&str>) -> impl Iterator<Item = Result<(&str, &str), StatusCode>> {
+pub(crate) fn pairs(query: Option<&str>) -> impl Iterator<Item = Result<(&str, &str), StatusCode>> {
     query
         .unwrap_or_default()
         .split('&')

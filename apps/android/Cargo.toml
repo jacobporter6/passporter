@@ -1,0 +1,38 @@
+[package]
+name = "passporter-android"
+description = "Passporter's Android app: a Tauri 2 shell that loads the paired bridge's PWA."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# Tauri mobile loads the app as a shared library (cdylib); `staticlib` is
+# what Tauri's iOS template expects too, `rlib` lets tests link it.
+name = "passporter_android"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+protocol.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+url = "2.5.8"
+
+# Tauri only builds for Android: on the host (`just verify`, CI) the crate
+# is its plain-Rust core, so no WebKitGTK or Android toolchain is needed.
+[target.'cfg(target_os = "android")'.dependencies]
+tauri = { version = "2.12.5", default-features = false, features = ["wry", "dynamic-acl"] }
+tauri-plugin-device = { path = "plugins/device" }
+tauri-plugin-recorder = { path = "plugins/recorder" }
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dev-dependencies]
+serde_json.workspace = true
+tauri-utils = "2.10.2"
+tempfile.workspace = true
+
+[lints]
+workspace = true

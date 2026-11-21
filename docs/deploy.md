@@ -378,6 +378,7 @@ subject = "mailto:you@example.com"   # VAPID contact the push services see (mail
 # vapid_key = "vapid.pem"            # default; relative to the config dir
 # extra_hosts = ["push.example.org"] # self-hosted push services, beyond the browsers' own
 # ntfy_host = "ntfy.example.org"     # a self-hosted ntfy server (exact name; native app)
+# native_ntfy = "127.0.0.1:2586"     # the built-in transport's private ntfy companion (loopback only)
 # car_announce_done = "decide"       # default; Android Auto announces a finished agent only once
 #                                    # its TL;DR has a Decide line ("always", "never")
 # quiet_done_workspaces = ["agent-swarm"]       # finished turns here never ping (default: none)
@@ -412,12 +413,57 @@ muted.
 Pings go out over HTTPS to the browsers' push services (FCM, Mozilla, Apple)
 and to nothing on `127.0.0.1`. The PWA subscribes through its service
 worker, which also needs a secure context ([HTTPS](#https)).
-UnifiedPush for the planned Android app is not built yet.
 
-The planned Android app's UnifiedPush endpoint is a self-hosted ntfy server
-(the bridge side is built). Allow it with
-`ntfy_host`: that exact name only, unlike `extra_hosts`, which also admits
-every subdomain. Its endpoint must still be `https` on port 443.
+The [Android app](development/android.md#push) collects notices from the
+bridge itself when the bridge runs the **built-in transport**: a private
+ntfy companion on loopback, named with `native_ntfy`, which the phone never
+reaches directly. Nothing to install on the phone, no ntfy account.
+[Push › Built-in delivery](operations/push.md#built-in-delivery-android)
+has how it works and how to run the companion. Your HTTPS proxy must
+stream `GET /v1/push/native/…/stream` unbuffered and keep it open (Caddy
+and `tailscale serve` do).
+
+#### A new deployment with the built-in transport
+
+`deploy/session/create.py` writes a self-contained deployment for one
+herdr session: a bridge config with an explicit `herdr_socket` and
+`native_ntfy`, a Docker Compose file for the companion (ntfy 2.37.2, pinned
+by digest, loopback only, read-only, no capabilities) and `run.sh`, which
+starts both. It refuses an existing directory and starts nothing:
+
+```sh
+python3 deploy/session/create.py --name dev \
+  --output ~/passporter-dev --herdr-socket /path/to/that-session.sock \
+  --bridge-bin ~/.local/bin/passporter-bridge --static-dir crates/web/dist \
+  --contact mailto:you@example.com --bridge-port 8443 --ntfy-port 2586
+```
+
+Then run its `run.sh` (under your own supervisor to keep it up), point your
+HTTPS proxy at the bridge port, and pair with
+`passporter --config-dir ~/passporter-dev pair`. Each session gets its own
+directory, ports, devices and keys; never run a copy of one beside the
+original. An existing install keeps working unchanged: add `native_ntfy`
+to its `[push]` table once its companion runs.
+
+Without a companion (or if you choose it in the app's notification
+setup), the app subscribes through UnifiedPush instead, with notices. On
+the phone, install a UnifiedPush
+distributor ([ntfy](https://ntfy.sh), from F-Droid or Google Play) and, if
+you run your own ntfy server, set it as ntfy's default server before you
+open Passporter. Then allow that server on the bridge with `ntfy_host`:
+
+```toml
+[push]
+subject = "mailto:you@example.com"
+ntfy_host = "ntfy.example.org"       # your own ntfy server; or "ntfy.sh", the public one
+```
+
+It is that exact name only, unlike `extra_hosts`, which also admits every
+subdomain, and its endpoints must be `https` on port 443. A self-hosted
+server keeps even the timing of your notifications to yourself; with the
+public `ntfy.sh`, notices are still end-to-end encrypted, so it sees only
+ciphertext, its size and when it was sent. Without `ntfy_host` the bridge
+refuses the app's subscription (`endpoint is not on a known push service`).
 
 Blocked agents are always announced in the car. Finished turns reach the
 phone's notification shade, but under the default `car_announce_done =

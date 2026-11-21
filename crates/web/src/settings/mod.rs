@@ -3,11 +3,13 @@
 //!
 //! - [`model`]: what the page feeds the groups ([`model::Snapshot`]).
 //! - [`prefs`]: the device preferences' switches.
+//! - [`app_notifications`]: the Android app's notification status and setup.
 //! - [`view`](mod@view): the groups, drawn by the extras module ([`crate::extras`]).
 //! - this module: the page (its header and the feed), and what the
 //!   groups' buttons do that only the app can: forget the credential,
 //!   clear the cache (push goes through [`crate::push::module`]).
 
+pub mod app_notifications;
 pub mod model;
 pub mod prefs;
 pub mod view;

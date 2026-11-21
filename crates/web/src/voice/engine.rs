@@ -27,9 +27,11 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen_futures::spawn_local;
 
-use super::browser::{FetchAudio, IdbClips, MediaCapture};
+use super::browser::{FetchAudio, IdbClips};
+use super::capture::Capture;
 use super::clip::{PendingClip, Stage};
 use super::courier::{Courier, DeliverError, Delivery};
+use super::native::{self, Backend};
 use super::panel::{Act, Panel};
 use super::phase::{
     Arrival, NOTHING_HEARD, Note, NoteState, RowKey, SCREEN_OFF, Take, keeps_awake,
@@ -117,10 +119,15 @@ thread_local! {
     static SWEPT: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Hands over the page's [`Host`]. Called once, right after loading.
+/// Hands over the page's [`Host`]. Called once, right after loading. Also
+/// finds out which recorder this page has ([`native::backend`]), so the
+/// first tap knows.
 pub fn init(host: Host) {
     HOST.set(Some(host));
     listen_online();
+    spawn_local(async {
+        native::backend().await;
+    });
 }
 
 /// Retries parked deliveries whenever the browser reports the network
@@ -194,7 +201,7 @@ pub fn dictation(agent: &AgentId) -> Rc<Dictation> {
                     take: RefCell::new(Take::Idle),
                     notes: RefCell::new(Vec::new()),
                     next_key: Cell::new(0),
-                    phone: Dictaphone::new(MediaCapture::default(), RecorderConfig::default()),
+                    phone: phone(agent),
                     gesture: Cell::new(MicGesture::default()),
                     delivering: Cell::new(None),
                     wake: Cell::new(false),
@@ -206,6 +213,15 @@ pub fn dictation(agent: &AgentId) -> Rc<Dictation> {
             })
             .clone()
     })
+}
+
+/// `agent`'s recorder, on whichever microphone this page has.
+fn phone(agent: &AgentId) -> Dictaphone<Capture> {
+    let config = RecorderConfig::default();
+    // The cap is about an hour: exact in a u64.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let max_ms = config.max_ms as u64;
+    Dictaphone::new(Capture::new(agent.to_string(), max_ms), config)
 }
 
 /// One agent's dictation: the recorder, and the notes on their way to a
@@ -224,7 +240,7 @@ pub struct Dictation {
     notes: RefCell<Vec<Note>>,
     /// The next [`Note::key`].
     next_key: Cell<u32>,
-    phone: Dictaphone<MediaCapture>,
+    phone: Dictaphone<Capture>,
     gesture: Cell<MicGesture>,
     /// The note being delivered, if any: one at a time.
     delivering: Cell<Option<u32>>,
@@ -505,14 +521,17 @@ impl Dictation {
     }
 
     /// Stores the recording, queues it as a note (sent without review if
-    /// `send`; a review card shows `stopped`), and frees the mic.
+    /// `send`; a review card shows `stopped`), and frees the mic. A take the
+    /// native recorder made is stored under its id, and only then released
+    /// there.
     async fn keep(
         self: &Rc<Self>,
         recording: Recording,
         send: bool,
         stopped: Option<&'static str>,
     ) {
-        let Some(id) = new_audio_id() else {
+        let native = recording.id.is_some();
+        let Some(id) = recording.id.clone().or_else(new_audio_id) else {
             self.set_take(Take::Failed(
                 "This browser can't make a recording id.".to_owned(),
             ));
@@ -526,6 +545,10 @@ impl Dictation {
             Ok(_) => {
                 if let Some(host) = host() {
                     host.saved();
+                }
+                if native {
+                    let id = id.clone();
+                    spawn_local(async move { native::settle(&id, true).await });
                 }
                 *self.take.borrow_mut() = Take::Idle;
                 self.add_note(
@@ -541,17 +564,25 @@ impl Dictation {
                 );
                 self.pump();
             }
-            Err(error) => self.set_take(Take::Failed(format!(
-                "Couldn't save the recording on this phone: {}.",
-                error.0
-            ))),
+            Err(error) => {
+                if native {
+                    // Still safe natively: a later visit stores it.
+                    native::settle(&id, false).await;
+                }
+                self.set_take(Take::Failed(format!(
+                    "Couldn't save the recording on this phone: {}.",
+                    error.0
+                )));
+            }
         }
     }
 
     /// Picks up the notes earlier visits left on the phone, once per page
     /// session for each agent, ahead of any recorded since. The first call
     /// in a page session also deletes clips (of any agent) past
-    /// [`CLIP_RETENTION_MS`].
+    /// [`CLIP_RETENTION_MS`]. In the app, takes the native recorder kept
+    /// for no page (the app was killed, or the take ended while the page was
+    /// gone) are stored first ([`native::adopt`]), so they show here too.
     pub fn resume(self: &Rc<Self>) {
         if self.loaded.replace(true) {
             return;
@@ -561,7 +592,11 @@ impl Dictation {
         });
         let this = self.clone();
         spawn_local(async move {
-            let stored = match courier().waiting(&this.agent, sweep_before).await {
+            let courier = courier();
+            if native::backend().await == Backend::Native {
+                native::adopt(&courier).await;
+            }
+            let stored = match courier.waiting(&this.agent, sweep_before).await {
                 Ok(stored) => stored,
                 Err(error) => {
                     warn(&error.to_string());
@@ -873,6 +908,9 @@ pub fn capture_message(error: &CaptureError) -> String {
         CaptureError::Denied => {
             "The microphone is blocked. Allow it in the browser's site settings.".to_owned()
         }
+        CaptureError::AppDenied => {
+            "The microphone is blocked. Allow it for Passporter in Android's settings.".to_owned()
+        }
         CaptureError::NoDevice => "No microphone found.".to_owned(),
         CaptureError::Unsupported => "This browser can't record audio here.".to_owned(),
         CaptureError::Empty => "Nothing was recorded. Try again.".to_owned(),
@@ -914,7 +952,9 @@ pub const fn stop_note(reason: StopReason, send: bool) -> Option<&'static str> {
             Some("Recording stopped at the length limit. Sending what you said.")
         }
         (StopReason::TooLong, false) => Some("Recording stopped at the length limit."),
-        (StopReason::Interrupted, _) => Some("Recording stopped: the microphone went away."),
+        (StopReason::Interrupted, _) => {
+            Some("Recording stopped: the microphone went away, or a call took it.")
+        }
         // Said on the transcript card (`card_note`).
         (StopReason::User | StopReason::Silence | StopReason::Hidden, _) => None,
     }

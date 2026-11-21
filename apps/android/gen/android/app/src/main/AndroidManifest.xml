@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Asked at runtime only when the PWA asks the webview: the camera for
+         the pairing QR scanner, the microphone for dictation. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!-- Agent news (dev.passporter.notify); asked once a bridge is connected. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The built-in transport (dev.passporter.push.NativePushService): a
+         foreground service holding the stream from your bridge, restarted
+         after a reboot, waiting for a network, waking briefly per notice,
+         and asking (from its setup, on a tap) to be spared battery
+         optimization so Doze does not hold the stream. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Android Auto's connection provider, read to tell whether it projects
+         (dev.passporter.car.AndroidAutoProjection). -->
+    <queries>
+        <provider android:authorities="androidx.car.app.connection" />
+    </queries>
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <!-- networkSecurityConfig turns cleartext off for every build type
+         (it overrides usesCleartextTraffic) and trusts system CAs only. -->
+    <!-- PassporterApplication hears every pairing change, process-wide. -->
+    <application
+        android:name=".PassporterApplication"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:theme="@style/Theme.Passporter">
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:launchMode="singleTask"
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Long-press the icon: "Bridge" opens the bundled Bridge page,
+                 through BridgeShortcutActivity, to change the address;
+                 "Notifications" opens the notification setup. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+        </activity>
+        <!-- The Bridge shortcut's own task, so the CLEAR_TASK Android adds
+             to static shortcuts never destroys MainActivity. -->
+        <activity
+            android:name=".BridgeShortcutActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <!-- Answers from notification actions (dev.passporter.notify.actions). -->
+        <receiver
+            android:name="dev.passporter.notify.actions.NoticeActionReceiver"
+            android:exported="false" />
+        <!-- Android Auto's reply and mark-as-read (dev.passporter.car). -->
+        <receiver
+            android:name="dev.passporter.car.CarReplyReceiver"
+            android:exported="false" />
+        <!-- A messaging app for Android Auto: notifications only, no car UI. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+        <!-- The built-in transport's stream, and its restart after a reboot or an update. -->
+        <service
+            android:name="dev.passporter.push.NativePushService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps one connection to the user's own Passporter bridge to receive end-to-end encrypted agent notifications, without a cloud push service." />
+        </service>
+        <receiver
+            android:name="dev.passporter.push.NativePushBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+        <!-- UnifiedPush events (dev.passporter.push), from the connector's receiver. -->
+        <service
+            android:name="dev.passporter.push.PassporterPushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

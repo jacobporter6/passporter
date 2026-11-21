@@ -1,0 +1,40 @@
+{
+  "accept": [
+    "https://bridge.example.org",
+    "https://bridge.example.org:8443",
+    "https://b.example",
+    "https://bridge-1.example.ts.net",
+    "https://1bridge.example",
+    "https://xn--brcke-lva.example",
+    "https://bridge.xn--p1ai",
+    "https://intranet",
+    "https://192.0.2.2",
+    "https://192.0.2.2:8443"
+  ],
+  "reject": [
+    "http://bridge.example.org",
+    "https://-bridge.example",
+    "https://bridge-.example",
+    "https://bridge.-example",
+    "https://bridge.example-",
+    "https://bridge.1lan",
+    "https://bridge.123",
+    "https://bridge..example",
+    "https://bridge.example.",
+    "https://bridge_1.example",
+    "https://localhost",
+    "https://localhost:8443",
+    "https://tauri.localhost",
+    "https://bridge.localhost",
+    "https://127.0.0.1",
+    "https://127.0.0.1:8443",
+    "https://127.255.255.254",
+    "https://0.0.0.0",
+    "https://0.0.0.0:8443",
+    "https://[::1]:8443",
+    "https://[::]",
+    "https://[::ffff:127.0.0.1]",
+    "https://me@bridge.example.org",
+    "https://"
+  ]
+}

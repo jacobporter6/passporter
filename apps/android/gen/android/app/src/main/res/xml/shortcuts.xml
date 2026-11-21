@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher's static shortcuts. "Bridge" opens the bundled Bridge page
+     (the address, and "Change address"); the shell ignores it before a
+     bridge is paired. "Notifications" opens the app's notification setup
+     (dev.passporter.push.NotificationSetup). -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="bridge"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_bridge_short"
+        android:shortcutLongLabel="@string/shortcut_bridge_long">
+        <!-- Android adds CLEAR_TASK to a static shortcut's intent, so it
+             goes to a trampoline in a task of its own. -->
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="dev.passporter.app"
+            android:targetClass="dev.passporter.app.BridgeShortcutActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="notifications"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/shortcut_notifications_short"
+        android:shortcutLongLabel="@string/shortcut_notifications_long">
+        <intent
+            android:action="dev.passporter.app.NOTIFICATIONS"
+            android:targetPackage="dev.passporter.app"
+            android:targetClass="dev.passporter.app.BridgeShortcutActivity" />
+    </shortcut>
+</shortcuts>

@@ -32,6 +32,7 @@ use crate::pair::scanner::sleep;
 use crate::routes::AppRoute;
 use crate::ui::AppState;
 use crate::ui::icons::{self, Icon};
+use crate::voice::phase::append_transcript;
 use crate::voice::view::{Dictation, DictationStrip, MicButton};
 
 /// What the dictation module calls the sheet's dictation. Its dictations
@@ -92,19 +93,16 @@ thread_local! {
     static DICTATION: RefCell<Option<SheetDictation>> = const { RefCell::new(None) };
 }
 
-/// Opens `agent`, which the bridge just started: once the live list shows
-/// it (never waiting long; the agent screen copes either way), with
-/// `note` as a toast. Closes the sheet.
-pub(crate) async fn open_agent(
-    app: AppState,
-    live: Live,
-    nav: Nav,
-    agent: &str,
-    note: Option<String>,
-) {
-    let Ok(agent) = agent.parse::<AgentId>() else {
-        return;
-    };
+/// Keeps an unsent first prompt before opening the new agent, once the
+/// live list shows it (never waiting long). Toasts its note and closes the sheet.
+pub(crate) async fn open_agent(app: AppState, live: Live, nav: Nav, opened: sheet::Opened) {
+    let sheet::Opened { agent, note, draft } = opened;
+    if let Some(draft) = draft {
+        live.set_draft(
+            &agent,
+            append_transcript(&live.draft(&agent), draft.as_str()),
+        );
+    }
     // The bridge waits for its own list first, so the stream usually has
     // the agent already.
     let mut waited = 0;

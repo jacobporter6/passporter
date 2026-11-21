@@ -14,7 +14,8 @@ and `docs/security.md` before changing code.
   if you touch something else, say why.
 - `just verify` (fmt, clippy pedantic with `-D warnings`, tests) must pass
   before you say you are done. CI runs `just gate` (verify, release build,
-  PWA size budget, `cargo deny`).
+  PWA size budget, `cargo deny`, and the Android checks where the Android
+  toolchain is installed; a fresh clone builds the debug APK once for them).
 - Never commit secrets, real keys or whole transcripts (small, scrubbed,
   hand-checked excerpts only). For code that writes PEM, build the header
   with `concat!` rather than one literal, keep test vectors out of

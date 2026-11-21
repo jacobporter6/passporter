@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="dark" />
+    <title>Connect · Passporter</title>
+    <link rel="stylesheet" href="connect.css" />
+    <script src="connect.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <h1>Connect to your bridge</h1>
+      <p>
+        Enter the HTTPS address you open Passporter at in a browser, for
+        example <code>https://bridge.example.ts.net</code>. You pair this
+        phone on the next screen.
+      </p>
+      <form id="connect" novalidate>
+        <label for="address">Bridge address</label>
+        <input
+          id="address"
+          name="address"
+          type="text"
+          inputmode="url"
+          autocomplete="url"
+          autocapitalize="off"
+          spellcheck="false"
+          placeholder="https://…"
+          required
+          aria-describedby="error"
+        />
+        <p id="error" role="alert"></p>
+        <button type="submit">Connect</button>
+      </form>
+      <p class="note">
+        The app opens only this address. To use another bridge later,
+        long-press the app's icon and choose <em>Bridge</em>.
+      </p>
+    </main>
+  </body>
+</html>

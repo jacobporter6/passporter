@@ -9,10 +9,15 @@
 //! ([`screen`]) runs in the pair WASM, loaded when the screen opens
 //! ([`module`]). [`code`], [`scanner`] and [`device`] are shared with the
 //! rest of the app (the device key signs every sign-in).
+//!
+//! In the Android app the key is the native layer's instead ([`native`]):
+//! the screen looks the same, the pair WASM pairs through the plugin, and
+//! the page then signs in with the native key.
 
 pub mod code;
 pub mod device;
 pub mod module;
+pub mod native;
 pub mod scanner;
 pub mod screen;
 pub mod token;
@@ -22,6 +27,7 @@ use leptos::prelude::*;
 
 pub use code::PairingCode;
 
+use crate::api::auth::DeviceAuthError;
 use crate::nav::use_nav;
 use crate::routes::AppRoute;
 use crate::ui::{PageHeader, use_app};
@@ -50,5 +56,18 @@ pub fn PairPage() -> impl IntoView {
                 </p>
             </Show>
         </section>
+    }
+}
+
+/// What to tell the user when pairing with a code failed.
+#[must_use]
+pub fn pairing_failure(error: DeviceAuthError) -> String {
+    match error {
+        DeviceAuthError::Refused => {
+            "The bridge rejected this code. It may have expired or been used; \
+                                     run `passporter pair` for a new one."
+                .to_owned()
+        }
+        other => other.to_string(),
     }
 }
