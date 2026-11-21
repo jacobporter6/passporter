@@ -179,7 +179,7 @@ What each part means for this crate:
 
 - WASM under **400 KiB gzipped** and JS glue under **20 KiB gzipped**
   (the push wake's `notice_bg.wasm` under 80 KiB, the on-demand
-  `voice_bg.wasm` under 100 KiB, `pair_bg.wasm` under 120 KiB,
+  `voice_bg.wasm` under 112 KiB, `pair_bg.wasm` under 120 KiB,
   `extras_bg.wasm` under 160 KiB and `terminal_bg.wasm` under 104 KiB),
   enforced in `just gate` by `just web-size` (`scripts/check-size.sh`). The
   same script fails if `Trunk.toml`'s `wasm_bindgen` version differs from
